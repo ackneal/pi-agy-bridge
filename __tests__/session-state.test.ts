@@ -116,4 +116,23 @@ describe("RuntimeSessionSync", () => {
       { action: "continue" },
     );
   });
+
+  it("resumes a persisted conversation when history matches and Pi omits its id", async () => {
+    const manager = SessionManager.inMemory("/workspace");
+    const context = new PiContextAdapter();
+    const sessionId = context.bind(manager);
+    const history = [{ role: "user", content: "question" }];
+    const store = new RuntimeSessionStore(context);
+    await store.set(sessionId, { conversationId: "agy-conversation" }, history);
+    const runtimeRef = await store.get(sessionId);
+    assert.ok(runtimeRef);
+
+    const sync = new RuntimeSessionSync();
+    assert.deepEqual(sync.decide(new LiveSession(sessionId), {
+      syncKey: "sync-key",
+      turnIndex: 1,
+      canonicalHistory: [...history, { role: "user", content: "next" }],
+      runtimeRef,
+    }), { action: "resume", conversationId: "agy-conversation" });
+  });
 });

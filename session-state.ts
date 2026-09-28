@@ -107,7 +107,7 @@ export class RuntimeSessionSync {
   private readonly canonicalHistories = new WeakMap<LiveSession, string[]>();
 
   public decide(session: LiveSession, input: RuntimeSessionSyncInput): RuntimeSessionDecision {
-    if (this.matches(session, input)) {
+    if (this.matchesLiveSession(session, input)) {
       if (session.activeProcess?.isRunning) return { action: "continue" };
       if (session.conversationId) {
         return { action: "resume", conversationId: session.conversationId };
@@ -115,11 +115,7 @@ export class RuntimeSessionSync {
     }
 
     const ref = input.runtimeRef;
-    if (
-      ref &&
-      input.conversationId === ref.conversationId &&
-      historyMatches(ref, input.canonicalHistory)
-    ) {
+    if (ref && this.matchesPersistedSession(ref, input)) {
       return { action: "resume", conversationId: ref.conversationId };
     }
 
@@ -131,9 +127,7 @@ export class RuntimeSessionSync {
       inputConversationId: input.conversationId,
       processRunning: session.activeProcess?.isRunning ?? false,
       hasRuntimeRef: ref !== undefined,
-      runtimeRefMatches: ref
-        ? input.conversationId === ref.conversationId && historyMatches(ref, input.canonicalHistory)
-        : false,
+      runtimeRefMatches: ref ? this.matchesPersistedSession(ref, input) : false,
     });
 
     return { action: "rebuild" };
@@ -149,20 +143,31 @@ export class RuntimeSessionSync {
     this.canonicalHistories.set(session, history);
   }
 
-  private matches(session: LiveSession, input: RuntimeSessionSyncInput): boolean {
+  private matchesLiveSession(session: LiveSession, input: RuntimeSessionSyncInput): boolean {
     if (session.syncKey !== input.syncKey || session.turnIndex !== input.turnIndex) return false;
-    if (
-      session.conversationId &&
-      input.conversationId !== undefined &&
-      input.conversationId !== session.conversationId
-    ) {
-      return false;
-    }
+    if (!this.matchesConversationId(session.conversationId, input.conversationId)) return false;
 
     const previousHistory = this.canonicalHistories.get(session);
     if (!previousHistory) return true;
     if (input.canonicalHistory.length < previousHistory.length) return false;
 
     return previousHistory.every((entry, index) => entry === JSON.stringify(input.canonicalHistory[index]));
+  }
+
+  private matchesPersistedSession(
+    ref: AgyRuntimeSessionRef,
+    input: RuntimeSessionSyncInput
+  ): boolean {
+    return (
+      this.matchesConversationId(ref.conversationId, input.conversationId) &&
+      historyMatches(ref, input.canonicalHistory)
+    );
+  }
+
+  private matchesConversationId(
+    expected: string | undefined,
+    actual: string | undefined
+  ): boolean {
+    return expected === undefined || actual === undefined || expected === actual;
   }
 }
