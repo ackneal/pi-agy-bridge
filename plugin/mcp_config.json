@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "pi": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "exec $PI_AGY_BRIDGE_MCP_COMMAND"
+      ]
+    }
+  }
+}

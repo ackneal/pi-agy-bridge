@@ -1,0 +1,46 @@
+{
+  "name": "pi-agy-bridge",
+  "version": "0.1.0",
+  "description": "Standalone AGY provider and Pi capability bridge plugin for Pi",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "agy",
+    "mcp"
+  ],
+  "license": "MIT",
+  "packageManager": "bun@1.3.13",
+  "type": "module",
+  "bin": {
+    "pi-agy-bridge-mcp": "./mcp/index.js"
+  },
+  "files": [
+    "*.ts",
+    "mcp",
+    "plugin",
+    "!**/__tests__/**",
+    "!**/*.test.ts"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --test --test-timeout=15000 __tests__/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.87.1",
+    "@earendil-works/pi-coding-agent": ">=0.87.1",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@types/node": "26.6.3",
+    "typebox": "1.3.34",
+    "typescript": "7.0.2"
+  }
+}
