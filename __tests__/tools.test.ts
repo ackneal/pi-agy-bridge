@@ -40,6 +40,9 @@ describe("translateToolSchema and piToolToMcpTool", () => {
     const typeboxSchema = Type.Object({
       path: Type.String({ description: "Path to file" }),
       count: Type.Optional(Type.Number()),
+    }, {
+      minProperties: 1,
+      $defs: { label: { type: "string" } },
     });
 
     const translated = translateToolSchema(typeboxSchema);
@@ -49,10 +52,12 @@ describe("translateToolSchema and piToolToMcpTool", () => {
     assert.equal((translated.properties as any).path?.description, "Path to file");
     assert.equal((translated.properties as any).count?.type, "number");
     assert.deepEqual(translated.required, ["path"]);
+    assert.equal(translated.minProperties, 1);
+    assert.deepEqual(translated.$defs, { label: { type: "string" } });
   });
 
-  it("translateToolSchema handles absent schemas gracefully", () => {
-    for (const input of [undefined, null as any]) {
+  it("translateToolSchema falls back for absent and non-object root schemas", () => {
+    for (const input of [undefined, null as any, { anyOf: [{ type: "string" }, { type: "number" }] }]) {
       assert.deepEqual(translateToolSchema(input), { type: "object", properties: {} });
     }
   });
@@ -131,15 +136,16 @@ describe("CapabilityGateway", () => {
 });
 
 describe("PiToolAdapter", () => {
-  it("leaves non-PTY identifier fields unchanged", () => {
-    const tool: Tool = {
+  it("leaves ordinary identifier fields unchanged", () => {
+    const lookupTool: Tool = {
       name: "lookup",
       description: "Look up an object",
       parameters: Type.Object({ id: Type.String() }),
     };
-    const adapter = new PiToolAdapter([tool], new SessionResources());
+    const adapter = new PiToolAdapter([lookupTool, ptyTool], new SessionResources());
 
     assert.equal(adapter.createCall("lookup", { id: "raw-object-id" })?.arguments.id, "raw-object-id");
+    assert.equal(adapter.createCall("pty", { command: "inspect", id: "raw-object-id" })?.arguments.id, "raw-object-id");
   });
 
   it("uses session-local terminal handles for start and follow-up calls", () => {

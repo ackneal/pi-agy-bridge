@@ -37,22 +37,15 @@ export function translateToolSchema(
     parsed = {};
   }
 
-  const result: McpToolDefinition["inputSchema"] = {
+  if (parsed["type"] !== "object") {
+    return { type: "object", properties: {} };
+  }
+
+  return {
+    ...parsed,
     type: "object",
-    properties: (parsed["properties"] as Record<string, unknown>) ?? {},
+    properties: isRecord(parsed["properties"]) ? parsed["properties"] : {},
   };
-
-  if (Array.isArray(parsed["required"])) {
-    result.required = parsed["required"] as string[];
-  }
-  if (parsed["additionalProperties"] !== undefined) {
-    result.additionalProperties = parsed["additionalProperties"];
-  }
-  if (typeof parsed["description"] === "string") {
-    result["description"] = parsed["description"];
-  }
-
-  return result;
 }
 
 export function piToolToMcpTool(tool: Tool): McpToolDefinition {
@@ -147,7 +140,7 @@ export class PiToolAdapter {
     if (Array.isArray(value)) {
       return value.map((item) => this.exposeTerminalHandles(item, bindNew));
     }
-    if (!isRecord(value)) return this.exposeString(value, bindNew);
+    if (!isRecord(value)) return value;
 
     return Object.fromEntries(Object.entries(value).map(([key, item]) => {
       if (typeof item === "string" && isPtyIdField(key)) {
@@ -169,11 +162,6 @@ export class PiToolAdapter {
     return text.replace(/[^\s"']+/g, (value) => this.resources?.terminals.toHandle(value) ?? value);
   }
 
-  private exposeString(value: unknown, bindNew: boolean, fieldName = ""): unknown {
-    if (typeof value !== "string") return value;
-    if (bindNew && isPtyIdField(fieldName)) return this.resources?.terminals.bind(value) ?? value;
-    return this.resources?.terminals.toHandle(value) ?? value;
-  }
 }
 
 function hasOperation(args: Record<string, unknown>, operation: string): boolean {
@@ -181,7 +169,7 @@ function hasOperation(args: Record<string, unknown>, operation: string): boolean
 }
 
 function isPtyIdField(key: string): boolean {
-  return /^(?:pty|terminal)[_-]?id$/i.test(key) || key.toLowerCase() === "id";
+  return /^(?:pty|terminal)[_-]?id$/i.test(key);
 }
 
 function parseJson(text: string): unknown {
