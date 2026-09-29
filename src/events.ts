@@ -442,7 +442,7 @@ export class PiEventAdapter {
       ...((current.reasoning ?? 0) + reasoning > 0
         ? { reasoning: (current.reasoning ?? 0) + reasoning }
         : {}),
-      totalTokens: current.totalTokens + totalTokens,
+      totalTokens,
       cost: {
         input: 0,
         output: 0,
@@ -463,10 +463,8 @@ export class PiEventAdapter {
       output: Math.max(current.output, agyUsage.output_tokens ?? 0),
       cacheRead: Math.max(current.cacheRead, agyUsage.cache_read_tokens ?? 0),
       ...(reasoning > 0 ? { reasoning } : {}),
-      totalTokens: Math.max(
-        current.totalTokens,
-        agyUsage.total_tokens ?? ((agyUsage.input_tokens ?? 0) + (agyUsage.output_tokens ?? 0))
-      ),
+      totalTokens: agyUsage.total_tokens
+        ?? ((agyUsage.input_tokens ?? 0) + (agyUsage.output_tokens ?? 0)),
     };
   }
 

@@ -270,7 +270,7 @@ describe("AgyEventAdapter", () => {
     assert.equal(done.message.content[0].name, "read");
   });
 
-  it("accumulates step usage and preserves final cache statistics without double counting", async () => {
+  it("accumulates step usage while preserving the latest context and final cache statistics", async () => {
     const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
     adapter.handleEvent({
       event: "step_update",
@@ -282,6 +282,10 @@ describe("AgyEventAdapter", () => {
       step_type: "agent_response",
       usage: { input_tokens: 50, output_tokens: 3, thinking_tokens: 2, total_tokens: 53 },
     });
+
+    assert.equal(adapter.message.usage.input, 90);
+    assert.equal(adapter.message.usage.totalTokens, 53);
+
     adapter.handleEvent({
       event: "result",
       status: "success",
@@ -302,7 +306,7 @@ describe("AgyEventAdapter", () => {
     assert.equal(doneEvent.message.usage.output, 5);
     assert.equal(doneEvent.message.usage.reasoning, 3);
     assert.equal(doneEvent.message.usage.cacheRead, 20);
-    assert.equal(doneEvent.message.usage.totalTokens, 95);
+    assert.equal(doneEvent.message.usage.totalTokens, 73);
   });
 
   it("applies zero-cost subscription semantics to usage", async () => {
