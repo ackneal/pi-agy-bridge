@@ -270,22 +270,32 @@ describe("AgyEventAdapter", () => {
     assert.equal(done.message.content[0].name, "read");
   });
 
-  it("preserves step usage when the final result omits usage", async () => {
+  it("accumulates step usage and does not double count final result usage", async () => {
     const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
     adapter.handleEvent({
       event: "step_update",
       step_type: "agent_response",
-      usage: { input_tokens: 40, output_tokens: 2, total_tokens: 42 },
+      usage: { input_tokens: 40, output_tokens: 2, thinking_tokens: 1, total_tokens: 42 },
     });
-    adapter.handleEvent({ event: "result", status: "success" });
+    adapter.handleEvent({
+      event: "step_update",
+      step_type: "agent_response",
+      usage: { input_tokens: 50, output_tokens: 3, thinking_tokens: 2, total_tokens: 53 },
+    });
+    adapter.handleEvent({
+      event: "result",
+      status: "success",
+      usage: { input_tokens: 50, output_tokens: 3, thinking_tokens: 2, total_tokens: 53 },
+    });
 
     const events = await collectStreamEvents(adapter);
     const doneEvent = events.find((event) => event.type === "done");
     assert.equal(doneEvent?.type, "done");
     if (doneEvent?.type !== "done") return;
-    assert.equal(doneEvent.message.usage.input, 40);
-    assert.equal(doneEvent.message.usage.output, 2);
-    assert.equal(doneEvent.message.usage.totalTokens, 42);
+    assert.equal(doneEvent.message.usage.input, 90);
+    assert.equal(doneEvent.message.usage.output, 5);
+    assert.equal(doneEvent.message.usage.reasoning, 3);
+    assert.equal(doneEvent.message.usage.totalTokens, 95);
   });
 
   it("applies zero-cost subscription semantics to usage", async () => {

@@ -36,6 +36,7 @@ export class PiEventAdapter {
   private currentTextIndex: number | null = null;
   private currentText = "";
   private toolCallCount = 0;
+  private hasStepUsage = false;
 
   private partial: AssistantMessage;
 
@@ -182,7 +183,8 @@ export class PiEventAdapter {
   private handleStepUpdate(step: AgyStepUpdateEvent): void {
     if (step.usage) {
       debugLog("usage", "AGY step usage:", step.usage);
-      this.applyUsage(step.usage);
+      this.hasStepUsage = true;
+      this.addUsage(step.usage);
     }
 
     const deltaText = this.extractTextDelta(step);
@@ -371,7 +373,7 @@ export class PiEventAdapter {
     debugLog("usage", "AGY result accounting fields:", Object.fromEntries(
       Object.entries(result).filter(([key]) => /usage|token|metric|stat|metadata/i.test(key))
     ));
-    if (result.usage) this.applyUsage(result.usage);
+    if (result.usage && !this.hasStepUsage) this.addUsage(result.usage);
 
     if (result.conversation_id || result.session_id) {
       this.partial.responseId = (result.conversation_id ?? result.session_id) as string;
@@ -421,19 +423,23 @@ export class PiEventAdapter {
     });
   }
 
-  private applyUsage(agyUsage?: AgyUsage): void {
-    const input = agyUsage?.input_tokens ?? 0;
-    const output = agyUsage?.output_tokens ?? 0;
-    const cacheRead = agyUsage?.cache_read_tokens ?? 0;
-    const totalTokens = agyUsage?.total_tokens ?? (input + output);
+  private addUsage(agyUsage: AgyUsage): void {
+    const input = agyUsage.input_tokens ?? 0;
+    const output = agyUsage.output_tokens ?? 0;
+    const cacheRead = agyUsage.cache_read_tokens ?? 0;
+    const reasoning = agyUsage.thinking_tokens ?? 0;
+    const totalTokens = agyUsage.total_tokens ?? (input + output);
+    const current = this.partial.usage;
 
     this.partial.usage = {
-      input,
-      output,
-      cacheRead,
+      input: current.input + input,
+      output: current.output + output,
+      cacheRead: current.cacheRead + cacheRead,
       cacheWrite: 0,
-      ...(agyUsage?.thinking_tokens !== undefined ? { reasoning: agyUsage.thinking_tokens } : {}),
-      totalTokens,
+      ...((current.reasoning ?? 0) + reasoning > 0
+        ? { reasoning: (current.reasoning ?? 0) + reasoning }
+        : {}),
+      totalTokens: current.totalTokens + totalTokens,
       cost: {
         input: 0,
         output: 0,
