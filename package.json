@@ -17,6 +17,7 @@
   },
   "files": [
     "*.ts",
+    "model.json",
     "mcp",
     "plugin",
     "!**/__tests__/**",

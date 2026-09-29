@@ -10,14 +10,29 @@ import { resolveAgyExecutable } from "./version.ts";
 
 const execFileAsync = promisify(execFile);
 const MODEL_CACHE_PATH = path.join(os.homedir(), ".pi", "agent", "cache", "agy-models.json");
+const MODEL_METADATA = JSON.parse(
+  readFileSync(new URL("./model.json", import.meta.url), "utf-8")
+) as {
+  default: { contextWindow: number };
+  families: Record<string, { contextWindow: number }>;
+};
+
+function contextWindowFor(modelId: string): number {
+  for (const [prefix, metadata] of Object.entries(MODEL_METADATA.families)) {
+    if (modelId.startsWith(prefix)) return metadata.contextWindow;
+  }
+  return MODEL_METADATA.default.contextWindow;
+}
 
 export function loadCachedAgyModels(): ProviderModelConfig[] {
   try {
     const models: unknown = JSON.parse(readFileSync(MODEL_CACHE_PATH, "utf-8"));
     if (!Array.isArray(models)) return [];
-    return models.filter((model): model is ProviderModelConfig =>
-      typeof model?.id === "string" && typeof model?.name === "string"
-    );
+    return models
+      .filter((model): model is ProviderModelConfig =>
+        typeof model?.id === "string" && typeof model?.name === "string"
+      )
+      .map((model) => ({ ...model, contextWindow: contextWindowFor(model.id) }));
   } catch {
     return [];
   }
@@ -110,7 +125,7 @@ export function parseModelsOutput(output: string): ProviderModelConfig[] {
         reasoning: /thinking|reasoning/i.test(`${id} ${name}`),
         input: ["text", "image"],
         cost: ZERO_COST,
-        contextWindow: 128_000,
+        contextWindow: contextWindowFor(modelId),
         maxTokens: 16_384,
       };
       modelsById.set(modelId, model);

@@ -1,0 +1,16 @@
+{
+  "default": {
+    "contextWindow": 272000
+  },
+  "families": {
+    "claude-": {
+      "contextWindow": 250000
+    },
+    "gpt-oss-": {
+      "contextWindow": 131072
+    },
+    "gemini-": {
+      "contextWindow": 1048576
+    }
+  }
+}
