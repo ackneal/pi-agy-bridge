@@ -22,6 +22,8 @@ describe("AGY MCP package", () => {
       const files = report[0]?.files.map((file) => file.path) ?? [];
 
       for (const required of [
+        "src/index.ts",
+        "src/model.json",
         "mcp/index.js",
         "mcp/socket.js",
         "plugin/plugin.json",

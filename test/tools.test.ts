@@ -11,8 +11,8 @@ import {
   CapabilityGateway,
   PiToolAdapter,
   isAllowedPiToolName,
-} from "../capabilities.ts";
-import { SessionResources } from "../session.ts";
+} from "../src/capabilities.ts";
+import { SessionResources } from "../src/session.ts";
 
 const ptyTool: Tool = {
   name: "pty",

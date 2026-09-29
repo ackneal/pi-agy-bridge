@@ -7,12 +7,12 @@ import { fileURLToPath } from "node:url";
 import { debugLog } from "./debug.ts";
 import { resolveAgyExecutable } from "./version.ts";
 
-export const DEFAULT_AGY_PLUGIN_DIR = fileURLToPath(new URL("./plugin", import.meta.url));
+export const DEFAULT_AGY_PLUGIN_DIR = fileURLToPath(new URL("../plugin", import.meta.url));
 
 export function resolveMcpEntrypoint(): { nodePath: string; entrypointPath: string } {
   return {
     nodePath: process.execPath,
-    entrypointPath: fileURLToPath(new URL("./mcp/index.js", import.meta.url)),
+    entrypointPath: fileURLToPath(new URL("../mcp/index.js", import.meta.url)),
   };
 }
 

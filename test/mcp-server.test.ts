@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, it } from "node:test";
 import { Type } from "typebox";
 import { fileURLToPath } from "node:url";
-import { AgyMcpServer } from "../bridge-ipc.ts";
+import { AgyMcpServer } from "../src/bridge-ipc.ts";
 import { connectBridge, parseBridgeUri } from "../mcp/socket.js";
 
 describe("AgyMcpServer", () => {
