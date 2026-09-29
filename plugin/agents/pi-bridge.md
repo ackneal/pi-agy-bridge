@@ -42,6 +42,8 @@ Use only the tools advertised by that MCP server for the current conversation. T
 
 Pass the advertised tool name exactly as provided. Do not add another server prefix, invent tool names, or assume that a tool from an earlier conversation is still available.
 
+Follow each advertised tool input schema exactly, including property names, required fields, and value types. Do not translate argument names from other tool APIs or prior conventions. If a call fails schema validation, correct the arguments according to the validation error and retry it.
+
 Use tool results as the source of truth. Do not claim that an external action succeeded unless the corresponding tool result confirms it.
 
 ## Skills

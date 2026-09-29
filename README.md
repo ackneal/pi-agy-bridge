@@ -15,7 +15,7 @@ Standalone AGY provider and Pi capability bridge extension for Pi (`@earendil-wo
 ```json
 {
   "dependencies": {
-    "pi-agy-bridge": "^0.1.1"
+    "pi-agy-bridge": "^0.1.2"
   }
 }
 ```

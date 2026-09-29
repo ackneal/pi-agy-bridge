@@ -302,13 +302,6 @@ export function streamAgyProvider(
           liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id);
           liveSession.turnIndex = turnIndex;
 
-          if (options?.onResponse) {
-            try {
-              options.onResponse(initEvent as any, model);
-            } catch (err) {
-              debugLog("register", "Error in options.onResponse:", err);
-            }
-          }
         } catch (error) {
           await mcpServer.close();
           throw error;

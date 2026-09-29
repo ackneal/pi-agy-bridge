@@ -88,12 +88,12 @@ export class BridgeIPC {
   public async start(): Promise<void> {
     if (this.broker) throw new Error("Pi MCP broker is already running");
 
-    const runtimeDir = path.join(os.tmpdir(), "pi-agy-bridge", "runtime");
+    const runtimeDir = path.join(os.tmpdir(), "pab");
     await fs.mkdir(runtimeDir, { recursive: true });
 
     this.socketPath = path.join(
       runtimeDir,
-      `mcp-${process.pid}-${randomBytes(6).toString("hex")}.sock`
+      `${process.pid}-${randomBytes(6).toString("hex")}.sock`
     );
     this.broker = createServer((socket) => this.handleConnection(socket));
 

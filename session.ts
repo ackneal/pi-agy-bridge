@@ -70,12 +70,12 @@ export class PiContextAdapter {
 
 export function calculateSyncKey(
   systemPrompt: string = "",
-  toolNames: readonly string[] = [],
+  toolSignatures: readonly string[] = [],
   model: string = "",
   effort: string = "",
   agentName: string = ""
 ): string {
-  const sortedTools = [...toolNames].sort().join(",");
+  const sortedTools = [...toolSignatures].sort().join(",");
   const effortPart = effort ? `::${effort}` : "";
   const agentPart = agentName ? `::${agentName}` : "";
 
