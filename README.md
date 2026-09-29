@@ -1,54 +1,100 @@
 # pi-agy-bridge
 
-Standalone AGY provider and Pi capability bridge extension for Pi (`@earendil-works/pi-coding-agent`).
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Package Manager](https://img.shields.io/badge/managed_with-bun-black?logo=bun)](https://bun.sh)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)]()
+[![Pi Extension](https://img.shields.io/badge/pi-extension-purple.svg)](https://github.com/earendil-works/pi-coding-agent)
 
-讓 Pi 可以將 AGY 作為 LLM Provider，並透過本機 MCP 與 IPC Socket 機制將 Pi 的原生工具（`read`, `edit`, `bash` 等）雙向橋接給 AGY 執行。
+A standalone Antigravity CLI (`agy`) provider and capability bridge plugin for [Pi](https://github.com/earendil-works/pi-coding-agent).
+
+`pi-agy-bridge` lets Pi delegate reasoning and code generation to Antigravity CLI while keeping tool execution in Pi, aggregating token usage across AGY steps, discovering models dynamically, and synchronizing AGY sessions with Pi history.
 
 ---
 
-## 使用方式
+## Features
 
-### 1. 安裝與載入套件
+- **Native Pi tool execution**: Pi tools (`read`, `edit`, `bash`, custom extensions, and PTY terminals) are exposed to AGY through an ephemeral local MCP server over Unix domain sockets. AGY delegates tool calls back to Pi's runtime environment and policy controls.
+- **Aggregated token usage**: Input, output, cache-read, and thinking tokens are accumulated across AGY step updates and included in the final Pi assistant message. Final result usage is used as a fallback when AGY emits no step usage.
+- **Dynamic model discovery**: Discovers available models directly via `agy models`, caches the catalog locally, and applies family-specific context windows (Claude, Gemini, GPT-OSS) alongside user `modelOverrides`.
+- **Three-tier session synchronization**: Preserves long-running AGY sub-processes across sequential turns (continue), resumes existing conversations across restarts via conversation IDs (resume), or reconstructs branched history cleanly using structured XML payloads (rebuild).
+- **Strict isolation & security**: Enforces a strict tool allowlist, restricts socket permissions to `0o600`, and virtualizes PTY terminal handles (`terminal-1`) to isolate internal process identifiers.
 
-在 Pi 專案中新增依賴：
+---
 
-```json
-{
-  "dependencies": {
-    "pi-agy-bridge": "^0.1.2"
-  }
-}
+## Prerequisites
+
+- **Pi Coding Agent**: `@earendil-works/pi-coding-agent` (>= 0.87.1)
+- **Antigravity CLI**: `agy` (>= 1.1.15) installed and authenticated in your `$PATH`
+- **Operating System**: macOS or Linux (requires Unix domain socket support)
+- **Node.js**: Required by Pi and the packaged MCP executable; Node.js >= 22.6 is required to run this repository's TypeScript test command directly
+- **Development Tooling**: [Bun](https://bun.sh) 1.3.x for dependency management and local workflows
+
+---
+
+## Installation
+
+> **Note**: This plugin is not yet published to npm. Install it directly from Git using SSH (`git@`).
+
+### Option 1: Install via Pi Package Manager (Recommended)
+
+Install globally into your user settings (`~/.pi/agent/settings.json`):
+
+```bash
+pi install git:git@github.com:ackneal/pi-agy-bridge.git
 ```
 
-或在 Pi 設定檔（如 `pi.json` 或 `settings.json`）中載入擴充套件：
+Or install project-locally into `.pi/settings.json`:
 
-```json
-{
-  "extensions": ["pi-agy-bridge"]
-}
+```bash
+pi install git:git@github.com:ackneal/pi-agy-bridge.git -l
 ```
 
-### 2. 在程式中設定與客製化
+### Option 2: Local Clone & Link (Development)
 
-若是自訂 Pi Agent 啟動腳本，可透過 `setupAgyProvider` 進行自訂配置：
+Clone the repository and install dependencies with Bun:
 
-```typescript
-import { setupAgyProvider } from "pi-agy-bridge";
+```bash
+git clone git@github.com:ackneal/pi-agy-bridge.git
+cd pi-agy-bridge
+bun install
 
-setupAgyProvider(pi, {
-  agyPath: "agy",            // agy 執行檔路徑（預設: "agy"）
-  minVersion: "1.1.15",      // 最低相容 AGY 版本要求
-  agentName: "pi-bridge",    // AGY 內部使用的 bridge agent 名稱
-  pluginDir: "./plugin",     // 自訂 plugin 目錄（選填）
-  debug: false               // 是否開啟詳細除錯日誌
-});
+# Install the local directory into Pi
+pi install ./
 ```
 
-### 3. 切換 Provider 與 Model
+### Option 3: Direct CLI Flag
 
-載入擴充後，Pi 內會註冊 `agy` provider。模型清單會先同步載入上次成功 discovery 的快取（`~/.pi/agent/cache/agy-models.json`），並在背景透過 `agy models` 更新；刷新完成後會更新當前清單和快取。首次使用且尚無快取時，模型會在背景 discovery 完成後出現。若 AGY 不存在或刷新失敗，既有快取會保留；重新開啟 `/model` 不會等待 discovery。
+To test without adding the package to your settings, pass the entry point directly:
 
-Pi 的 `~/.pi/agent/models.json` 會在 discovery 結果之上套用 `modelOverrides`。例如：
+```bash
+pi -e /path/to/pi-agy-bridge/src/index.ts
+```
+
+---
+
+## Usage
+
+### Selecting the AGY Provider
+
+Once installed, the `agy` provider is registered automatically in Pi. You can select it interactively or specify an AGY model on the command line:
+
+```bash
+# Launch interactive Pi session with AGY
+pi --model agy/gemini-3.8-flash
+
+# Run a one-shot instruction
+pi --model agy/gemini-3.8-flash "Analyze memory consumption in src/index.ts"
+```
+
+Inside an interactive Pi session:
+- Type `/model` to browse discovered AGY models.
+- Type `/provider agy` to switch active providers.
+
+### Model Discovery & Overrides
+
+Models are cached at `~/.pi/agent/cache/agy-models.json` and refreshed in the background via `agy models`. When a cache exists, `/model` can display it immediately without waiting for discovery. A model picker that is already open is not guaranteed to update in place; reopen `/model` to use the refreshed in-memory catalog. On first use without a cache, the initial catalog may be empty until background discovery finishes.
+
+You can customize context windows or model behavior via `~/.pi/agent/models.json`:
 
 ```json
 {
@@ -56,7 +102,8 @@ Pi 的 `~/.pi/agent/models.json` 會在 discovery 結果之上套用 `modelOverr
     "agy": {
       "modelOverrides": {
         "gemini-3.8-flash": {
-          "name": "Gemini Flash via AGY",
+          "name": "Gemini 3.8 Flash (AGY)",
+          "contextWindow": 1048576,
           "maxTokens": 32768
         }
       }
@@ -65,78 +112,101 @@ Pi 的 `~/.pi/agent/models.json` 會在 discovery 結果之上套用 `modelOverr
 }
 ```
 
-若透過 `setupAgyProvider(pi, { models: [...] })` 明確提供 models，則使用該清單並停用自動 discovery；Pi 的 `modelOverrides` 仍會套用。
+Passing an explicit model list disables automatic discovery and uses that list directly:
 
-### 4. 除錯環境變數
+```typescript
+setupAgyProvider(pi, {
+  models: [
+    {
+      id: "custom-model",
+      name: "Custom AGY Model",
+      reasoning: false,
+      input: ["text", "image"],
+      contextWindow: 272000,
+      maxTokens: 16384,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    }
+  ]
+});
+```
 
-可透過環境變數啟用詳細診斷資訊：
+Pi `modelOverrides` still apply to explicitly configured models.
+
+---
+
+## How It Works
+
+```text
+┌────────────────────────┐      Unix Domain Socket       ┌────────────────────────┐
+│   Pi Coding Harness    │◄─────────────────────────────►│    Antigravity CLI     │
+│  (@earendil-works/pi)  │          MCP Broker           │     (`agy` runtime)    │
+└───────────┬────────────┘                               └───────────┬────────────┘
+            │                                                        │
+    Native Pi Tools                                            call_mcp_tool
+ (read, edit, bash, pty)                                   (exposes Pi tools via MCP)
+```
+
+1. **Provider Hook**: When a turn begins, the bridge registers or verifies the `pi-bridge` AGY plugin under `~/.gemini/config/plugins/pi-agy-bridge`.
+2. **Ephemeral MCP Server**: The bridge starts an IPC broker (`BridgeIPC`) bound to a dedicated Unix domain socket with `0o600` file permissions. Active Pi tools and their schemas are converted into MCP tool definitions.
+3. **Sub-process Launch**: The runtime spawns `agy --agent pi-bridge --input-format stream-json --output-format stream-json`, injecting the socket endpoint via environment variables.
+4. **Bi-directional Tool Relaying**: AGY requests tool executions via `call_mcp_tool`. The MCP broker validates the tool against an allowlist, executes it within Pi, and returns the output to AGY.
+5. **Stream Translation**: AGY's line-delimited JSON stream is parsed into native Pi assistant events such as `text_delta`, `toolcall_start`, and `done`. Aggregated usage is attached to the final assistant message.
+
+---
+
+## Programmatic API
+
+For custom Pi harnesses or scripting:
+
+```typescript
+import { setupAgyProvider } from "pi-agy-bridge";
+
+setupAgyProvider(pi, {
+  agyPath: "agy",            // Custom binary path (defaults to "agy")
+  minVersion: "1.1.15",      // Minimum supported CLI version
+  agentName: "pi-bridge",    // Bridge agent configuration name
+  pluginDir: "./plugin",     // Optional custom AGY plugin source directory
+  debug: false               // Enable verbose stderr logging
+});
+```
+
+### Debugging
+
+Enable verbose diagnostic logs across all bridge components:
 
 ```bash
 export AGY_BRIDGE_DEBUG=1
 ```
 
-診斷輸出會以 `[agy:<scope>]` 前綴寫入 stderr（例如 `mcp`、`session`、`process`、`register`）。
+Logs are printed to `stderr` with scoped tags such as `[agy:mcp]`, `[agy:process]`, `[agy:session]`, and `[agy:events]`.
 
 ---
 
-## 架構與橋接方式
+## Development
 
-`pi-agy-bridge` 的核心運作機制如下：
-
-```text
-┌─────────────────┐       Unix Domain Socket       ┌─────────────────┐
-│   Pi Harness    │◄──────────────────────────────►│    AGY CLI      │
-│ (Event Adapter) │        MCP Protocol            │ (pi-bridge agent│
-└────────┬────────┘                                └────────┬────────┘
-         │                                                  │
-    Native Tools                                      call_mcp_tool
-(read, edit, bash...)                              (Pi Tools via MCP)
-```
-
-1. **Provider 註冊與 Context 轉換**：
-   - 在 Pi 註冊 `agy` provider，攔截串流請求（`streamSimple`）。
-   - 將 Pi 的對話訊息格式化，並根據對話歷史判斷是全新啟動、接續（continue）或是還原 session（resume）。
-2. **動態 IPC MCP 伺服器 (`BridgeIPC`)**：
-   - 每個 Pi session 啟動時會在隨機產生的 Unix domain socket 上啟動 MCP 伺服器。
-   - 將 Pi 目前活躍的原生工具（Schema、名稱、參數）暴露至 MCP server（伺服器名稱為 `pi-agy-bridge_pi`）。
-3. **AGY 子程序執行**：
-   - 透過子程序啟動 `agy`，指定 `--agent pi-bridge` 並以環境變數傳遞 socket 位址。
-   - 啟動時會自動確保 `~/.gemini/config/plugins/pi-agy-bridge` 靜態 agent 與設定已安裝並同步。
-4. **雙向工具轉發（Tool Relaying）**：
-   - 當 AGY 需要使用工具時，會透過 MCP 呼叫 `call_mcp_tool`。
-   - Bridge 接收到呼叫後轉發給 Pi 原生 Tool Execution Pipeline，並在取得結果後透過 socket 回傳給 AGY。
-   - AGY 產生的事件（文字 delta、工具呼叫狀態、思考過程）即時透過 `PiEventAdapter` 轉回 Pi 的串流介面。
-
----
-
-## 使用限制
-
-1. **系統平台限制**：
-   - MCP 與 IPC 連線依賴 Unix domain sockets，目前僅支援 **macOS** 與 **Linux** 環境（或支援 Unix sockets 的 POSIX 相容環境）。
-   - 在禁止或隔離 Unix domain socket 的嚴格沙盒環境中，本機 MCP 連線將無法建立。
-2. **環境前置需求**：
-   - Node.js >= 20
-   - AGY CLI >= 1.1.15，且必須可在 `$PATH` 中找到（或透過 `agyPath` 明確指定路徑）。
-   - `@earendil-works/pi-coding-agent` >= 0.87.1
-3. **Plugin 同步目錄權限**：
-   - 擴充套件初次執行或版本更新時，需要寫入權限以同步 bridge plugin 至 `~/.gemini/config/plugins/pi-agy-bridge`。
-4. **工具相容性**：
-   - 僅支援由 Pi 註冊並明確宣告 Schema 的工具；AGY 原生內建的非 Pi 工具（除必要 internal dispatchers 外）在橋接模式下會被攔截阻擋，以確保執行行為完全由 Pi 的安全策略受控。
-
----
-
-## 開發指南
+The project is developed and managed using [Bun](https://bun.sh).
 
 ```bash
-# 執行型別檢查
-npm run typecheck
+# Install dependencies
+bun install
 
-# 執行單元測試
-npm test
+# Run TypeScript type check
+bun run typecheck
+
+# Run test suite
+bun run test
 ```
+
+---
+
+## Limitations
+
+- **Platform**: Requires Unix domain sockets. Supported on macOS and Linux. Native Windows is unsupported; WSL2 may work but is not covered by the test suite.
+- **Sandboxed Environments**: Environments that strictly restrict Unix socket creation (`EPERM`) cannot run the MCP broker.
+- **External Tools**: Non-Pi AGY internal tools (except internal coordination tools like `call_mcp_tool`) are blocked by design to prevent bypassing Pi policy.
 
 ---
 
 ## License
 
-MIT
+[MIT](LICENSE)

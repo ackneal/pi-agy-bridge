@@ -1,6 +1,6 @@
 {
   "name": "pi-agy-bridge",
-  "version": "0.1.2",
+  "version": "0.1.0",
   "description": "Standalone AGY provider and Pi capability bridge plugin for Pi",
   "keywords": [
     "pi-package",
