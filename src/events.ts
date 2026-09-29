@@ -373,7 +373,10 @@ export class PiEventAdapter {
     debugLog("usage", "AGY result accounting fields:", Object.fromEntries(
       Object.entries(result).filter(([key]) => /usage|token|metric|stat|metadata/i.test(key))
     ));
-    if (result.usage && !this.hasStepUsage) this.addUsage(result.usage);
+    if (result.usage) {
+      if (this.hasStepUsage) this.mergeFinalUsage(result.usage);
+      else this.addUsage(result.usage);
+    }
 
     if (result.conversation_id || result.session_id) {
       this.partial.responseId = (result.conversation_id ?? result.session_id) as string;
@@ -447,6 +450,23 @@ export class PiEventAdapter {
         cacheWrite: 0,
         total: 0,
       },
+    };
+  }
+
+  private mergeFinalUsage(agyUsage: AgyUsage): void {
+    const current = this.partial.usage;
+    const reasoning = Math.max(current.reasoning ?? 0, agyUsage.thinking_tokens ?? 0);
+
+    this.partial.usage = {
+      ...current,
+      input: Math.max(current.input, agyUsage.input_tokens ?? 0),
+      output: Math.max(current.output, agyUsage.output_tokens ?? 0),
+      cacheRead: Math.max(current.cacheRead, agyUsage.cache_read_tokens ?? 0),
+      ...(reasoning > 0 ? { reasoning } : {}),
+      totalTokens: Math.max(
+        current.totalTokens,
+        agyUsage.total_tokens ?? ((agyUsage.input_tokens ?? 0) + (agyUsage.output_tokens ?? 0))
+      ),
     };
   }
 
