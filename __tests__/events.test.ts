@@ -270,6 +270,24 @@ describe("AgyEventAdapter", () => {
     assert.equal(done.message.content[0].name, "read");
   });
 
+  it("preserves step usage when the final result omits usage", async () => {
+    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+    adapter.handleEvent({
+      event: "step_update",
+      step_type: "agent_response",
+      usage: { input_tokens: 40, output_tokens: 2, total_tokens: 42 },
+    });
+    adapter.handleEvent({ event: "result", status: "success" });
+
+    const events = await collectStreamEvents(adapter);
+    const doneEvent = events.find((event) => event.type === "done");
+    assert.equal(doneEvent?.type, "done");
+    if (doneEvent?.type !== "done") return;
+    assert.equal(doneEvent.message.usage.input, 40);
+    assert.equal(doneEvent.message.usage.output, 2);
+    assert.equal(doneEvent.message.usage.totalTokens, 42);
+  });
+
   it("applies zero-cost subscription semantics to usage", async () => {
     const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
     adapter.handleEvent({

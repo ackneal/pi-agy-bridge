@@ -170,14 +170,21 @@ export class PiEventAdapter {
 
     this.partial.stopReason = "toolUse";
     this.completed = true;
+    const message = this.snapshot();
+    debugLog("usage", "Pi done message usage (bridge tool call):", message.usage);
     this.stream.push({
       type: "done",
       reason: "toolUse",
-      message: this.snapshot(),
+      message,
     });
   }
 
   private handleStepUpdate(step: AgyStepUpdateEvent): void {
+    if (step.usage) {
+      debugLog("usage", "AGY step usage:", step.usage);
+      this.applyUsage(step.usage);
+    }
+
     const deltaText = this.extractTextDelta(step);
     if (deltaText !== null) {
       this.ensureStarted();
@@ -361,7 +368,10 @@ export class PiEventAdapter {
     this.ensureStarted();
     this.closeActiveText();
 
-    this.applyUsage(result.usage);
+    debugLog("usage", "AGY result accounting fields:", Object.fromEntries(
+      Object.entries(result).filter(([key]) => /usage|token|metric|stat|metadata/i.test(key))
+    ));
+    if (result.usage) this.applyUsage(result.usage);
 
     if (result.conversation_id || result.session_id) {
       this.partial.responseId = (result.conversation_id ?? result.session_id) as string;
@@ -401,11 +411,13 @@ export class PiEventAdapter {
 
     this.partial.stopReason = stopReason;
     this.completed = true;
+    const message = this.snapshot();
+    debugLog("usage", "Pi done message usage (AGY result):", message.usage);
 
     this.stream.push({
       type: "done",
       reason: stopReason,
-      message: this.snapshot(),
+      message,
     });
   }
 

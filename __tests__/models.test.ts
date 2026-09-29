@@ -1,23 +1,50 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_AGY_MODELS } from "../models.ts";
+import { discoverAgyModels, parseModelsOutput } from "../models.ts";
 
-describe("DEFAULT_AGY_MODELS", () => {
-  it("provides unique, zero-cost model definitions", () => {
-    assert.ok(DEFAULT_AGY_MODELS.length > 0);
-    assert.equal(new Set(DEFAULT_AGY_MODELS.map((model) => model.id)).size, DEFAULT_AGY_MODELS.length);
+describe("AGY model discovery", () => {
+  it("parses model rows without replacing discovered model IDs", () => {
+    const models = parseModelsOutput(`
+| Slug | Label |
+| --- | --- |
+| gemini-3.8-flash-high | Gemini 3.8 Flash (High) |
+| gemini-3.8-flash-medium | Gemini 3.8 Flash (Medium) |
+| claude-sonnet-4-6 | Claude Sonnet 4.6 (Thinking) |
+| other-model-low | Other Model (Low) |
+`);
 
-    for (const model of DEFAULT_AGY_MODELS) {
-      assert.ok(model.id);
-      assert.ok(model.name);
-      assert.ok(model.contextWindow > 0);
-      assert.ok(model.maxTokens > 0);
-      assert.deepEqual(model.cost, {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      });
+    assert.deepEqual(models.map((model) => model.id), [
+      "gemini-3.8-flash",
+      "claude-sonnet-4-6",
+      "other-model",
+    ]);
+    assert.equal(models[0]?.name, "Gemini 3.8 Flash");
+    assert.equal(models[0]?.reasoning, true);
+    assert.deepEqual(models[0]?.thinkingLevelMap, { high: "high", medium: "medium" });
+    assert.equal(models[1]?.reasoning, true);
+    assert.deepEqual(models[2]?.thinkingLevelMap, { low: "low" });
+    for (const model of models) {
+      assert.deepEqual(model.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
     }
+  });
+
+  it("ignores progress, headers, dividers, duplicates, and empty output", () => {
+    const models = parseModelsOutput(`
+⠋ Fetching available models...gemini-x-high  Gemini X (High)
+| Slug | Label |
+| --- | --- |
+gemini-x-high  Duplicate
+`);
+
+    assert.deepEqual(models.map((model) => model.id), ["gemini-x"]);
+    assert.deepEqual(models[0]?.thinkingLevelMap, { high: "high" });
+    assert.deepEqual(parseModelsOutput("\n---\n"), []);
+  });
+
+  it("fails discovery when AGY is unavailable instead of returning fallback models", async () => {
+    await assert.rejects(
+      discoverAgyModels("__invalid_binary_name__"),
+      /Failed to discover AGY models/
+    );
   });
 });

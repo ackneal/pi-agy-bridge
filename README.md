@@ -46,13 +46,26 @@ setupAgyProvider(pi, {
 
 ### 3. 切換 Provider 與 Model
 
-載入擴充後，Pi 內會註冊 `agy` provider。在 Pi 介面中使用 `/model` 指令即可選取 AGY 提供的模型，例如：
+載入擴充後，Pi 內會註冊 `agy` provider。模型清單會先同步載入上次成功 discovery 的快取（`~/.pi/agent/cache/agy-models.json`），並在背景透過 `agy models` 更新；刷新完成後會更新當前清單和快取。首次使用且尚無快取時，模型會在背景 discovery 完成後出現。若 AGY 不存在或刷新失敗，既有快取會保留；重新開啟 `/model` 不會等待 discovery。
 
-- `agy/gemini-3.8-flash`
-- `agy/gemini-3.7-flash`
-- `agy/gemini-3.1-pro`
-- `agy/claude-sonnet-4-6`
-- `agy/claude-opus-4-6-thinking`
+Pi 的 `~/.pi/agent/models.json` 會在 discovery 結果之上套用 `modelOverrides`。例如：
+
+```json
+{
+  "providers": {
+    "agy": {
+      "modelOverrides": {
+        "gemini-3.8-flash": {
+          "name": "Gemini Flash via AGY",
+          "maxTokens": 32768
+        }
+      }
+    }
+  }
+}
+```
+
+若透過 `setupAgyProvider(pi, { models: [...] })` 明確提供 models，則使用該清單並停用自動 discovery；Pi 的 `modelOverrides` 仍會套用。
 
 ### 4. 除錯環境變數
 

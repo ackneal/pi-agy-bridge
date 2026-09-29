@@ -92,6 +92,7 @@ export interface AgyStepUpdateEvent {
   call_id?: string;
   tool_input?: unknown;
   tool_result?: unknown;
+  usage?: AgyUsage;
   step_update?: Omit<AgyStepUpdateEvent, "event" | "step_update">;
   [key: string]: unknown;
 }

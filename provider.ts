@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type {
   AssistantMessageEventStream,
   Context,
@@ -21,7 +21,7 @@ import {
 import { RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
 import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "./plugin-install.ts";
 import { validateAgyVersion } from "./version.ts";
-import { DEFAULT_AGY_MODELS } from "./models.ts";
+import { cacheAgyModels, discoverAgyModels, loadCachedAgyModels } from "./models.ts";
 import { debugLog } from "./debug.ts";
 import type { AgyBridgeConfig } from "./types.ts";
 
@@ -134,16 +134,12 @@ export function resolveModelAndEffort(
   }
 
   let baseModel = modelId;
-  const match = modelId.match(/^(gemini-[^]+)-(low|medium|high)$/);
-  if (match && match[1]) {
+  const match = modelId.match(/^(.+)-(low|medium|high)$/i);
+  if (match?.[1]) {
     baseModel = match[1];
-    if (!effort && (match[2] === "low" || match[2] === "medium" || match[2] === "high")) {
-      effort = match[2];
+    if (!effort) {
+      effort = match[2]?.toLowerCase() as "low" | "medium" | "high" | undefined;
     }
-  }
-
-  if (!effort && baseModel.toLowerCase().includes("gemini")) {
-    effort = "medium";
   }
 
   return { baseModel, effort };
@@ -404,15 +400,42 @@ export class AgyBridge {
       this.piContextAdapter.clear();
     });
 
+    const models = this.config?.models ?? loadCachedAgyModels();
+    let refreshPromise: Promise<void> | undefined;
+    const refreshModels = (signal?: AbortSignal): Promise<ProviderModelConfig[]> => {
+      if (!refreshPromise) {
+        refreshPromise = discoverAgyModels(this.config?.agyPath, signal)
+          .then(async (discovered) => {
+            models.splice(0, models.length, ...discovered);
+            await cacheAgyModels(discovered);
+          })
+          .catch((error) => {
+            debugLog("models", "Model refresh failed; retaining cached models:", error);
+          })
+          .finally(() => {
+            refreshPromise = undefined;
+          });
+      }
+
+      return Promise.resolve(models);
+    };
+
     this.pi.registerProvider("agy", {
       name: "agy",
       baseUrl: "agy",
       apiKey: "not-used",
       api: "agy" as any,
-      models: this.config?.models ?? DEFAULT_AGY_MODELS,
+      models,
+      ...(this.config?.models ? {} : { refreshModels: ({ signal }) => refreshModels(signal) }),
       streamSimple: (model, context, options) =>
         streamAgyProvider(model, context, options, this.config, this),
     });
+
+    if (!this.config?.models) {
+      void refreshModels().catch((error) => {
+        debugLog("models", "Background model refresh failed:", error);
+      });
+    }
   }
 }
 
