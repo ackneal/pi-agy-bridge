@@ -26,49 +26,97 @@ import { debugLog } from "./debug.ts";
 import type { AgyBridgeConfig } from "./types.ts";
 
 export function formatMessageText(message: Message): string {
-  if (typeof message.content === "string") {
-    return message.content;
-  }
+  if (typeof message.content === "string") return message.content;
 
-  if (Array.isArray(message.content)) {
-    return message.content
-      .map((block) => {
-        if ("text" in block && typeof block.text === "string") {
-          return block.text;
-        }
-        if ("name" in block && typeof block.name === "string") {
-          const args = (block as unknown as Record<string, unknown>)["arguments"];
-          return `[Tool Call: ${block.name}(${JSON.stringify(args ?? {})})]`;
-        }
-        if ("content" in block) {
-          const content = (block as Record<string, unknown>)["content"];
-          return typeof content === "string" ? content : JSON.stringify(content);
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  return "";
+  return message.content
+    .map((block) => {
+      if (block.type === "text") return block.text;
+      if (block.type === "image") return `[Image: ${block.mimeType}]`;
+      if (block.type === "toolCall") {
+        return `[Tool Call: ${block.name}(${JSON.stringify(block.arguments)})]`;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function formatContextPrompt(context: Context, isReused: boolean): string {
-  const msgs = context.messages;
-  const history = isReused
-    ? (msgs.at(-1) ? formatMessageText(msgs.at(-1)!) : "")
-    : msgs.map((message) => {
-        const role =
-          message.role === "user"
-            ? "User"
-            : message.role === "assistant"
-            ? "Assistant"
-            : "System / Tool";
-        return `[${role}]:\n${formatMessageText(message)}`;
-      }).join("\n\n");
+  const currentMessage = context.messages.at(-1);
+  if (isReused) return currentMessage ? formatMessageText(currentMessage) : "";
 
-  if (isReused || !context.systemPrompt) return history;
-  return [`[Pi system instructions]:\n${context.systemPrompt}`, history].filter(Boolean).join("\n\n");
+  const history = context.messages.slice(0, -1).map((message) => formatXmlMessage(message));
+  const sections = [
+    context.systemPrompt
+      ? `<system_instructions>${escapeXml(context.systemPrompt)}</system_instructions>`
+      : "",
+    history.length > 0
+      ? `<history>\n${history.map((message) => indent(message)).join("\n")}\n</history>`
+      : "<history />",
+    currentMessage ? formatXmlMessage(currentMessage, "current_message") : "",
+  ].filter(Boolean);
+
+  return `<pi_context purpose="reconstructed_conversation">\n${sections.map((section) => indent(section)).join("\n")}\n</pi_context>`;
+}
+
+function formatXmlMessage(message: Message, tagName: "message" | "current_message" = "message"): string {
+  if (message.role === "toolResult") {
+    const attributes = [
+      ...(tagName === "current_message" ? ['role="toolResult"'] : []),
+      `call_id="${escapeXml(message.toolCallId)}"`,
+      `tool_name="${escapeXml(message.toolName)}"`,
+      `is_error="${message.isError}"`,
+    ].join(" ");
+    return formatXmlElement(tagName === "current_message" ? tagName : "tool_result", attributes, formatXmlContent(message));
+  }
+
+  return formatXmlElement(tagName, `role="${message.role}"`, formatXmlContent(message));
+}
+
+function formatXmlContent(message: Message): string[] {
+  const content = typeof message.content === "string"
+    ? [`<text>${escapeXml(message.content)}</text>`]
+    : message.content.flatMap((block) => {
+        if (block.type === "text") return [`<text>${escapeXml(block.text)}</text>`];
+        if (block.type === "image") {
+          return [`<image mime_type="${escapeXml(block.mimeType)}">binary content omitted</image>`];
+        }
+        if (block.type === "toolCall") {
+          const attributes = `id="${escapeXml(block.id)}" name="${escapeXml(block.name)}"`;
+          const args = `<arguments>${escapeXml(JSON.stringify(block.arguments))}</arguments>`;
+          return [formatXmlElement("tool_call", attributes, [args])];
+        }
+        return [];
+      });
+
+  if (message.role === "system" && message.sections) {
+    for (const [name, value] of Object.entries(message.sections)) {
+      if (value !== null) {
+        content.push(`<section name="${escapeXml(name)}">${escapeXml(value)}</section>`);
+      }
+    }
+  }
+
+  return content;
+}
+
+function formatXmlElement(tagName: string, attributes: string, content: string[]): string {
+  const openingTag = attributes ? `<${tagName} ${attributes}>` : `<${tagName}>`;
+  if (content.length === 0) return `${openingTag}</${tagName}>`;
+  return `${openingTag}\n${content.map((item) => indent(item)).join("\n")}\n</${tagName}>`;
+}
+
+function indent(value: string): string {
+  return value.split("\n").map((line) => `  ${line}`).join("\n");
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }
 
 export function resolveModelAndEffort(
