@@ -6,7 +6,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { Type } from "typebox";
 import { fileURLToPath } from "node:url";
-import { AgyMcpServer, cleanOrphanSockets } from "../src/bridge-ipc.ts";
+import { AgyMcpServer, cleanOrphanSockets } from "../bridge-ipc.ts";
 import { connectBridge, parseBridgeUri } from "../mcp/socket.js";
 
 describe("AgyMcpServer", () => {

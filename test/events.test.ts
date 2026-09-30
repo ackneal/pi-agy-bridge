@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe, it } from "node:test";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
-import { AgyEventAdapter } from "../src/events.ts";
+import { AgyEventAdapter } from "../events.ts";
 
 async function collectStreamEvents(adapter: AgyEventAdapter): Promise<AssistantMessageEvent[]> {
   const events: AssistantMessageEvent[] = [];

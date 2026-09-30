@@ -8,7 +8,7 @@ import type { JsonObject, Message, Tool } from "@earendil-works/pi-ai";
 import { debugLog } from "./debug.ts";
 import { CapabilityGateway, type PiToolCallBatch } from "./capabilities.ts";
 import type { SessionResources } from "./session.ts";
-import { formatBridgeUri } from "../mcp/socket.js";
+import { formatBridgeUri } from "./mcp/socket.js";
 import { resolveMcpEntrypoint } from "./plugin-install.ts";
 
 interface BrokerMessage {

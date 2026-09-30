@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
-import { formatContextPrompt } from "../src/provider.ts";
+import { formatContextPrompt } from "../provider.ts";
 
 const context = {
   systemPrompt: "Follow <policy> & safety.",

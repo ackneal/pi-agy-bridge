@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { discoverAgyModels, parseModelsOutput } from "../src/models.ts";
+import { discoverAgyModels, parseModelsOutput } from "../models.ts";
 
 describe("AGY model discovery", () => {
   it("parses model rows without replacing discovered model IDs", () => {
