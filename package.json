@@ -33,8 +33,7 @@
     "version.ts",
     "mcp",
     "plugin",
-    "!**/__tests__/**",
-    "!**/*.test.ts"
+    "!*.test.ts"
   ],
   "pi": {
     "extensions": [
@@ -43,7 +42,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test --test-timeout=15000 test/*.test.ts"
+    "test": "node --experimental-strip-types --test --test-timeout=15000 *.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.87.1",

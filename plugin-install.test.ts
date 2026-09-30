@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../plugin-install.ts";
+import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "./plugin-install.ts";
 
 async function readTree(root: string): Promise<Map<string, Buffer>> {
   const files = new Map<string, Buffer>();

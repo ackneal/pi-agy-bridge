@@ -3,8 +3,8 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { describe, it } from "node:test";
-import { AgyProcess } from "../process.ts";
-import { AgyProcessError } from "../types.ts";
+import { AgyProcess } from "./process.ts";
+import { AgyProcessError } from "./types.ts";
 
 describe("AgyProcess", () => {
   it("starts agy with stream-json input and output", async () => {

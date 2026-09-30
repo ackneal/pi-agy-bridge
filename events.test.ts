@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe, it } from "node:test";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
-import { AgyEventAdapter } from "../events.ts";
+import { AgyEventAdapter } from "./events.ts";
 
 async function collectStreamEvents(adapter: AgyEventAdapter): Promise<AssistantMessageEvent[]> {
   const events: AssistantMessageEvent[] = [];
@@ -179,7 +179,7 @@ describe("AgyEventAdapter", () => {
         message: "Quota exceeded",
       },
       { input: { event: "result", status: "aborted" }, reason: "aborted" },
-    ] as const;
+    ] as Array<{ input: Parameters<AgyEventAdapter["handleEvent"]>[0]; reason: "error" | "aborted"; message?: string | { message: string } }>;
 
     for (const expected of cases) {
       const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
@@ -190,7 +190,9 @@ describe("AgyEventAdapter", () => {
       assert.ok(errorEvent);
       assert.equal(errorEvent.reason, expected.reason);
       assert.equal(errorEvent.error.stopReason, expected.reason);
-      if (expected.message) assert.equal(errorEvent.error.errorMessage, expected.message);
+      const expectedMessage = expected.message;
+      const errorMessage = typeof expectedMessage === "string" ? expectedMessage : expectedMessage?.message;
+      if (errorMessage) assert.equal(errorEvent.error.errorMessage, errorMessage);
     }
   });
 

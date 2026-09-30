@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { describe, it } from "node:test";
 
 const execFileAsync = promisify(execFile);
-const projectDir = path.resolve(import.meta.dirname, "..");
+const projectDir = path.resolve(import.meta.dirname);
 
 describe("AGY MCP package", () => {
   it("packs the static plugin and executable JavaScript without local artifacts", async () => {

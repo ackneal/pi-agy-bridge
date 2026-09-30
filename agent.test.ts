@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-const projectDir = fileURLToPath(new URL("../", import.meta.url));
-const pluginDir = fileURLToPath(new URL("../plugin/", import.meta.url));
+const projectDir = fileURLToPath(new URL("./", import.meta.url));
+const pluginDir = fileURLToPath(new URL("./plugin/", import.meta.url));
 
 describe("static AGY bridge plugin", () => {
   it("keeps package, plugin, and MCP versions aligned", async () => {

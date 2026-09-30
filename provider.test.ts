@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerAgyProvider, resolveModelAndEffort } from "../provider.ts";
+import { registerAgyProvider, resolveModelAndEffort } from "./provider.ts";
 
 test("resolves explicit model suffix levels without defaulting Gemini effort", () => {
   assert.deepEqual(resolveModelAndEffort("gemini-3.8-flash"), {
