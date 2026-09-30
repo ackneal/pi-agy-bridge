@@ -431,18 +431,16 @@ export class PiEventAdapter {
     const output = agyUsage.output_tokens ?? 0;
     const cacheRead = agyUsage.cache_read_tokens ?? 0;
     const reasoning = agyUsage.thinking_tokens ?? 0;
-    const totalTokens = agyUsage.total_tokens ?? (input + output);
-    const current = this.partial.usage;
-
+    // Each step's usage describes that single model request. AGY's total_tokens
+    // field omits cache_read_tokens, so compute the true per-request context size
+    // ourselves; keep the latest snapshot for Pi's overflow/compaction checks.
     this.partial.usage = {
-      input: current.input + input,
-      output: current.output + output,
-      cacheRead: current.cacheRead + cacheRead,
+      input,
+      output,
+      cacheRead,
       cacheWrite: 0,
-      ...((current.reasoning ?? 0) + reasoning > 0
-        ? { reasoning: (current.reasoning ?? 0) + reasoning }
-        : {}),
-      totalTokens,
+      ...(reasoning > 0 ? { reasoning } : {}),
+      totalTokens: input + output + cacheRead,
       cost: {
         input: 0,
         output: 0,
@@ -454,17 +452,16 @@ export class PiEventAdapter {
   }
 
   private mergeFinalUsage(agyUsage: AgyUsage): void {
+    // result.usage carries session-cumulative billing totals. Step usage already
+    // captured the latest single-request snapshot; merging cumulative values into
+    // input/cacheRead/totalTokens would trip Pi's silent-overflow check
+    // (usage.input + usage.cacheRead > contextWindow) and force premature compaction.
     const current = this.partial.usage;
     const reasoning = Math.max(current.reasoning ?? 0, agyUsage.thinking_tokens ?? 0);
 
     this.partial.usage = {
       ...current,
-      input: Math.max(current.input, agyUsage.input_tokens ?? 0),
-      output: Math.max(current.output, agyUsage.output_tokens ?? 0),
-      cacheRead: Math.max(current.cacheRead, agyUsage.cache_read_tokens ?? 0),
       ...(reasoning > 0 ? { reasoning } : {}),
-      totalTokens: agyUsage.total_tokens
-        ?? ((agyUsage.input_tokens ?? 0) + (agyUsage.output_tokens ?? 0)),
     };
   }
 

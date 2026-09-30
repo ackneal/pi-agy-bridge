@@ -283,7 +283,7 @@ describe("AgyEventAdapter", () => {
       usage: { input_tokens: 50, output_tokens: 3, thinking_tokens: 2, total_tokens: 53 },
     });
 
-    assert.equal(adapter.message.usage.input, 90);
+    assert.equal(adapter.message.usage.input, 50);
     assert.equal(adapter.message.usage.totalTokens, 53);
 
     adapter.handleEvent({
@@ -302,11 +302,38 @@ describe("AgyEventAdapter", () => {
     const doneEvent = events.find((event) => event.type === "done");
     assert.equal(doneEvent?.type, "done");
     if (doneEvent?.type !== "done") return;
-    assert.equal(doneEvent.message.usage.input, 90);
-    assert.equal(doneEvent.message.usage.output, 5);
-    assert.equal(doneEvent.message.usage.reasoning, 3);
-    assert.equal(doneEvent.message.usage.cacheRead, 20);
-    assert.equal(doneEvent.message.usage.totalTokens, 73);
+    assert.equal(doneEvent.message.usage.input, 50);
+    assert.equal(doneEvent.message.usage.output, 3);
+    assert.equal(doneEvent.message.usage.reasoning, 2);
+    assert.equal(doneEvent.message.usage.cacheRead, 0);
+    assert.equal(doneEvent.message.usage.totalTokens, 53);
+  });
+
+  it("ignores session-cumulative result usage and keeps the last step snapshot", async () => {
+    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash" });
+    adapter.handleEvent({
+      event: "step_update",
+      step_type: "agent_response",
+      usage: { input_tokens: 7741, output_tokens: 1284, thinking_tokens: 610, cache_read_tokens: 0, total_tokens: 9025 },
+    });
+    adapter.handleEvent({
+      event: "result",
+      status: "SUCCESS",
+      usage: {
+        input_tokens: 52512,
+        output_tokens: 2879,
+        thinking_tokens: 1392,
+        cache_read_tokens: 329718,
+        total_tokens: 55391,
+      },
+    });
+
+    const events = await collectStreamEvents(adapter);
+    const doneEvent = events.find((e) => e.type === "done") as any;
+    assert.equal(doneEvent.reason, "stop");
+    assert.equal(doneEvent.message.usage.input, 7741);
+    assert.equal(doneEvent.message.usage.cacheRead, 0);
+    assert.equal(doneEvent.message.usage.totalTokens, 9025);
   });
 
   it("applies zero-cost subscription semantics to usage", async () => {
@@ -330,7 +357,7 @@ describe("AgyEventAdapter", () => {
     assert.equal(msg.usage.output, 300);
     assert.equal(msg.usage.cacheRead, 400);
     assert.equal(msg.usage.reasoning, 120);
-    assert.equal(msg.usage.totalTokens, 1800);
+    assert.equal(msg.usage.totalTokens, 2200);
     assert.deepEqual(msg.usage.cost, {
       input: 0,
       output: 0,
