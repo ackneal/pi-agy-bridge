@@ -14,7 +14,7 @@ A standalone Antigravity CLI (`agy`) provider and capability bridge plugin for [
 ## Features
 
 - **Native Pi tool execution**: Pi tools (`read`, `edit`, `bash`, custom extensions, and PTY terminals) are exposed to AGY through an ephemeral local MCP server over Unix domain sockets. AGY delegates tool calls back to Pi's runtime environment and policy controls.
-- **Aggregated token usage**: Input, output, cache-read, and thinking tokens are accumulated across AGY executions. The latest context size is retained for Pi's context display and auto-compaction decisions.
+- **Per-request token usage**: Input, output, cache-read, and thinking tokens are reported per model request (the latest AGY step's snapshot). AGY's session-cumulative `result` usage is intentionally excluded so Pi's context display and auto-compaction decisions operate on real context size.
 - **Dynamic model discovery**: Discovers available models directly via `agy models`, caches the catalog locally, and applies family-specific context windows (Claude, Gemini, GPT-OSS) alongside user `modelOverrides`.
 - **Three-tier session synchronization**: Preserves long-running AGY sub-processes across sequential turns (continue), resumes existing conversations across restarts via conversation IDs (resume), or reconstructs branched history cleanly using structured XML payloads (rebuild).
 - **Strict isolation & security**: Enforces a strict tool allowlist, restricts socket permissions to `0o600`, and virtualizes PTY terminal handles (`terminal-1`) to isolate internal process identifiers.
@@ -68,7 +68,7 @@ Pi compaction, branching, or another history rewrite invalidates that continuati
 
 ### Usage Accounting
 
-Input, output, cache-read, and thinking tokens are accumulated across AGY executions and reported to Pi. Final result fields supplement step updates without counting the last execution twice. `totalTokens` tracks the latest AGY context size rather than cumulative billing usage so Pi's context display and auto-compaction threshold are not inflated by long multi-step tasks.
+AGY's `step_update` events carry per-request usage; each assistant message reports the latest step's snapshot. `totalTokens` is computed as `input + output + cacheRead` (AGY's own `total_tokens` field omits cache reads, which would make the reported context size swing with the cache hit/miss cycle). The session-cumulative `result` usage is billing data only and is never merged into Pi-facing usage, so Pi's threshold and overflow compaction checks always see the true single-request context size.
 
 ---
 
