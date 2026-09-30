@@ -7,7 +7,7 @@
 
 A standalone Antigravity CLI (`agy`) provider and capability bridge plugin for [Pi](https://github.com/earendil-works/pi-coding-agent).
 
-`pi-agy-bridge` lets Pi delegate reasoning and code generation to Antigravity CLI while keeping tool execution in Pi, aggregating token usage across AGY steps, discovering models dynamically, and synchronizing AGY sessions with Pi history.
+`pi-agy-bridge` lets Pi delegate reasoning and code generation to Antigravity CLI while everything else stays native to Pi: tools execute in Pi's runtime under its policy controls, per-request token usage feeds Pi's context display and auto-compaction, models are discovered dynamically into the native model picker, and AGY sessions stay synchronized with Pi history.
 
 ---
 
