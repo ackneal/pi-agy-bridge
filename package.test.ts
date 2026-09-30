@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -31,6 +31,13 @@ describe("AGY MCP package", () => {
         "plugin/agents/pi-bridge.md",
       ]) {
         assert.ok(files.includes(required), `missing packed file: ${required}`);
+      }
+
+      const rootModules = (await readdir(projectDir)).filter(
+        (file) => file.endsWith(".ts") && !file.endsWith(".test.ts")
+      );
+      for (const module of rootModules) {
+        assert.ok(files.includes(module), `missing packed root module: ${module}`);
       }
       assert.ok(!files.some((file) => file.includes("/.gemini/") || file.includes("/__tests__/") || file.endsWith(".test.ts")));
 

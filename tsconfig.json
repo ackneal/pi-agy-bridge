@@ -11,6 +11,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["*.ts"],
-  "exclude": ["test"]
+  "include": ["*.ts"]
 }

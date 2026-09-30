@@ -16,21 +16,8 @@
     "pi-agy-bridge-mcp": "./mcp/index.js"
   },
   "files": [
-    "index.ts",
+    "*.ts",
     "model.json",
-    "bridge-ipc.ts",
-    "capabilities.ts",
-    "debug.ts",
-    "events.ts",
-    "models.ts",
-    "plugin-install.ts",
-    "process.ts",
-    "protocol.ts",
-    "provider.ts",
-    "session-state.ts",
-    "session.ts",
-    "types.ts",
-    "version.ts",
     "mcp",
     "plugin",
     "!*.test.ts"
