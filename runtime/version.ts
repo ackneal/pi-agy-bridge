@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { CompatibilityError } from "./types.ts";
-import { debugLog } from "./debug.ts";
+import { CompatibilityError } from "../shared/types.ts";
+import { debugLog } from "../shared/debug.ts";
 
 const execFileAsync = promisify(execFile);
 

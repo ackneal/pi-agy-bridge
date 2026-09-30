@@ -1,5 +1,5 @@
-import type { AgyEvent } from "./types.ts";
-import { debugLog } from "./debug.ts";
+import type { AgyEvent } from "../shared/types.ts";
+import { debugLog } from "../shared/debug.ts";
 
 export class AgyProtocolParser {
   private buffer = "";

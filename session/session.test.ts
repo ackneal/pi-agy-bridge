@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test, { describe, it } from "node:test";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { calculateSyncKey, LiveSession, LiveSessionRegistry, PiContextAdapter } from "./session.ts";
-import type { AgyProcess } from "./process.ts";
-import type { AgyMcpServer } from "./bridge-ipc.ts";
+import type { AgyProcess } from "../runtime/process.ts";
+import type { AgyMcpServer } from "../bridge/bridge-ipc.ts";
 
 describe("calculateSyncKey", () => {
   it("is deterministic, canonicalizes tool order, and includes all key components", () => {

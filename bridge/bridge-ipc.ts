@@ -5,11 +5,11 @@ import { createServer, type Server, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { JsonObject, Message, Tool } from "@earendil-works/pi-ai";
-import { debugLog } from "./debug.ts";
+import { debugLog } from "../shared/debug.ts";
 import { CapabilityGateway, type PiToolCallBatch } from "./capabilities.ts";
-import type { SessionResources } from "./session.ts";
-import { formatBridgeUri } from "./mcp/socket.js";
-import { resolveMcpEntrypoint } from "./plugin-install.ts";
+import type { SessionResources } from "../session/session.ts";
+import { formatBridgeUri } from "../mcp/socket.js";
+import { resolveMcpEntrypoint } from "../discovery/plugin-install.ts";
 
 interface BrokerMessage {
   type: string;

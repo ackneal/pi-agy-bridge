@@ -9,21 +9,21 @@ import type {
   SimpleStreamOptions,
   Tool,
 } from "@earendil-works/pi-ai";
-import { PiEventAdapter } from "./events.ts";
-import { AgyRuntime } from "./process.ts";
-import { BridgeIPC } from "./bridge-ipc.ts";
+import { PiEventAdapter } from "../runtime/events.ts";
+import { AgyRuntime } from "../runtime/process.ts";
+import { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import {
   LiveSessionRegistry,
   PiContextAdapter,
   calculateSyncKey,
   type LiveSession,
-} from "./session.ts";
-import { RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
-import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "./plugin-install.ts";
-import { validateAgyVersion } from "./version.ts";
-import { cacheAgyModels, discoverAgyModels, loadCachedAgyModels } from "./models.ts";
-import { debugLog } from "./debug.ts";
-import type { AgyBridgeConfig } from "./types.ts";
+} from "../session/session.ts";
+import { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
+import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../discovery/plugin-install.ts";
+import { validateAgyVersion } from "../runtime/version.ts";
+import { cacheAgyModels, discoverAgyModels, loadCachedAgyModels } from "../discovery/models.ts";
+import { debugLog } from "../shared/debug.ts";
+import type { AgyBridgeConfig } from "../shared/types.ts";
 
 export function formatMessageText(message: Message): string {
   if (typeof message.content === "string") return message.content;

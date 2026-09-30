@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { LiveSession, PiContextAdapter } from "./session.ts";
-import { debugLog } from "./debug.ts";
+import { debugLog } from "../shared/debug.ts";
 
 const ENTRY_TYPE = "pi-agy-bridge.runtime-session";
 

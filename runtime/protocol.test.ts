@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe, it } from "node:test";
 import { AgyProtocolParser } from "./protocol.ts";
-import type { AgyEvent } from "./types.ts";
+import type { AgyEvent } from "../shared/types.ts";
 
 async function* parseNdjsonStream(
   stream: AsyncIterable<string | Buffer>

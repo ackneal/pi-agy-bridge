@@ -8,9 +8,9 @@ import type {
   ToolCall,
 } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import type { AgyEvent, AgyResultEvent, AgyStepUpdateEvent, AgyUsage } from "./types.ts";
-import { AGY_MCP_PREFIX, fromMcpToolName, isAllowedPiToolName } from "./capabilities.ts";
-import { debugLog } from "./debug.ts";
+import type { AgyEvent, AgyResultEvent, AgyStepUpdateEvent, AgyUsage } from "../shared/types.ts";
+import { AGY_MCP_PREFIX, fromMcpToolName, isAllowedPiToolName } from "../bridge/capabilities.ts";
+import { debugLog } from "../shared/debug.ts";
 
 const AGY_INTERNAL_TOOL_NAMES = new Set(["list_resources", "call_mcp_tool", "manage_task"]);
 

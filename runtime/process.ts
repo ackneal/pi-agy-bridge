@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { AgyProtocolParser } from "./protocol.ts";
-import { AgyProcessError, type AgyEvent, type AgyInitEvent, type AgyInput } from "./types.ts";
-import { debugLog } from "./debug.ts";
+import { AgyProcessError, type AgyEvent, type AgyInitEvent, type AgyInput } from "../shared/types.ts";
+import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "./version.ts";
 
 export interface AgyProcessOptions {

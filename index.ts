@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { AgyBridgeConfig } from "./types.ts";
-import { setDebugOverride } from "./debug.ts";
-import { registerAgyProvider } from "./provider.ts";
+import type { AgyBridgeConfig } from "./shared/types.ts";
+import { setDebugOverride } from "./shared/debug.ts";
+import { registerAgyProvider } from "./provider/provider.ts";
 
 export function setupAgyProvider(
   pi: ExtensionAPI,
@@ -18,5 +18,5 @@ export default function piAgyBridge(pi: ExtensionAPI): void {
   setupAgyProvider(pi);
 }
 
-export type { AgyBridgeConfig } from "./types.ts";
-export { CompatibilityError, AgyProcessError } from "./types.ts";
+export type { AgyBridgeConfig } from "./shared/types.ts";
+export { CompatibilityError, AgyProcessError } from "./shared/types.ts";

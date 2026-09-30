@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { debugLog } from "./debug.ts";
-import { resolveAgyExecutable } from "./version.ts";
+import { debugLog } from "../shared/debug.ts";
+import { resolveAgyExecutable } from "../runtime/version.ts";
 
 const execFileAsync = promisify(execFile);
 const MODEL_CACHE_PATH = path.join(os.homedir(), ".pi", "agent", "cache", "agy-models.json");

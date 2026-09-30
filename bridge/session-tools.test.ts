@@ -12,7 +12,7 @@ import {
   PiToolAdapter,
   isAllowedPiToolName,
 } from "./capabilities.ts";
-import { SessionResources } from "./session.ts";
+import { SessionResources } from "../session/session.ts";
 
 const ptyTool: Tool = {
   name: "pty",

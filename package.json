@@ -16,11 +16,16 @@
     "pi-agy-bridge-mcp": "./mcp/index.js"
   },
   "files": [
-    "*.ts",
-    "model.json",
+    "index.ts",
+    "shared",
+    "runtime",
+    "bridge",
+    "session",
+    "discovery",
+    "provider",
     "mcp",
     "plugin",
-    "!*.test.ts"
+    "!**/*.test.ts"
   ],
   "pi": {
     "extensions": [
@@ -29,7 +34,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test --test-timeout=15000 *.test.ts"
+    "test": "node --experimental-strip-types --test --test-timeout=15000 \"**/*.test.ts\""
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.87.1",

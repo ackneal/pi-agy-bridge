@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import { Type } from "typebox";
 import { fileURLToPath } from "node:url";
 import { AgyMcpServer, cleanOrphanSockets } from "./bridge-ipc.ts";
-import { connectBridge, parseBridgeUri } from "./mcp/socket.js";
+import { connectBridge, parseBridgeUri } from "../mcp/socket.js";
 
 describe("AgyMcpServer", () => {
   it("exposes only its Pi context tools over stdio and relays results", async (t) => {
@@ -35,7 +35,7 @@ describe("AgyMcpServer", () => {
       assert.equal(bridgeUri.protocol, "unix:");
       assert.equal(bridgeUri.searchParams.get("session"), bridge.sessionId);
 
-      const scriptPath = fileURLToPath(new URL("./mcp/index.js", import.meta.url));
+      const scriptPath = fileURLToPath(new URL("../mcp/index.js", import.meta.url));
       child = spawn("sh", ["-c", "exec $PI_AGY_BRIDGE_MCP_COMMAND"], {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
@@ -222,7 +222,7 @@ describe("AgyMcpServer", () => {
     ["unix:///tmp/pi.sock", "Bridge URI must use unix:///absolute/socket/path?session=<session-id>"],
   ] as const) {
     it(`fails clearly for invalid MCP command endpoint ${JSON.stringify(bridgeUri)}`, async () => {
-      const scriptPath = fileURLToPath(new URL("./mcp/index.js", import.meta.url));
+      const scriptPath = fileURLToPath(new URL("../mcp/index.js", import.meta.url));
       const child = spawn("sh", ["-c", "exec $PI_AGY_BRIDGE_MCP_COMMAND"], {
         stdio: ["pipe", "pipe", "pipe"],
         env: {

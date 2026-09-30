@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { JsonObject, Message, Tool, ToolCall } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
-import type { SessionResources } from "./session.ts";
-import { debugLog } from "./debug.ts";
+import type { SessionResources } from "../session/session.ts";
+import { debugLog } from "../shared/debug.ts";
 
 export interface McpToolDefinition {
   name: string;

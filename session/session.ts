@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { AgyRuntime } from "./process.ts";
+import type { AgyRuntime } from "../runtime/process.ts";
 import type { ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
-import type { BridgeIPC } from "./bridge-ipc.ts";
-import { debugLog } from "./debug.ts";
+import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { debugLog } from "../shared/debug.ts";
 
 export class TerminalRegistry {
   private readonly handles = new Map<string, string>();

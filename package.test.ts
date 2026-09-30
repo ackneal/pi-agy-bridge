@@ -23,7 +23,7 @@ describe("AGY MCP package", () => {
 
       for (const required of [
         "index.ts",
-        "model.json",
+        "discovery/model.json",
         "mcp/index.js",
         "mcp/socket.js",
         "plugin/plugin.json",
@@ -33,11 +33,16 @@ describe("AGY MCP package", () => {
         assert.ok(files.includes(required), `missing packed file: ${required}`);
       }
 
-      const rootModules = (await readdir(projectDir)).filter(
-        (file) => file.endsWith(".ts") && !file.endsWith(".test.ts")
-      );
-      for (const module of rootModules) {
-        assert.ok(files.includes(module), `missing packed root module: ${module}`);
+      const moduleDirs = ["shared", "runtime", "bridge", "session", "discovery", "provider"];
+      for (const dir of moduleDirs) {
+        const entries = await readdir(path.join(projectDir, dir), { recursive: true });
+        const modules = entries
+          .map(String)
+          .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
+        for (const module of modules) {
+          const packedPath = path.posix.join(dir, ...module.split(path.sep));
+          assert.ok(files.includes(packedPath), `missing packed module: ${packedPath}`);
+        }
       }
       assert.ok(!files.some((file) => file.includes("/.gemini/") || file.includes("/__tests__/") || file.endsWith(".test.ts")));
 

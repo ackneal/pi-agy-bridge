@@ -6,7 +6,7 @@ import test, { describe, it } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { LiveSession, PiContextAdapter } from "./session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
-import type { AgyProcess } from "./process.ts";
+import type { AgyProcess } from "../runtime/process.ts";
 
 describe("RuntimeSessionStore", () => {
   it("persists references, restores them after reopening, and preserves history metadata", async () => {
