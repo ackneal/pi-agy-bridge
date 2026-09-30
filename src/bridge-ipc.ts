@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import os from "node:os";
@@ -26,6 +27,7 @@ export class BridgeIPC {
   private readonly authenticatedSockets = new Set<Socket>();
   private broker: Server | null = null;
   private socketPath: string | null = null;
+  private exitListener: (() => void) | null = null;
   private markConnected: (() => void) | null = null;
   private readonly connected = new Promise<void>((resolve) => {
     this.markConnected = resolve;
@@ -90,12 +92,23 @@ export class BridgeIPC {
 
     const runtimeDir = path.join(os.tmpdir(), "pab");
     await fs.mkdir(runtimeDir, { recursive: true });
+    await cleanOrphanSockets(runtimeDir);
 
     this.socketPath = path.join(
       runtimeDir,
       `${process.pid}-${randomBytes(6).toString("hex")}.sock`
     );
     this.broker = createServer((socket) => this.handleConnection(socket));
+
+    const socketPath = this.socketPath;
+    this.exitListener = () => {
+      try {
+        unlinkSync(socketPath);
+      } catch {
+        // Process is terminating; ignore unlinking errors.
+      }
+    };
+    process.on("exit", this.exitListener);
 
     try {
       await listen(this.broker, this.socketPath);
@@ -108,6 +121,8 @@ export class BridgeIPC {
   }
 
   public async close(): Promise<void> {
+    this.cleanupExitListener();
+
     this.gateway.setToolCallHandler(null);
     this.gateway.cancelPendingCalls("Pi MCP bridge closed before the tool result was returned.");
 
@@ -121,10 +136,18 @@ export class BridgeIPC {
     if (broker?.listening) await closeServer(broker);
 
     if (this.socketPath) {
-      await fs.unlink(this.socketPath).catch((error) => {
+      const socketPath = this.socketPath;
+      this.socketPath = null;
+      await fs.unlink(socketPath).catch((error) => {
         if (!isNodeError(error, "ENOENT")) throw error;
       });
-      this.socketPath = null;
+    }
+  }
+
+  private cleanupExitListener(): void {
+    if (this.exitListener) {
+      process.removeListener("exit", this.exitListener);
+      this.exitListener = null;
     }
   }
 
@@ -227,6 +250,42 @@ export class BridgeIPC {
 }
 
 export { BridgeIPC as AgyMcpServer };
+
+export async function cleanOrphanSockets(runtimeDir: string): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(runtimeDir);
+  } catch {
+    return;
+  }
+
+  const socketPattern = /^(\d+)-[0-9a-f]+\.sock$/i;
+
+  for (const entry of entries) {
+    const match = socketPattern.exec(entry);
+    if (!match) continue;
+
+    const pid = Number.parseInt(match[1]!, 10);
+    if (isPidAlive(pid)) continue;
+
+    await fs.unlink(path.join(runtimeDir, entry)).catch((error) => {
+      if (!isNodeError(error, "ENOENT")) {
+        debugLog("mcp", `Failed to remove orphan socket ${entry}:`, error);
+      }
+    });
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  if (pid <= 0 || !Number.isInteger(pid)) return false;
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return isNodeError(error, "EPERM");
+  }
+}
 
 
 function isRecord(value: unknown): value is Record<string, unknown> {

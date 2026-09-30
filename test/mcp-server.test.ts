@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 import { Type } from "typebox";
 import { fileURLToPath } from "node:url";
-import { AgyMcpServer } from "../src/bridge-ipc.ts";
+import { AgyMcpServer, cleanOrphanSockets } from "../src/bridge-ipc.ts";
 import { connectBridge, parseBridgeUri } from "../mcp/socket.js";
 
 describe("AgyMcpServer", () => {
@@ -113,6 +116,102 @@ describe("AgyMcpServer", () => {
         /already has an active MCP client/
       );
       first.close();
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("cleans orphaned sockets and preserves active or non-socket files", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pab-orphan-test-"));
+    const deadChild = spawn(process.execPath, ["-e", "process.exit(0)"]);
+    await new Promise((resolve) => deadChild.on("exit", resolve));
+    const deadPid = deadChild.pid!;
+
+    const cases = [
+      { name: `${deadPid}-abcdef123456.sock`, shouldExist: false },
+      { name: `${process.pid}-abcdef123456.sock`, shouldExist: true },
+      { name: "not-a-socket.txt", shouldExist: true },
+      { name: "invalid-name.sock", shouldExist: true },
+    ];
+
+    try {
+      for (const { name } of cases) {
+        await fs.writeFile(path.join(tempDir, name), "");
+      }
+
+      await cleanOrphanSockets(tempDir);
+
+      for (const { name, shouldExist } of cases) {
+        const exists = await fs.access(path.join(tempDir, name)).then(() => true, () => false);
+        assert.equal(exists, shouldExist, `File ${name} existence should be ${shouldExist}`);
+      }
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("handles missing directory in cleanOrphanSockets gracefully", async () => {
+    const nonExistentDir = path.join(os.tmpdir(), `pab-non-existent-${Date.now()}`);
+    await assert.doesNotReject(() => cleanOrphanSockets(nonExistentDir));
+  });
+
+  it("registers exit hook on start and unregisters on close", async (t) => {
+    const bridge = new AgyMcpServer([]);
+
+    try {
+      try {
+        await bridge.start();
+      } catch (error) {
+        if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") {
+          t.skip("Unix domain sockets are unavailable in this sandbox");
+          return;
+        }
+        throw error;
+      }
+
+      const exitListenersBefore = process.listeners("exit");
+      assert.ok(exitListenersBefore.length > 0);
+
+      const endpoint = parseBridgeUri(bridge.bridgeUri).endpoint;
+      const existsBefore = await fs.access(endpoint).then(() => true, () => false);
+      assert.equal(existsBefore, true);
+
+      await bridge.close();
+
+      const exitListenersAfter = process.listeners("exit");
+      assert.equal(exitListenersAfter.length, exitListenersBefore.length - 1);
+
+      const existsAfter = await fs.access(endpoint).then(() => true, () => false);
+      assert.equal(existsAfter, false);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("unlinks socket file synchronously when exit listener is executed", async (t) => {
+    const bridge = new AgyMcpServer([]);
+
+    try {
+      try {
+        await bridge.start();
+      } catch (error) {
+        if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") {
+          t.skip("Unix domain sockets are unavailable in this sandbox");
+          return;
+        }
+        throw error;
+      }
+
+      const endpoint = parseBridgeUri(bridge.bridgeUri).endpoint;
+      const existsBefore = await fs.access(endpoint).then(() => true, () => false);
+      assert.equal(existsBefore, true);
+
+      const listeners = process.listeners("exit");
+      const lastListener = listeners[listeners.length - 1] as () => void;
+      lastListener();
+
+      const existsAfter = await fs.access(endpoint).then(() => true, () => false);
+      assert.equal(existsAfter, false);
     } finally {
       await bridge.close();
     }
