@@ -16,6 +16,7 @@
     "pi-agy-bridge-mcp": "./mcp/index.js"
   },
   "files": [
+    "index.ts",
     "src",
     "mcp",
     "plugin",
@@ -24,7 +25,7 @@
   ],
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./index.ts"
     ]
   },
   "scripts": {
