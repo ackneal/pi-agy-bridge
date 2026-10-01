@@ -54,59 +54,25 @@ export function parseModelsOutput(output: string): ProviderModelConfig[] {
   const cleaned = output.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
   const rawLines = cleaned.split(/[\r\n]+/);
   const rows: { id: string; name: string }[] = [];
+  const seenIds = new Set<string>();
   const models: ProviderModelConfig[] = [];
   const modelsById = new Map<string, ProviderModelConfig>();
 
-  for (let rawLine of rawLines) {
-    rawLine = rawLine.trim();
-    if (!rawLine) continue;
+  for (const rawLine of rawLines) {
+    const match = rawLine.trim().match(/^([a-zA-Z0-9][-a-zA-Z0-9_.:/]*)(?: {2,}|\t+)\s*(\S.*)$/);
+    if (!match) continue;
 
-    const lastFetch = rawLine.lastIndexOf("Fetching available models...");
-    if (lastFetch !== -1) {
-      rawLine = rawLine.slice(lastFetch + "Fetching available models...".length).trim();
-    }
-    rawLine = rawLine.replace(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏\s]+/g, "").trim();
-    if (!rawLine || /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/.test(rawLine) || rawLine.includes("Fetching available models")) {
-      continue;
-    }
-
-    if (rawLine.startsWith("|") && rawLine.endsWith("|")) {
-      rawLine = rawLine.slice(1, -1).trim();
-    }
-
-    if (/^[-\s|:=+]+$/.test(rawLine)) {
-      continue;
-    }
-
-    let parts: string[];
-    if (rawLine.includes("|")) {
-      parts = rawLine.split("|").map((p) => p.trim()).filter(Boolean);
-    } else {
-      parts = rawLine.split(/\s{2,}|\t+/).map((p) => p.trim()).filter(Boolean);
-      if (parts.length === 1) {
-        const spaceIdx = rawLine.indexOf(" ");
-        if (spaceIdx !== -1) {
-          parts = [rawLine.slice(0, spaceIdx).trim(), rawLine.slice(spaceIdx + 1).trim()];
-        }
-      }
-    }
-
-    if (parts.length === 0) continue;
-
-    const id = parts[0];
-    if (!id) continue;
+    const id = match[1]!;
+    const name = match[2]!;
     const lowerId = id.toLowerCase();
 
     if (["slug", "model", "model id", "id", "name", "models", "description"].includes(lowerId)) {
       continue;
     }
 
-    if (!/^[a-zA-Z0-9][-a-zA-Z0-9_.:/]*$/.test(id)) {
-      continue;
-    }
-
-    if (rows.some((row) => row.id === id)) continue;
-    rows.push({ id, name: parts[1] ?? id });
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+    rows.push({ id, name });
   }
 
   for (const { id, name } of rows) {
@@ -154,7 +120,8 @@ export async function discoverAgyModels(
   try {
     const { stdout, stderr } = await execFileAsync(resolvedPath, ["models"], {
       encoding: "utf-8",
-      timeout: 10000,
+      timeout: 30000,
+      killSignal: "SIGKILL",
       signal,
     });
     output = (stdout || stderr || "").trim();

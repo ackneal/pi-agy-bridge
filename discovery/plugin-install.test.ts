@@ -86,11 +86,26 @@ test("missing AGY plugin invokes the CLI and copies every static asset byte-for-
   });
 });
 
+test("failed CLI installation preserves stderr and does not copy assets", async () => {
+  await withTemporaryHome(async (home) => {
+    const { executable } = await writeFakeAgy(home);
+    await fs.writeFile(executable, "#!/bin/sh\ncat >/dev/null\nprintf 'installation denied' >&2\nexit 7\n");
+    const target = path.join(home, ".gemini", "config", "plugins", "pi-agy-bridge");
+
+    await assert.rejects(
+      ensureAgyPluginInstalled(executable, DEFAULT_AGY_PLUGIN_DIR),
+      /agy plugin install failed:.*installation denied/s
+    );
+    await assert.rejects(fs.access(target), { code: "ENOENT" });
+  });
+});
+
 test("same-version ensures are a true no-op and never rewrite the static tree", async () => {
   await withTemporaryHome(async (home) => {
     const { executable, calls } = await writeFakeAgy(home);
     const target = path.join(home, ".gemini", "config", "plugins", "pi-agy-bridge");
     await ensureAgyPluginInstalled(executable, DEFAULT_AGY_PLUGIN_DIR);
+    await fs.writeFile(path.join(target, "mcp_config.json"), "custom config");
     const beforeFiles = await readTree(target);
     const beforeMetadata = await readFileMetadata(target);
 

@@ -1,11 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "../runtime/version.ts";
+
+const execFileAsync = promisify(execFile);
 
 export const DEFAULT_AGY_PLUGIN_DIR = fileURLToPath(new URL("../plugin", import.meta.url));
 
@@ -44,16 +47,7 @@ export async function ensureAgyPluginInstalled(
 
   const targetDir = path.join(os.homedir(), ".gemini", "config", "plugins", sourceManifest.name);
   const installedManifest = await readPluginManifest(path.join(targetDir, "plugin.json"));
-  const expectedConfigStr = JSON.stringify(generateMcpConfig(), null, 2);
-
-  let currentConfigStr: string | null = null;
-  try {
-    currentConfigStr = await fs.readFile(path.join(targetDir, "mcp_config.json"), "utf-8");
-  } catch {
-    // not found or unreadable
-  }
-
-  if (installedManifest?.version === sourceManifest.version && currentConfigStr === expectedConfigStr) {
+  if (installedManifest?.version === sourceManifest.version) {
     return;
   }
 
@@ -71,19 +65,19 @@ export async function ensureAgyPluginInstalled(
 }
 
 async function installWithAgy(executable: string, sourceDir: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(executable, ["plugin", "install", sourceDir], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+  try {
+    const installation = execFileAsync(executable, ["plugin", "install", sourceDir], {
+      encoding: "utf-8",
+      timeout: 30000,
+      killSignal: "SIGKILL",
     });
-    let stderr = "";
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new Error(`agy plugin install failed (code ${code}, signal ${signal}): ${stderr.trim()}`));
+    installation.child.stdin?.end();
+    await installation;
+  } catch (error) {
+    throw new Error(`agy plugin install failed: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error,
     });
-  });
+  }
 }
 
 async function synchronizePlugin(sourceDir: string, targetDir: string): Promise<void> {
