@@ -152,6 +152,92 @@ export function expandHome(filepath: string): string {
   return filepath;
 }
 
+async function prepareRuntime(
+  modelId: string,
+  context: Context,
+  tools: readonly Tool[],
+  options: SimpleStreamOptions | undefined,
+  config: AgyBridgeConfig | undefined,
+  bridge: AgyBridge,
+  liveSession: LiveSession
+): Promise<{ proc: AgyRuntime; mcpServer: BridgeIPC; reconstructContext: boolean }> {
+  const { baseModel, effort } = resolveModelAndEffort(modelId, options);
+  const agentName = config?.agentName ?? "pi-bridge";
+  const toolSyncValues = tools.map((tool) => JSON.stringify({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  }));
+  const syncKey = calculateSyncKey(context.systemPrompt ?? "", toolSyncValues, baseModel, effort ?? "", agentName);
+  const turnIndex = context.messages.filter((message) => message.role === "assistant").length;
+  const latestAssistant = [...context.messages].reverse().find((message) => message.role === "assistant");
+  const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
+  const rawPluginDir = config?.pluginDir ?? config?.agentDir;
+  const pluginDir = rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR;
+  const runtimeRef = await bridge.runtimeSessionStore.get(liveSession.piSessionId);
+  const decision = bridge.runtimeSessionSync.decide(liveSession, {
+    syncKey,
+    turnIndex,
+    ...(expectedConversationId ? { conversationId: expectedConversationId } : {}),
+    canonicalHistory: context.messages,
+    ...(runtimeRef ? { runtimeRef } : {}),
+  });
+
+  debugLog("register", "AGY runtime decision", {
+    action: decision.action,
+    turnIndex,
+    sessionTurnIndex: liveSession.turnIndex,
+    processRunning: liveSession.activeProcess?.isRunning ?? false,
+    sessionConversationId: liveSession.conversationId,
+    expectedConversationId,
+    hasActiveProcess: liveSession.activeProcess !== null,
+  });
+
+  if (decision.action === "continue" && liveSession.activeProcess) {
+    debugLog("register", `Reusing existing agy process for turn ${turnIndex}`);
+    if (!liveSession.activeMcpServer) {
+      throw new Error("Agy process or Pi MCP bridge was not initialized");
+    }
+    return { proc: liveSession.activeProcess, mcpServer: liveSession.activeMcpServer, reconstructContext: false };
+  }
+
+  debugLog("register", `Starting fresh agy process (turn ${turnIndex}, canReuse: ${decision.action === "continue"})`);
+  await liveSession.dispose();
+  await validateAgyVersion(config?.agyPath, config?.minVersion);
+
+  const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
+  let proc: AgyRuntime | null = null;
+  try {
+    await mcpServer.start();
+    await bridge.ensureAgyPluginInstalled(pluginDir);
+    proc = new AgyRuntime({
+      agyPath: config?.agyPath,
+      agentName,
+      model: baseModel,
+      conversationId: decision.action === "resume" ? decision.conversationId : undefined,
+      effort,
+      environment: mcpServer.processEnvironment,
+    });
+    const initEvent = await proc.start();
+    debugLog("register", "AGY init conversation id:", initEvent.conversation_id);
+    await mcpServer.waitForConnection();
+    liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id);
+    liveSession.turnIndex = turnIndex;
+    return { proc, mcpServer, reconstructContext: decision.action === "rebuild" };
+  } catch (error) {
+    // Ownership transfers to liveSession only after startup succeeds.
+    await mcpServer.close().catch((cleanupError) => {
+      debugLog("session", "Error closing unowned MCP bridge:", cleanupError);
+    });
+    if (proc) {
+      await proc.abort().catch((cleanupError) => {
+        debugLog("session", "Error aborting unowned AGY process:", cleanupError);
+      });
+    }
+    throw error;
+  }
+}
+
 export function streamAgyProvider(
   model: Model<any>,
   context: Context,
@@ -164,11 +250,6 @@ export function streamAgyProvider(
   debugLog("mcp", "Pi provider context keys:", Object.keys(context));
   debugLog("mcp", "Pi provider context tools:", contextTools.map((tool) => tool.name));
   debugLog("mcp", "Pi bridge tools:", tools.map((tool) => tool.name));
-  const toolSyncValues = tools.map((tool) => JSON.stringify({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-  }));
   const bridgeToolNameSet = new Set(tools.map((tool) => tool.name));
   const adapter = new PiEventAdapter({
     model: model.id,
@@ -192,12 +273,11 @@ export function streamAgyProvider(
     return stream;
   }
 
-  const liveSession = bridge.liveSessions.getOrCreate(piSessionId!);
+  const liveSession = bridge.liveSessions.getOrCreate(piSessionId);
 
   (async () => {
     let unsubscribe: (() => void) | null = null;
     let turnCounted = false;
-    let proc: AgyRuntime | null = null;
     let mcpServer: BridgeIPC | null = null;
 
     const cleanup = () => {
@@ -233,74 +313,9 @@ export function streamAgyProvider(
     };
 
     try {
-      const { baseModel, effort } = resolveModelAndEffort(model.id, options);
-      const agentName = config?.agentName ?? "pi-bridge";
-      const systemPrompt = context.systemPrompt ?? "";
-      const syncKey = calculateSyncKey(systemPrompt, toolSyncValues, baseModel, effort ?? "", agentName);
-      const turnIndex = context.messages.filter((message) => message.role === "assistant").length;
-      const latestAssistant = [...context.messages].reverse().find((message) => message.role === "assistant");
-      const expectedConversationId = latestAssistant?.role === "assistant"
-        ? latestAssistant.responseId
-        : undefined;
-      const rawPluginDir = config?.pluginDir ?? config?.agentDir;
-      const pluginDir = rawPluginDir
-        ? path.resolve(expandHome(rawPluginDir))
-        : DEFAULT_AGY_PLUGIN_DIR;
-      const runtimeRef = await bridge.runtimeSessionStore.get(liveSession.piSessionId);
-      const decision = bridge.runtimeSessionSync.decide(liveSession, {
-        syncKey,
-        turnIndex,
-        ...(expectedConversationId ? { conversationId: expectedConversationId } : {}),
-        canonicalHistory: context.messages,
-        ...(runtimeRef ? { runtimeRef } : {}),
-      });
-      const canReuse = decision.action === "continue";
-      const canResume = decision.action === "resume";
-
-      debugLog("register", "AGY runtime decision", {
-        action: decision.action,
-        turnIndex,
-        sessionTurnIndex: liveSession.turnIndex,
-        processRunning: liveSession.activeProcess?.isRunning ?? false,
-        sessionConversationId: liveSession.conversationId,
-        expectedConversationId,
-        hasActiveProcess: liveSession.activeProcess !== null,
-      });
-
-      if (canReuse && liveSession.activeProcess) {
-        debugLog("register", `Reusing existing agy process for turn ${turnIndex}`);
-        proc = liveSession.activeProcess;
-        mcpServer = liveSession.activeMcpServer;
-      } else {
-        debugLog("register", `Starting fresh agy process (turn ${turnIndex}, canReuse: ${canReuse})`);
-        await liveSession.dispose();
-
-        await validateAgyVersion(config?.agyPath, config?.minVersion);
-
-        mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
-        await mcpServer.start();
-
-        await bridge.ensureAgyPluginInstalled(pluginDir);
-
-        proc = new AgyRuntime({
-          agyPath: config?.agyPath,
-          agentName,
-          model: baseModel,
-          conversationId: decision.action === "resume" ? decision.conversationId : undefined,
-          effort,
-          environment: mcpServer.processEnvironment,
-        });
-
-        const initEvent = await proc.start();
-        debugLog("register", "AGY init conversation id:", initEvent.conversation_id);
-        await mcpServer.waitForConnection();
-        liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id);
-        liveSession.turnIndex = turnIndex;
-      }
-
-      if (!proc || !mcpServer) {
-        throw new Error("Agy process or Pi MCP bridge was not initialized");
-      }
+      const runtime = await prepareRuntime(model.id, context, tools, options, config, bridge, liveSession);
+      const proc = runtime.proc;
+      mcpServer = runtime.mcpServer;
 
       unsubscribe = proc.onEvent((event) => {
         adapter.handleEvent(event);
@@ -334,7 +349,7 @@ export function streamAgyProvider(
         throw new Error("Agy is waiting for Pi tool results, but no matching result was returned");
       }
 
-      let prompt = formatContextPrompt(context, canReuse || canResume);
+      let prompt = formatContextPrompt(context, !runtime.reconstructContext);
       if (options?.onPayload) {
         try {
           const payload = { prompt };
@@ -353,17 +368,6 @@ export function streamAgyProvider(
       const errorMsg = err instanceof Error ? err.message : String(err);
       debugLog("register", "Turn execution failed:", errorMsg);
       adapter.handleTermination("error", errorMsg);
-      // Until setSession succeeds, these resources are not owned by liveSession.
-      if (mcpServer && mcpServer !== liveSession.activeMcpServer) {
-        await mcpServer.close().catch((error) => {
-          debugLog("session", "Error closing unowned MCP bridge:", error);
-        });
-      }
-      if (proc && proc !== liveSession.activeProcess) {
-        await proc.abort().catch((error) => {
-          debugLog("session", "Error aborting unowned AGY process:", error);
-        });
-      }
       await liveSession.dispose();
     }
   })();
