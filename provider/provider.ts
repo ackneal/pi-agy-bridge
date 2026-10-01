@@ -291,17 +291,11 @@ export function streamAgyProvider(
           environment: mcpServer.processEnvironment,
         });
 
-        try {
-          const initEvent = await proc.start();
-          debugLog("register", "AGY init conversation id:", initEvent.conversation_id);
-          await mcpServer.waitForConnection();
-          liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id);
-          liveSession.turnIndex = turnIndex;
-
-        } catch (error) {
-          await mcpServer.close();
-          throw error;
-        }
+        const initEvent = await proc.start();
+        debugLog("register", "AGY init conversation id:", initEvent.conversation_id);
+        await mcpServer.waitForConnection();
+        liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id);
+        liveSession.turnIndex = turnIndex;
       }
 
       if (!proc || !mcpServer) {
@@ -359,6 +353,17 @@ export function streamAgyProvider(
       const errorMsg = err instanceof Error ? err.message : String(err);
       debugLog("register", "Turn execution failed:", errorMsg);
       adapter.handleTermination("error", errorMsg);
+      // Until setSession succeeds, these resources are not owned by liveSession.
+      if (mcpServer && mcpServer !== liveSession.activeMcpServer) {
+        await mcpServer.close().catch((error) => {
+          debugLog("session", "Error closing unowned MCP bridge:", error);
+        });
+      }
+      if (proc && proc !== liveSession.activeProcess) {
+        await proc.abort().catch((error) => {
+          debugLog("session", "Error aborting unowned AGY process:", error);
+        });
+      }
       await liveSession.dispose();
     }
   })();
