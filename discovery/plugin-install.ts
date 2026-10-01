@@ -99,7 +99,7 @@ async function synchronizePlugin(sourceDir: string, targetDir: string): Promise<
   }
 }
 
-async function readPluginManifest(filePath: string): Promise<{ name: string; version: string } | undefined> {
+export async function readPluginManifest(filePath: string): Promise<{ name: string; version: string } | undefined> {
   try {
     const value: unknown = JSON.parse(await fs.readFile(filePath, "utf-8"));
     if (!isRecord(value) || typeof value.name !== "string" || typeof value.version !== "string") {
