@@ -88,6 +88,17 @@ setupAgyProvider(pi, {
 });
 ```
 
+### Health Check
+
+Run `/agy-bridge:doctor` to check the AGY executable and version, installed
+plugin version, model cache, and MCP entrypoint. The report is in English and
+does not install or update plugins or run model discovery. Missing or outdated
+plugins are handled automatically on the next AGY runtime start.
+
+Recent plugin installation/update and model discovery errors are shown for the
+current Pi process only; restarting Pi clears these records. Authentication,
+model execution, and Unix socket creation are not tested.
+
 ### Debugging
 
 Enable verbose diagnostic logs across all bridge components:
