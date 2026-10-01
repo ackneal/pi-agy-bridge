@@ -48,6 +48,7 @@ for (const { stage, aborts } of cases) {
     const pi = {
       on: () => {},
       registerProvider: () => {},
+      registerCommand: () => {},
       getActiveTools: () => [],
       getAllTools: () => [],
     } as unknown as ExtensionAPI;

@@ -21,7 +21,7 @@ for (const decision of cases) {
   test(`streamAgyProvider completes a ${decision.action} turn`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-turn-"));
     const pi = {
-      on: () => {}, registerProvider: () => {},
+      on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const agyPath = path.join(directory, "agy");
@@ -138,7 +138,7 @@ for (const scenario of ["pending tool results", "abort"] as const) {
   test(`streamAgyProvider continue handles ${scenario}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-continue-"));
     const pi = {
-      on: () => {}, registerProvider: () => {},
+      on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const config = { agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };

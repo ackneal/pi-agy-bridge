@@ -24,6 +24,7 @@ import { validateAgyVersion } from "../runtime/version.ts";
 import { cacheAgyModels, discoverAgyModels, loadCachedAgyModels } from "../discovery/models.ts";
 import { debugLog } from "../shared/debug.ts";
 import type { AgyBridgeConfig } from "../shared/types.ts";
+import { collectDoctorReport, type DoctorFailure } from "./doctor.ts";
 
 export function formatMessageText(message: Message): string {
   if (typeof message.content === "string") return message.content;
@@ -378,6 +379,8 @@ export function streamAgyProvider(
 export class AgyBridge {
   private readonly pi: ExtensionAPI;
   private readonly config: AgyBridgeConfig | undefined;
+  private pluginError: DoctorFailure | undefined;
+  private discoveryError: DoctorFailure | undefined;
   public readonly liveSessions = new LiveSessionRegistry();
   public readonly runtimeSessionSync = new RuntimeSessionSync();
   public readonly piContextAdapter = new PiContextAdapter();
@@ -389,7 +392,16 @@ export class AgyBridge {
   }
 
   public async ensureAgyPluginInstalled(pluginDir: string): Promise<void> {
-    await ensureAgyPluginInstalled(this.config?.agyPath, pluginDir);
+    try {
+      await ensureAgyPluginInstalled(this.config?.agyPath, pluginDir);
+      this.pluginError = undefined;
+    } catch (error) {
+      this.pluginError = {
+        time: new Date().toISOString(),
+        message: error instanceof Error ? error.message : String(error),
+      };
+      throw error;
+    }
   }
 
   public getRegisteredTools(): Tool[] {
@@ -401,6 +413,26 @@ export class AgyBridge {
   }
 
   public start(): void {
+    this.pi.registerCommand("agy-bridge:doctor", {
+      description: "Check AGY CLI, plugin installation, models, and MCP",
+      handler: async () => {
+        const rawPluginDir = this.config?.pluginDir ?? this.config?.agentDir;
+        const report = await collectDoctorReport({
+          agyPath: this.config?.agyPath,
+          minVersion: this.config?.minVersion,
+          pluginDir: rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR,
+          models: this.config?.models,
+          pluginError: this.pluginError,
+          discoveryError: this.discoveryError,
+        });
+        this.pi.sendMessage({
+          customType: "pi-agy-bridge:doctor",
+          content: report,
+          display: true,
+        }, { triggerTurn: false });
+      },
+    });
+
     this.pi.on("session_start", (_event, ctx) => {
       this.piContextAdapter.bind(ctx.sessionManager);
     });
@@ -415,10 +447,15 @@ export class AgyBridge {
       if (!refreshPromise) {
         refreshPromise = discoverAgyModels(this.config?.agyPath, signal)
           .then(async (discovered) => {
+            this.discoveryError = undefined;
             models.splice(0, models.length, ...discovered);
             await cacheAgyModels(discovered);
           })
           .catch((error) => {
+            this.discoveryError = {
+              time: new Date().toISOString(),
+              message: error instanceof Error ? error.message : String(error),
+            };
             debugLog("models", "Model refresh failed; retaining cached models:", error);
           })
           .finally(() => {
