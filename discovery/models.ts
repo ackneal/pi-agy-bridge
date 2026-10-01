@@ -32,7 +32,23 @@ export function loadCachedAgyModels(): ProviderModelConfig[] {
       .filter((model): model is ProviderModelConfig =>
         typeof model?.id === "string" && typeof model?.name === "string"
       )
-      .map((model) => ({ ...model, contextWindow: contextWindowFor(model.id) }));
+      .map((model) => {
+        const legacyThinking = model.id === "claude-opus-4-6" &&
+          (model.thinkingLevelMap as Record<string, unknown> | undefined)?.thinking === "thinking";
+        const id = legacyThinking ? `${model.id}-thinking` : model.id;
+        const name = legacyThinking && !/\(Thinking\)\s*$/i.test(model.name)
+          ? `${model.name} (Thinking)` : model.name;
+
+        return {
+          ...model,
+          id,
+          name,
+          thinkingLevelMap: legacyThinking
+            ? { ...UNSUPPORTED_THINKING_LEVELS }
+            : { ...UNSUPPORTED_THINKING_LEVELS, ...model.thinkingLevelMap },
+          contextWindow: contextWindowFor(id),
+        };
+      });
   } catch {
     return [];
   }
@@ -42,6 +58,16 @@ export async function cacheAgyModels(models: ProviderModelConfig[]): Promise<voi
   await mkdir(path.dirname(MODEL_CACHE_PATH), { recursive: true });
   await writeFile(MODEL_CACHE_PATH, JSON.stringify(models), "utf-8");
 }
+
+const UNSUPPORTED_THINKING_LEVELS = {
+  off: null,
+  minimal: null,
+  low: null,
+  medium: null,
+  high: null,
+  xhigh: null,
+  max: null,
+};
 
 const ZERO_COST = {
   input: 0,
@@ -79,7 +105,8 @@ export function parseModelsOutput(output: string): ProviderModelConfig[] {
     const nameLevel = name.match(/\(([^()]+)\)\s*$/)?.[1]?.trim();
     const idParts = id.split("-");
     const idLevel = idParts.at(-1);
-    const hasLevelSuffix = nameLevel && idLevel?.toLowerCase() === nameLevel.toLowerCase();
+    const hasLevelSuffix = nameLevel && Object.hasOwn(UNSUPPORTED_THINKING_LEVELS, nameLevel.toLowerCase()) &&
+      idLevel?.toLowerCase() === nameLevel.toLowerCase();
     const modelId = hasLevelSuffix ? idParts.slice(0, -1).join("-") : id;
     let model = modelsById.get(modelId);
 
@@ -89,6 +116,7 @@ export function parseModelsOutput(output: string): ProviderModelConfig[] {
         id: modelId,
         name: displayName,
         reasoning: /thinking|reasoning/i.test(`${id} ${name}`),
+        thinkingLevelMap: { ...UNSUPPORTED_THINKING_LEVELS },
         input: ["text", "image"],
         cost: ZERO_COST,
         contextWindow: contextWindowFor(modelId),
@@ -101,7 +129,8 @@ export function parseModelsOutput(output: string): ProviderModelConfig[] {
     if (hasLevelSuffix && nameLevel) {
       model.reasoning = true;
       model.thinkingLevelMap = {
-        ...(model.thinkingLevelMap ?? {}),
+        ...UNSUPPORTED_THINKING_LEVELS,
+        ...model.thinkingLevelMap,
         [nameLevel.toLowerCase()]: nameLevel.toLowerCase(),
       };
     }

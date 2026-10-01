@@ -122,7 +122,8 @@ function escapeXml(value: string): string {
 
 export function resolveModelAndEffort(
   modelId: string,
-  options?: SimpleStreamOptions
+  options?: SimpleStreamOptions,
+  thinkingLevelMap?: Model<any>["thinkingLevelMap"],
 ): { baseModel: string; effort?: "low" | "medium" | "high" | undefined } {
   const requested =
     (options as any)?.reasoningEffort ??
@@ -132,6 +133,8 @@ export function resolveModelAndEffort(
   let effort: "low" | "medium" | "high" | undefined;
   if (requested === "low" || requested === "medium" || requested === "high") {
     effort = requested;
+  } else if (requested !== undefined) {
+    throw new Error(`Unsupported AGY reasoning effort: ${String(requested)}. Supported values: low, medium, high.`);
   }
 
   let baseModel = modelId;
@@ -141,6 +144,10 @@ export function resolveModelAndEffort(
     if (!effort) {
       effort = match[2]?.toLowerCase() as "low" | "medium" | "high" | undefined;
     }
+  }
+
+  if (effort && thinkingLevelMap?.[effort] === null) {
+    throw new Error(`Unsupported AGY reasoning effort for ${modelId}: ${effort}.`);
   }
 
   return { baseModel, effort };
@@ -154,7 +161,7 @@ export function expandHome(filepath: string): string {
 }
 
 async function prepareRuntime(
-  modelId: string,
+  model: Model<any>,
   context: Context,
   tools: readonly Tool[],
   options: SimpleStreamOptions | undefined,
@@ -162,7 +169,7 @@ async function prepareRuntime(
   bridge: AgyBridge,
   liveSession: LiveSession
 ): Promise<{ proc: AgyRuntime; mcpServer: BridgeIPC; reconstructContext: boolean }> {
-  const { baseModel, effort } = resolveModelAndEffort(modelId, options);
+  const { baseModel, effort } = resolveModelAndEffort(model.id, options, model.thinkingLevelMap);
   const agentName = config?.agentName ?? "pi-bridge";
   const toolSyncValues = tools.map((tool) => JSON.stringify({
     name: tool.name,
@@ -314,7 +321,7 @@ export function streamAgyProvider(
     };
 
     try {
-      const runtime = await prepareRuntime(model.id, context, tools, options, config, bridge, liveSession);
+      const runtime = await prepareRuntime(model, context, tools, options, config, bridge, liveSession);
       const proc = runtime.proc;
       mcpServer = runtime.mcpServer;
 

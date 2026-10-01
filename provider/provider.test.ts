@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AgyBridge, registerAgyProvider, resolveModelAndEffort } from "./provider.ts";
+import type { Model } from "@earendil-works/pi-ai";
+import { AgyBridge, registerAgyProvider, resolveModelAndEffort, streamAgyProvider } from "./provider.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,85 @@ test("resolves explicit model suffix levels without defaulting Gemini effort", (
     effort: "high",
   });
 });
+
+for (const option of ["reasoningEffort", "reasoning", "thinkingLevel"] as const) {
+  for (const effort of ["off", "minimal", "xhigh", "max", "unknown", ""] as const) {
+    for (const modelId of ["other-model", "other-model-high"]) {
+      test(`rejects ${option}=${JSON.stringify(effort)} for ${modelId}`, () => {
+        assert.throws(
+          () => resolveModelAndEffort(modelId, { [option]: effort } as any),
+          { message: `Unsupported AGY reasoning effort: ${effort}. Supported values: low, medium, high.` },
+        );
+      });
+    }
+  }
+
+  for (const effort of ["low", "medium", "high"] as const) {
+    for (const modelId of ["other-model", "other-model-low"]) {
+      test(`accepts ${option}=${effort} for ${modelId}`, () => {
+        assert.deepEqual(resolveModelAndEffort(modelId, { [option]: effort } as any), {
+          baseModel: "other-model",
+          effort,
+        });
+      });
+    }
+  }
+}
+
+for (const [modelId, baseModel, effort] of [
+  ["other-model", "other-model", undefined],
+  ["other-model-low", "other-model", "low"],
+  ["other-model-medium", "other-model", "medium"],
+  ["other-model-HIGH", "other-model", "high"],
+] as const) {
+  test(`preserves absent effort behavior for ${modelId}`, () => {
+    for (const options of [undefined, {}]) {
+      assert.deepEqual(resolveModelAndEffort(modelId, options), { baseModel, effort });
+    }
+  });
+}
+
+const allNullThinkingLevels = {
+  off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null,
+};
+
+for (const modelId of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) {
+  test(`preserves fixed model ${modelId} without effort`, () => {
+    for (const options of [undefined, {}]) {
+      assert.deepEqual(resolveModelAndEffort(modelId, options, allNullThinkingLevels), {
+        baseModel: modelId, effort: undefined,
+      });
+    }
+  });
+
+  for (const option of ["reasoningEffort", "reasoning", "thinkingLevel"]) {
+    for (const effort of ["low", "medium", "high"]) {
+      test(`rejects fixed ${modelId} ${option}=${effort} before runtime preparation`, async (t) => {
+        const bridge = new AgyBridge({} as ExtensionAPI);
+        const runtimeLookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
+          throw new Error("Runtime preparation must not begin");
+        });
+        const model = { id: modelId, provider: "agy", thinkingLevelMap: allNullThinkingLevels } as Model<any>;
+        const stream = streamAgyProvider(model, { messages: [], tools: [] }, {
+          sessionId: "validation-test", [option]: effort,
+        }, undefined, bridge);
+        const message = await stream.result();
+
+        assert.equal(message.stopReason, "error");
+        assert.equal(message.errorMessage, `Unsupported AGY reasoning effort for ${modelId}: ${effort}.`);
+        assert.equal(runtimeLookup.mock.callCount(), 0);
+      });
+    }
+  }
+}
+
+for (const effort of ["low", "medium", "high"] as const) {
+  test(`accepts supported Gemini ${effort}`, () => {
+    assert.deepEqual(resolveModelAndEffort("gemini-3.8-flash", { reasoning: effort }, {
+      ...allNullThinkingLevels, low: "low", medium: "medium", high: "high",
+    }), { baseModel: "gemini-3.8-flash", effort });
+  });
+}
 
 test("doctor reports installation errors without starting a model turn", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-doctor-command-"));

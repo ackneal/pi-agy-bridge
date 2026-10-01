@@ -44,6 +44,29 @@ process.stdin.resume();
     }
   });
 
+  for (const model of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) {
+    it(`preserves ${model} without an effort argument`, async (t) => {
+      const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-thinking-model-"));
+      t.after(() => rm(tempDir, { recursive: true, force: true }));
+      const executable = path.join(tempDir, "agy");
+      const argsFile = path.join(tempDir, "args.json");
+      await writeFile(executable, `#!${process.execPath}
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write(JSON.stringify({ event: "init" }) + "\\n");
+process.stdin.resume();
+`, { mode: 0o755 });
+      const proc = new AgyProcess({ agyPath: executable, agentName: "pi-test", model });
+      t.after(() => proc.abort());
+
+      await proc.start();
+      const args = JSON.parse(await readFile(argsFile, "utf-8")) as string[];
+
+      assert.equal(args[args.indexOf("--model") + 1], model);
+      assert.equal(args.includes("--effort"), false);
+    });
+  }
+
   it("sends multiple stream-json inputs through one process and exposes events", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-reuse-"));
     const executable = path.join(tempDir, "agy");
