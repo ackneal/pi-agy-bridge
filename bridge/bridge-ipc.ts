@@ -1,11 +1,11 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { JsonObject, Message, Tool } from "@earendil-works/pi-ai";
-import { debugLog } from "../shared/debug.ts";
+import { debugArtifact, debugLog, isDebugEnabled } from "../shared/debug.ts";
 import { CapabilityGateway, type PiToolCallBatch } from "./capabilities.ts";
 import type { SessionResources } from "../session/session.ts";
 import { formatBridgeUri } from "../mcp/socket.js";
@@ -234,9 +234,31 @@ export class BridgeIPC {
           const toolName = message.name;
           const args = (message.arguments ?? {}) as JsonObject;
           this.resultSockets.set(callId, socket);
+          debugLog("mcp", "Broker call received", { brokerId: callId, name: toolName });
           void this.gateway.call(toolName, args).then((result) => {
+            const payload = { type: "result", id: callId, result };
+            if (isDebugEnabled()) {
+              const content = JSON.stringify(result.content);
+              debugLog("mcp", "Broker result ready", {
+                brokerId: callId,
+                name: toolName,
+                contentBytes: Buffer.byteLength(content),
+                contentHash: createHash("sha256").update(content).digest("hex"),
+                socketDestroyed: socket.destroyed,
+              });
+              debugArtifact("mcp-wire-result", { sessionId: this.sessionId, name: toolName, payload });
+            }
             if (!socket.destroyed) {
-              socket.write(`${JSON.stringify({ type: "result", id: callId, result })}\n`);
+              socket.write(`${JSON.stringify(payload)}\n`, (error) => {
+                debugLog("mcp", "Broker result socket write", {
+                  brokerId: callId,
+                  name: toolName,
+                  status: error ? "error" : "written",
+                  error: error?.message,
+                });
+              });
+            } else {
+              debugLog("mcp", "Broker result not sent: socket destroyed", { brokerId: callId, name: toolName });
             }
             this.resultSockets.delete(callId);
           });

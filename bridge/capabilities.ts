@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { JsonObject, Message, Tool, ToolCall } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
 import type { SessionResources } from "../session/session.ts";
-import { debugLog } from "../shared/debug.ts";
+import { debugArtifact, debugLog, isDebugEnabled } from "../shared/debug.ts";
 
 export interface McpToolDefinition {
   name: string;
@@ -230,6 +230,7 @@ export class CapabilityGateway {
     }
 
     return new Promise((resolve) => {
+      debugLog("mcp", "Queued Pi tool call", { id: toolCall.id, name: toolCall.name });
       this.pending.set(toolCall.id, { call: toolCall, resolve });
       this.queuedCalls.push(toolCall);
       this.scheduleDispatch();
@@ -237,6 +238,14 @@ export class CapabilityGateway {
   }
 
   public resolveToolResults(messages: readonly Message[]): number {
+    if (isDebugEnabled()) {
+      debugLog("mcp", "Matching Pi tool results", {
+        pending: [...this.pending.values()].map(({ call }) => ({ id: call.id, name: call.name })),
+        results: messages.filter((message) => message.role === "toolResult")
+          .map((message) => ({ id: message.toolCallId, name: message.toolName, isError: message.isError })),
+      });
+    }
+
     let resolved = 0;
     for (const message of messages) {
       if (message.role !== "toolResult") continue;
@@ -244,16 +253,38 @@ export class CapabilityGateway {
       if (!pending) continue;
       this.pending.delete(message.toolCallId);
       try {
-        pending.resolve(this.piTools.toMcpResult(message, pending.call));
+        const result = this.piTools.toMcpResult(message, pending.call);
+        if (isDebugEnabled()) {
+          const source = JSON.stringify(message.content);
+          const converted = JSON.stringify(result.content);
+          debugLog("mcp", "Tool result conversion", {
+            id: message.toolCallId,
+            name: message.toolName,
+            sourceBytes: Buffer.byteLength(source),
+            convertedBytes: Buffer.byteLength(converted),
+            sourceHash: createHash("sha256").update(source).digest("hex"),
+            convertedHash: createHash("sha256").update(converted).digest("hex"),
+          });
+          debugArtifact("tool-result-conversion", { call: pending.call, source: message, converted: result });
+        }
+        pending.resolve(result);
       } catch (error) {
         pending.resolve(toolError(error instanceof Error ? error.message : String(error)));
       }
       resolved++;
     }
+    debugLog("mcp", "Pi tool results matched", { resolved, remaining: this.pending.size });
     return resolved;
   }
 
   public cancelPendingCalls(message: string): void {
+    if (isDebugEnabled()) {
+      debugLog("mcp", "Cancelling pending Pi tool calls", {
+        reason: message,
+        pending: [...this.pending.values()].map(({ call }) => ({ id: call.id, name: call.name })),
+      });
+    }
+
     if (this.dispatchTimer) {
       clearImmediate(this.dispatchTimer);
       this.dispatchTimer = null;

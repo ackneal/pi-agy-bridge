@@ -23,7 +23,7 @@ import { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-stat
 import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../discovery/plugin-install.ts";
 import { validateAgyVersion } from "../runtime/version.ts";
 import { cacheAgyModels, discoverAgyModels, loadCachedAgyModels } from "../discovery/models.ts";
-import { debugLog } from "../shared/debug.ts";
+import { debugArtifact, debugLog } from "../shared/debug.ts";
 import type { AgyBridgeConfig } from "../shared/types.ts";
 import { collectDoctorReport, type DoctorFailure } from "./doctor.ts";
 
@@ -211,6 +211,11 @@ async function prepareRuntime(
   }
 
   debugLog("register", `Starting fresh agy process (turn ${turnIndex}, canReuse: ${decision.action === "continue"})`);
+  debugLog("session", "Replacing AGY runtime", {
+    action: decision.action,
+    conversationId: liveSession.conversationId,
+    hasPendingCalls: liveSession.activeMcpServer?.hasPendingCalls ?? false,
+  });
   await liveSession.dispose();
   await validateAgyVersion(config?.agyPath, config?.minVersion);
 
@@ -254,6 +259,7 @@ export function streamAgyProvider(
   config: AgyBridgeConfig | undefined,
   bridge: AgyBridge
 ): AssistantMessageEventStream {
+  debugArtifact("provider-context", { model: model.id, sessionId: options?.sessionId, context });
   const contextTools = context.tools ?? [];
   const tools = bridge.getTools(context);
   debugLog("mcp", "Pi provider context keys:", Object.keys(context));
@@ -300,6 +306,7 @@ export function streamAgyProvider(
       if (!adapter.isCompleted() || turnCounted) return;
 
       turnCounted = true;
+      debugArtifact("assistant-message", { sessionId: liveSession.piSessionId, message: adapter.message });
       const responseId = adapter.message.responseId;
       if (!liveSession.conversationId && typeof responseId === "string" && responseId.length > 0) {
         liveSession.conversationId = responseId;
@@ -371,6 +378,12 @@ export function streamAgyProvider(
         }
       }
 
+      debugArtifact("agy-payload", {
+        sessionId: piSessionId,
+        conversationId: liveSession.conversationId,
+        reconstructContext: runtime.reconstructContext,
+        prompt,
+      });
       await proc.send({ event: "user", message: { content: prompt } });
     } catch (err) {
       cleanup();
