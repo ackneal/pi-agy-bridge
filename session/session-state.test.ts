@@ -5,7 +5,8 @@ import path from "node:path";
 import test, { describe, it } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { LiveSession, PiContextAdapter } from "./session.ts";
-import { RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
+import { historyMatches, RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
+import { CapabilityGateway } from "../bridge/capabilities.ts";
 import type { AgyProcess } from "../runtime/process.ts";
 
 describe("RuntimeSessionStore", () => {
@@ -67,6 +68,36 @@ describe("RuntimeSessionStore", () => {
     await assert.rejects(store.set("missing-session", { conversationId: "agy-conversation" }, []), /not attached to the bridge/);
     await assert.rejects(store.delete("missing-session"), /not attached to the bridge/);
   });
+});
+
+test("metadata changes preserve live pending tool results and versioned persisted history", async () => {
+  const gateway = new CapabilityGateway([{ name: "read", description: "Read", parameters: { type: "object" } }]);
+  let dispatch: ((call: unknown) => void) | undefined;
+  const dispatched = new Promise<unknown>((resolve) => { dispatch = resolve; });
+  gateway.setToolCallHandler((batch) => { dispatch!(batch.calls[0]); batch.complete(); });
+  const result = gateway.call("read", { path: "package.json" });
+  const call = await dispatched as { id: string };
+  const user = { role: "user", content: "read package.json" };
+  const assistant = { role: "assistant", content: [call], stopReason: "toolUse" };
+  const replay = { ...assistant, thinkingLevel: "medium", timestamp: 123, usage: { input: 10 } };
+  const toolResult = { role: "toolResult" as const, toolCallId: call.id, toolName: "read", content: [{ type: "text" as const, text: "pi-agy-bridge" }], isError: false, timestamp: 124 };
+  const live = new LiveSession("metadata-test");
+  live.setSession({ isRunning: true } as AgyProcess, "sync-key", undefined, "agy-conversation");
+  const sync = new RuntimeSessionSync();
+  sync.record(live, [user], assistant);
+  assert.deepEqual(sync.decide(live, { syncKey: "sync-key", turnIndex: 0, canonicalHistory: [user, replay, toolResult] }), { action: "continue" });
+  assert.equal(gateway.resolveToolResults([toolResult]), 1);
+  assert.deepEqual(await result, { content: toolResult.content, isError: false });
+  assert.equal(gateway.hasPendingCalls, false);
+
+  const manager = SessionManager.inMemory("/workspace");
+  const context = new PiContextAdapter();
+  const sessionId = context.bind(manager);
+  const ref = await new RuntimeSessionStore(context).set(sessionId, { conversationId: "agy-conversation" }, [user, assistant]);
+  assert.equal(historyMatches(ref, [user, replay, toolResult]), true);
+  const { historyFormat: _format, ...legacyRef } = ref;
+  assert.equal(historyMatches(legacyRef, [user, replay]), false);
+  assert.equal(historyMatches(ref, [user, { ...replay, content: [] }]), false);
 });
 
 describe("RuntimeSessionSync", () => {

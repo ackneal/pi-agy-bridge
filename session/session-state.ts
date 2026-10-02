@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { LiveSession, PiContextAdapter } from "./session.ts";
-import { debugLog } from "../shared/debug.ts";
+import { debugLog, isDebugEnabled } from "../shared/debug.ts";
+
+import { HISTORY_FORMAT, serializeHistoryMessage } from "./history.ts";
 
 const ENTRY_TYPE = "pi-agy-bridge.runtime-session";
 
@@ -10,6 +12,7 @@ export interface AgyRuntimeSessionRef {
   syncedEntryId?: string;
   historyHash?: string;
   historyLength?: number;
+  historyFormat?: string;
 }
 
 export class RuntimeSessionStore {
@@ -39,6 +42,7 @@ export class RuntimeSessionStore {
     return {
       conversationId: entry.data.conversationId,
       syncedEntryId: entry.id,
+      ...(typeof entry.data.historyFormat === "string" ? { historyFormat: entry.data.historyFormat } : {}),
       ...(typeof entry.data.historyHash === "string" ? { historyHash: entry.data.historyHash } : {}),
       ...(typeof entry.data.historyLength === "number" ? { historyLength: entry.data.historyLength } : {}),
     };
@@ -56,9 +60,10 @@ export class RuntimeSessionStore {
       conversationId: ref.conversationId,
       historyHash,
       historyLength,
+      historyFormat: HISTORY_FORMAT,
     });
 
-    return { conversationId: ref.conversationId, syncedEntryId, historyHash, historyLength };
+    return { conversationId: ref.conversationId, syncedEntryId, historyHash, historyLength, historyFormat: HISTORY_FORMAT };
   }
 
   public async delete(piSessionId: string): Promise<void> {
@@ -73,13 +78,26 @@ export class RuntimeSessionStore {
 }
 
 export function historyMatches(ref: AgyRuntimeSessionRef, history: readonly unknown[]): boolean {
+  if (ref.historyFormat !== HISTORY_FORMAT) {
+    debugLog("session", "Unsupported persisted history format", { format: ref.historyFormat, expected: HISTORY_FORMAT });
+    return false;
+  }
   if (ref.historyHash === undefined || ref.historyLength === undefined) return false;
   if (history.length < ref.historyLength) return false;
-  return hashHistory(history.slice(0, ref.historyLength)) === ref.historyHash;
+  const actualHash = hashHistory(history.slice(0, ref.historyLength));
+  if (actualHash !== ref.historyHash) {
+    debugLog("session", "Persisted history mismatch", {
+      expectedHash: ref.historyHash,
+      actualHash,
+      expectedLength: ref.historyLength,
+      actualLength: history.length,
+    });
+  }
+  return actualHash === ref.historyHash;
 }
 
 function hashHistory(history: readonly unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(history)).digest("hex");
+  return createHash("sha256").update(JSON.stringify(history.map(serializeHistoryMessage))).digest("hex");
 }
 
 function isRuntimeSessionEntry(entry: SessionEntry): entry is Extract<SessionEntry, { type: "custom" }> {
@@ -88,6 +106,18 @@ function isRuntimeSessionEntry(entry: SessionEntry): entry is Extract<SessionEnt
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function changedFields(expected: unknown, actual: unknown, prefix = "", depth = 0): string[] {
+  if (JSON.stringify(expected) === JSON.stringify(actual)) return [];
+  if (depth >= 4 || !isRecord(expected) || !isRecord(actual)) return [prefix || "$"];
+
+  const fields: string[] = [];
+  for (const key of new Set([...Object.keys(expected), ...Object.keys(actual)])) {
+    fields.push(...changedFields(expected[key], actual[key], prefix ? `${prefix}.${key}` : key, depth + 1));
+    if (fields.length >= 20) return fields.slice(0, 20);
+  }
+  return fields;
 }
 
 export type RuntimeSessionDecision =
@@ -107,6 +137,8 @@ export class RuntimeSessionSync {
   private readonly canonicalHistories = new WeakMap<LiveSession, string[]>();
 
   public decide(session: LiveSession, input: RuntimeSessionSyncInput): RuntimeSessionDecision {
+    // Validate even newly appended messages before continuing an existing runtime.
+    input.canonicalHistory.forEach(serializeHistoryMessage);
     if (this.matchesLiveSession(session, input)) {
       if (session.activeProcess?.isRunning) return { action: "continue" };
       if (session.conversationId) {
@@ -138,8 +170,8 @@ export class RuntimeSessionSync {
     messages: readonly unknown[],
     assistantMessage?: unknown
   ): void {
-    const history = messages.map((message) => JSON.stringify(message));
-    if (assistantMessage !== undefined) history.push(JSON.stringify(assistantMessage));
+    const history = messages.map(serializeHistoryMessage);
+    if (assistantMessage !== undefined) history.push(serializeHistoryMessage(assistantMessage));
     this.canonicalHistories.set(session, history);
   }
 
@@ -149,9 +181,32 @@ export class RuntimeSessionSync {
 
     const previousHistory = this.canonicalHistories.get(session);
     if (!previousHistory) return true;
-    if (input.canonicalHistory.length < previousHistory.length) return false;
+    if (input.canonicalHistory.length < previousHistory.length) {
+      debugLog("session", "Live history shortened", {
+        expectedLength: previousHistory.length,
+        actualLength: input.canonicalHistory.length,
+      });
+      return false;
+    }
 
-    return previousHistory.every((entry, index) => entry === JSON.stringify(input.canonicalHistory[index]));
+    const mismatchIndex = previousHistory.findIndex((entry, index) =>
+      entry !== serializeHistoryMessage(input.canonicalHistory[index])
+    );
+    if (mismatchIndex < 0) return true;
+
+    if (isDebugEnabled()) {
+      const expected: unknown = JSON.parse(previousHistory[mismatchIndex]!);
+      const actual: unknown = JSON.parse(serializeHistoryMessage(input.canonicalHistory[mismatchIndex]));
+      const fields = changedFields(expected, actual);
+      debugLog("session", "Live history message mismatch", {
+        index: mismatchIndex,
+        expectedRole: isRecord(expected) ? expected.role : undefined,
+        actualRole: isRecord(actual) ? actual.role : undefined,
+        changedFields: fields,
+        serializationOnly: fields.length === 0,
+      });
+    }
+    return false;
   }
 
   private matchesPersistedSession(
