@@ -81,7 +81,7 @@ function formatXmlContent(message: Message): string[] {
     : message.content.flatMap((block) => {
         if (block.type === "text") return [`<text>${escapeXml(block.text)}</text>`];
         if (block.type === "image") {
-          return [`<image mime_type="${escapeXml(block.mimeType)}">binary content omitted</image>`];
+          return [`<image mime_type="${escapeXml(block.mimeType)}" encoding="base64">${escapeXml(block.data)}</image>`];
         }
         if (block.type === "toolCall") {
           const attributes = `id="${escapeXml(block.id)}" name="${escapeXml(block.name)}"`;

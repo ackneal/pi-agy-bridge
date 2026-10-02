@@ -72,7 +72,7 @@ describe("formatContextPrompt", () => {
   </history>
   <current_message role="user">
     <text>next &amp; now</text>
-    <image mime_type="image/png">binary content omitted</image>
+    <image mime_type="image/png" encoding="base64">aW1hZ2U=</image>
   </current_message>
 </pi_context>`);
   });
