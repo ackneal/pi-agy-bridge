@@ -8,6 +8,8 @@ import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "../runtime/version.ts";
 
+type AgyModelConfig = Extract<ProviderModelConfig, { reasoning: boolean }>;
+
 const execFileAsync = promisify(execFile);
 export const MODEL_CACHE_PATH = path.join(os.homedir(), ".pi", "agent", "cache", "agy-models.json");
 const MODEL_METADATA = JSON.parse(
@@ -24,13 +26,14 @@ function contextWindowFor(modelId: string): number {
   return MODEL_METADATA.default.contextWindow;
 }
 
-export function loadCachedAgyModels(): ProviderModelConfig[] {
+export function loadCachedAgyModels(): AgyModelConfig[] {
   try {
     const models: unknown = JSON.parse(readFileSync(MODEL_CACHE_PATH, "utf-8"));
     if (!Array.isArray(models)) return [];
     return models
-      .filter((model): model is ProviderModelConfig =>
-        typeof model?.id === "string" && typeof model?.name === "string"
+      .filter((model): model is AgyModelConfig =>
+        typeof model?.id === "string" && typeof model?.name === "string" &&
+        (model.type === undefined || model.type === "chat") && typeof model.reasoning === "boolean"
       )
       .map((model) => {
         const legacyThinking = model.id === "claude-opus-4-6" &&
@@ -76,13 +79,13 @@ const ZERO_COST = {
   cacheWrite: 0,
 };
 
-export function parseModelsOutput(output: string): ProviderModelConfig[] {
+export function parseModelsOutput(output: string): AgyModelConfig[] {
   const cleaned = output.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
   const rawLines = cleaned.split(/[\r\n]+/);
   const rows: { id: string; name: string }[] = [];
   const seenIds = new Set<string>();
-  const models: ProviderModelConfig[] = [];
-  const modelsById = new Map<string, ProviderModelConfig>();
+  const models: AgyModelConfig[] = [];
+  const modelsById = new Map<string, AgyModelConfig>();
 
   for (const rawLine of rawLines) {
     const match = rawLine.trim().match(/^([a-zA-Z0-9][-a-zA-Z0-9_.:/]*)(?: {2,}|\t+)\s*(\S.*)$/);
@@ -142,7 +145,7 @@ export function parseModelsOutput(output: string): ProviderModelConfig[] {
 export async function discoverAgyModels(
   agyPath: string = "agy",
   signal?: AbortSignal
-): Promise<ProviderModelConfig[]> {
+): Promise<AgyModelConfig[]> {
   const resolvedPath = resolveAgyExecutable(agyPath);
 
   let output = "";

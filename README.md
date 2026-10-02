@@ -23,7 +23,7 @@ A standalone Antigravity CLI (`agy`) provider and capability bridge plugin for [
 
 ## Prerequisites
 
-- **Pi Coding Agent**: `@earendil-works/pi-coding-agent` (>= 0.87.1)
+- **Pi Coding Agent**: `@earendil-works/pi-coding-agent` (>= 0.99.2)
 - **Antigravity CLI**: `agy` (>= 1.1.15) installed and authenticated in your `$PATH`
 - **Operating System**: macOS or Linux (requires Unix domain socket support)
 - **Node.js**: Required by Pi and the packaged MCP executable; Node.js >= 22.6 is required to run this repository's TypeScript test command directly
