@@ -77,7 +77,12 @@ describe("formatContextPrompt", () => {
 </pi_context>`);
   });
 
-  it("sends only the latest message when continuing or resuming", () => {
-    assert.equal(formatContextPrompt(context, true), "next & now\n[Image: image/png]");
+  it("preserves images in incremental context", () => {
+    assert.equal(formatContextPrompt(context, true, 3), `<pi_context purpose="incremental_conversation">
+  <message role="user">
+    <text>next &amp; now</text>
+    <image mime_type="image/png" encoding="base64">aW1hZ2U=</image>
+  </message>
+</pi_context>`);
   });
 });

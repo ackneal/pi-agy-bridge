@@ -148,6 +148,7 @@ export class RuntimeSessionSync {
 
     const ref = input.runtimeRef;
     if (ref && this.matchesPersistedSession(ref, input)) {
+      this.record(session, input.canonicalHistory.slice(0, ref.historyLength));
       return { action: "resume", conversationId: ref.conversationId };
     }
 
@@ -163,6 +164,10 @@ export class RuntimeSessionSync {
     });
 
     return { action: "rebuild" };
+  }
+
+  public getSyncedMessageCount(session: LiveSession): number | undefined {
+    return this.canonicalHistories.get(session)?.length;
   }
 
   public record(

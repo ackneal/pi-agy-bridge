@@ -11,14 +11,15 @@ import type { RuntimeSessionDecision } from "../session/session-state.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
 import { AgyBridge, streamAgyProvider } from "./provider.ts";
 
-const cases: RuntimeSessionDecision[] = [
-  { action: "continue" },
-  { action: "resume", conversationId: "old-conversation" },
-  { action: "rebuild" },
+const cases: { decision: RuntimeSessionDecision; incremental?: boolean }[] = [
+  { decision: { action: "continue" } },
+  { decision: { action: "resume", conversationId: "old-conversation" } },
+  { decision: { action: "rebuild" } },
+  { decision: { action: "continue" }, incremental: true },
 ];
 
-for (const decision of cases) {
-  test(`streamAgyProvider completes a ${decision.action} turn`, async (t) => {
+for (const { decision, incremental } of cases) {
+  test(`streamAgyProvider completes a ${decision.action} turn${incremental ? " with all incremental messages" : ""}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-turn-"));
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
@@ -83,6 +84,10 @@ for (const decision of cases) {
       ],
       tools: [],
     };
+    if (incremental) {
+      bridge.runtimeSessionSync.record(liveSession, context.messages.slice(0, 1));
+      context.messages.splice(1, 0, { role: "system", content: "new system instruction", timestamp: 2 });
+    }
     const model = {
       id: "test-model", name: "Test model", api: "agy", provider: "agy",
       baseUrl: "agy", reasoning: false, input: ["text"],
@@ -123,7 +128,13 @@ for (const decision of cases) {
         decision.action === "resume" ? "old-conversation" : undefined);
     }
     const prompt = send.mock.calls[0]!.arguments[0].message.content;
-    if (decision.action !== "rebuild") {
+    if (incremental) {
+      assert.match(prompt, /purpose="incremental_conversation"/);
+      assert.match(prompt, /role="system"/);
+      assert.match(prompt, /new system instruction/);
+      assert.match(prompt, /latest &amp; request/);
+      assert.doesNotMatch(prompt, /earlier/);
+    } else if (decision.action !== "rebuild") {
       assert.equal(prompt, "latest & request");
     } else {
       assert.equal(prompt, '<pi_context purpose="reconstructed_conversation">\n  <system_instructions>Rules &amp; constraints</system_instructions>\n  <history>\n    <message role="user">\n      <text>earlier &lt;question&gt;</text>\n    </message>\n  </history>\n  <current_message role="user">\n    <text>latest &amp; request</text>\n  </current_message>\n</pi_context>');
@@ -134,7 +145,7 @@ for (const decision of cases) {
   });
 }
 
-for (const scenario of ["pending tool results", "abort"] as const) {
+for (const scenario of ["pending tool results", "mixed pending messages", "abort"] as const) {
   test(`streamAgyProvider continue handles ${scenario}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-continue-"));
     const pi = {
@@ -165,6 +176,7 @@ for (const scenario of ["pending tool results", "abort"] as const) {
       assert.ok(listener, "provider must subscribe before sending");
       controller.abort();
     });
+    t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", () => scenario === "mixed pending messages");
     const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", () => {
       assert.ok(listener, "provider must subscribe before resolving tool results");
       if (scenario === "abort") return 0;
@@ -181,11 +193,15 @@ for (const scenario of ["pending tool results", "abort"] as const) {
     const mcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(proc, "old-sync-key", mcp, "old-conversation");
     const context: Context = {
-      messages: scenario === "pending tool results"
+      messages: scenario !== "abort"
         ? [{ role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 2 }]
         : [{ role: "user", content: "latest request", timestamp: 2 }],
       tools: [],
     };
+    bridge.runtimeSessionSync.record(session, []);
+    if (scenario === "mixed pending messages") {
+      context.messages.push({ role: "system", content: "new instruction", timestamp: 3 });
+    }
     const model = {
       id: "test-model", name: "Test model", api: "agy", provider: "agy",
       baseUrl: "agy", reasoning: false, input: ["text"],
@@ -199,8 +215,10 @@ for (const scenario of ["pending tool results", "abort"] as const) {
       events.push(event);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(resolve.mock.callCount(), 1);
-    assert.deepEqual(resolve.mock.calls[0]!.arguments, [context.messages]);
+    assert.equal(resolve.mock.callCount(), scenario === "mixed pending messages" ? 0 : 1);
+    if (scenario !== "mixed pending messages") {
+      assert.deepEqual(resolve.mock.calls[0]!.arguments, [context.messages]);
+    }
     assert.equal(unsubscribe.mock.callCount(), 1);
     assert.equal(listener, undefined);
     if (scenario === "pending tool results") {
@@ -219,10 +237,15 @@ for (const scenario of ["pending tool results", "abort"] as const) {
       assert.equal(close.mock.callCount(), 0);
       assert.equal(abort.mock.callCount(), 0);
     } else {
-      assert.equal(send.mock.callCount(), 1);
+      assert.equal(send.mock.callCount(), scenario === "mixed pending messages" ? 0 : 1);
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "error");
-      assert.equal(terminal.reason, "aborted");
+      assert.equal(terminal.reason, scenario === "mixed pending messages" ? "error" : "aborted");
+      if (scenario === "mixed pending messages") {
+        assert.match(terminal.error.errorMessage ?? "", /Cannot safely deliver additional Pi messages/);
+        assert.equal(persist.mock.callCount(), 0);
+        assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 0);
+      }
       assert.equal(session.activeProcess, null);
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
