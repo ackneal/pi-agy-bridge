@@ -61,7 +61,7 @@ describe("formatContextPrompt", () => {
     <message role="user">
       <text>old &lt;question&gt;</text>
     </message>
-    <message role="assistant">
+    <message role="assistant" stop_reason="toolUse">
       <tool_call id="call-1" name="read">
         <arguments>{&quot;path&quot;:&quot;README.md&quot;}</arguments>
       </tool_call>

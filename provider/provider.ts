@@ -72,7 +72,12 @@ function formatXmlMessage(message: Message, tagName: "message" | "current_messag
     return formatXmlElement(tagName === "current_message" ? tagName : "tool_result", attributes, formatXmlContent(message));
   }
 
-  return formatXmlElement(tagName, `role="${message.role}"`, formatXmlContent(message));
+  const attributes = [`role="${message.role}"`];
+  if (message.role === "assistant") {
+    attributes.push(`stop_reason="${escapeXml(message.stopReason)}"`);
+    if (message.errorMessage !== undefined) attributes.push(`error_message="${escapeXml(message.errorMessage)}"`);
+  }
+  return formatXmlElement(tagName, attributes.join(" "), formatXmlContent(message));
 }
 
 function formatXmlContent(message: Message): string[] {
@@ -84,7 +89,8 @@ function formatXmlContent(message: Message): string[] {
           return [`<image mime_type="${escapeXml(block.mimeType)}" encoding="base64">${escapeXml(block.data)}</image>`];
         }
         if (block.type === "toolCall") {
-          const attributes = `id="${escapeXml(block.id)}" name="${escapeXml(block.name)}"`;
+          const attributes = `id="${escapeXml(block.id)}" name="${escapeXml(block.name)}"` +
+            (block.namespace !== undefined ? ` namespace="${escapeXml(block.namespace)}"` : "");
           const args = `<arguments>${escapeXml(JSON.stringify(block.arguments))}</arguments>`;
           return [formatXmlElement("tool_call", attributes, [args])];
         }
