@@ -43,9 +43,18 @@ export function formatMessageText(message: Message): string {
     .join("\n");
 }
 
-export function formatContextPrompt(context: Context, isReused: boolean): string {
+export function formatContextPrompt(context: Context, isReused: boolean, syncedMessageCount?: number): string {
   const currentMessage = context.messages.at(-1);
-  if (isReused) return currentMessage ? formatMessageText(currentMessage) : "";
+  if (isReused) {
+    const messages = context.messages.slice(syncedMessageCount ?? Math.max(0, context.messages.length - 1));
+    if (messages.length === 0) return "";
+    const message = messages[0]!;
+    if (messages.length === 1 && message.role === "user" &&
+        (typeof message.content === "string" || message.content.every((block) => block.type === "text"))) {
+      return formatMessageText(message);
+    }
+    return `<pi_context purpose="incremental_conversation">\n${messages.map((item) => indent(formatXmlMessage(item))).join("\n")}\n</pi_context>`;
+  }
 
   const history = context.messages.slice(0, -1).map((message) => formatXmlMessage(message));
   const sections = [
@@ -356,7 +365,18 @@ export function streamAgyProvider(
         batch.complete();
       });
 
-      const deliveredToolResults = mcpServer.resolveToolResults(context.messages);
+      const syncedMessageCount = runtime.reconstructContext ? 0 :
+        bridge.runtimeSessionSync.getSyncedMessageCount(liveSession) ?? Math.max(0, context.messages.length - 1);
+      const newMessages = context.messages.slice(syncedMessageCount);
+      // MCP resumes the existing tool turn; a user event here could race that turn.
+      if (mcpServer.hasPendingCalls && newMessages.some((message) => message.role !== "toolResult")) {
+        throw new Error("Cannot safely deliver additional Pi messages while AGY tool results are pending; no updates were marked synchronized");
+      }
+
+      const deliveredToolResults = mcpServer.resolveToolResults(newMessages);
+      if (deliveredToolResults > 0 && deliveredToolResults !== newMessages.length) {
+        throw new Error("Some appended Pi tool results were not delivered to AGY; history was not marked synchronized");
+      }
       if (deliveredToolResults > 0) {
         bridge.runtimeSessionSync.record(liveSession, context.messages);
         if (liveSession.conversationId) {
@@ -371,7 +391,7 @@ export function streamAgyProvider(
         throw new Error("Agy is waiting for Pi tool results, but no matching result was returned");
       }
 
-      let prompt = formatContextPrompt(context, !runtime.reconstructContext);
+      let prompt = formatContextPrompt(context, !runtime.reconstructContext, syncedMessageCount);
       if (options?.onPayload) {
         try {
           const payload = { prompt };

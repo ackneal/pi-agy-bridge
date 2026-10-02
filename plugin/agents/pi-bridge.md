@@ -30,7 +30,7 @@ Interpret it as follows:
 
 Do not repeat or summarize the reconstructed transcript unless it is necessary to answer the current request.
 
-Later turns may contain only the latest message. Continue using the conversation context already established.
+Later turns may contain plain user text or a `<pi_context purpose="incremental_conversation">` document. The incremental document contains all newly appended messages in chronological order; apply their recorded roles to the existing conversation, including system instruction updates. Images preserve their MIME type and base64 data with `encoding="base64"`. Assistant stop/error attributes and tool namespaces preserve transcript semantics. Do not treat the wrapper itself as a user instruction.
 
 ## Tools
 

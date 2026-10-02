@@ -115,7 +115,9 @@ describe("RuntimeSessionSync", () => {
   it("continues, resumes, or rebuilds according to process and synchronization state", () => {
     const sync = new RuntimeSessionSync();
     const live = createSession(true);
+    assert.equal(sync.getSyncedMessageCount(live), undefined);
     sync.record(live, input.canonicalHistory, { role: "assistant", responseId: "agy-conversation", content: "answer" });
+    assert.equal(sync.getSyncedMessageCount(live), 2);
     assert.deepEqual(sync.decide(live, { ...input, canonicalHistory: [...input.canonicalHistory, { role: "assistant", responseId: "agy-conversation", content: "answer" }, { role: "user", content: "next" }] }), { action: "continue" });
 
     const changedCases = [
@@ -159,11 +161,13 @@ describe("RuntimeSessionSync", () => {
     assert.ok(runtimeRef);
 
     const sync = new RuntimeSessionSync();
-    assert.deepEqual(sync.decide(new LiveSession(sessionId), {
+    const resumed = new LiveSession(sessionId);
+    assert.deepEqual(sync.decide(resumed, {
       syncKey: "sync-key",
       turnIndex: 1,
       canonicalHistory: [...history, { role: "user", content: "next" }],
       runtimeRef,
     }), { action: "resume", conversationId: "agy-conversation" });
+    assert.equal(sync.getSyncedMessageCount(resumed), history.length);
   });
 });
