@@ -9,6 +9,7 @@ import type {
   SimpleStreamOptions,
   Tool,
 } from "@earendil-works/pi-ai";
+import { getCurrentTools, normalizeContext } from "@earendil-works/pi-ai";
 import { PiEventAdapter } from "../runtime/events.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
@@ -254,7 +255,7 @@ export function streamAgyProvider(
   bridge: AgyBridge
 ): AssistantMessageEventStream {
   const contextTools = context.tools ?? [];
-  const tools = contextTools.length > 0 ? contextTools : bridge.getRegisteredTools();
+  const tools = bridge.getTools(context);
   debugLog("mcp", "Pi provider context keys:", Object.keys(context));
   debugLog("mcp", "Pi provider context tools:", contextTools.map((tool) => tool.name));
   debugLog("mcp", "Pi bridge tools:", tools.map((tool) => tool.name));
@@ -411,12 +412,14 @@ export class AgyBridge {
     }
   }
 
-  public getRegisteredTools(): Tool[] {
-    const activeTools = this.pi.getActiveTools();
-    const tools = this.pi.getAllTools() as Tool[];
-    debugLog("mcp", "Pi registered tools:", tools.map((tool) => tool.name));
-    debugLog("mcp", "Pi active tool names:", activeTools);
-    return tools;
+  public getTools(context: Context): Tool[] {
+    // Pi 0.99.2 carries model-facing tool declarations in system-message deltas.
+    if (context.tools !== undefined || context.messages.some((message) => message.role === "system")) {
+      return getCurrentTools(normalizeContext(context).messages);
+    }
+
+    const activeTools = new Set(this.pi.getActiveTools());
+    return this.pi.getAllTools().filter((tool) => activeTools.has(tool.name) && tool.exposure !== "hidden");
   }
 
   public start(): void {

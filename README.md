@@ -60,6 +60,11 @@ Available AGY models are detected automatically from `agy models`.
 
 The bridge exposes active Pi tools to AGY through an ephemeral MCP server over a private Unix domain socket. AGY delegates tool calls back to Pi, where they run with Pi's permissions, session resources, and policy controls. AGY cannot bypass Pi by invoking unapproved executable tools directly.
 
+The bridge follows Pi's current tool declarations, including transcript tool
+additions and removals. It does not expose every registered tool. Declared
+codemode and tool-search entrypoints are relayed like other Pi tool calls;
+the underlying tools remain managed by Pi.
+
 ### Session and Conversation Synchronization
 
 Sequential turns reuse the same AGY process and conversation. After Pi or the AGY process restarts, the bridge resumes the AGY conversation when its recorded history still matches the active Pi branch.
