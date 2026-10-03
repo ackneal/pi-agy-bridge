@@ -1,12 +1,91 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { calculateCost, type Usage, type AnyModel } from "@earendil-works/pi-ai";
 import { describe, it } from "node:test";
-import { discoverAgyModels, loadCachedAgyModels, MODEL_CACHE_PATH, parseModelsOutput } from "./models.ts";
+import { discoverAgyModels, restoreStoredAgyModels, parseModelsOutput } from "./models.ts";
+
+const proIds = ["gemini-3.1-pro", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"];
+const proCost = {
+  input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0,
+  tiers: [{ inputTokensAbove: 200_000, input: 4, output: 18, cacheRead: 0.4, cacheWrite: 0 }],
+};
+const flashCost = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
+const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const unsupported = { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null };
 
 describe("AGY model discovery", () => {
+  for (const { id, maxTokens, cost } of [
+    { id: "gemini-3.8-flash", maxTokens: 65_536, cost: flashCost },
+    { id: "gemini-3.7-flash", maxTokens: 65_536, cost: flashCost },
+    { id: "gemini-3.6-flash", maxTokens: 65_536, cost: flashCost },
+    { id: "gemini-3.1-pro", maxTokens: 65_536, cost: proCost },
+    { id: "gemini-3.1-pro-preview", maxTokens: 65_536, cost: proCost },
+    { id: "gemini-3.1-pro-preview-customtools", maxTokens: 65_536, cost: proCost },
+    { id: "gemini-new-flash", maxTokens: 16_384, cost: zeroCost },
+    { id: "gemini-3.8-flash-preview", maxTokens: 16_384, cost: zeroCost },
+  ]) {
+    it(`applies metadata after effort normalization: ${id}`, () => {
+      const [model] = parseModelsOutput(`${id}-high  Gemini (High)`);
+
+      assert.equal(model?.id, id);
+      assert.equal(model?.contextWindow, 1_048_576);
+      assert.equal(model?.maxTokens, maxTokens);
+      assert.deepEqual(model?.cost, cost);
+      assert.deepEqual(model?.thinkingLevelMap, { ...unsupported, high: "high" });
+    });
+
+    it(`replaces stale cached metadata: ${id}`, () => {
+      const [original] = parseModelsOutput(`${id}-high  Gemini (High)`);
+      const stored = { ...original!, contextWindow: 1, maxTokens: 2,
+        cost: { input: 99, output: 98, cacheRead: 97, cacheWrite: 96,
+          tiers: [{ inputTokensAbove: 1, input: 95, output: 94, cacheRead: 93, cacheWrite: 92 }] } };
+
+      const [model] = restoreStoredAgyModels([stored]);
+
+      assert.equal(model?.id, id);
+      assert.equal(model?.contextWindow, 1_048_576);
+      assert.equal(model?.maxTokens, maxTokens);
+      assert.deepEqual(model?.cost, cost);
+      assert.deepEqual(model?.thinkingLevelMap, original?.thinkingLevelMap);
+      assert.equal(stored.maxTokens, 2);
+      assert.equal(stored.cost.input, 99);
+      assert.equal(stored.cost.tiers[0]?.inputTokensAbove, 1);
+    });
+  }
+
+  for (const id of proIds) {
+    for (const prompt of [199_999, 200_000, 200_001]) {
+      for (const { label, cacheRead, cacheWrite } of [
+        { label: "uncached", cacheRead: 0, cacheWrite: 0 },
+        { label: "cache reads", cacheRead: 100_000, cacheWrite: 0 },
+        { label: "cache reads and writes", cacheRead: 60_000, cacheWrite: 40_000 },
+      ]) {
+        it(`uses native request-wide pricing: ${id}, prompt ${prompt}, ${label}`, () => {
+          const [model] = parseModelsOutput(`${id}-high  Gemini (High)`);
+          const usage: Usage = {
+            input: prompt - cacheRead - cacheWrite, output: 1_000, cacheRead, cacheWrite,
+            totalTokens: prompt + 1_000,
+            cost: { ...zeroCost, total: 0 },
+          };
+          const rates = prompt > 200_000 ? proCost.tiers[0]! : proCost;
+          const expected = {
+            input: (rates.input / 1_000_000) * usage.input,
+            output: (rates.output / 1_000_000) * usage.output,
+            cacheRead: (rates.cacheRead / 1_000_000) * cacheRead,
+            cacheWrite: 0,
+          };
+
+          const cost = calculateCost(model!, usage);
+
+          assert.deepEqual(cost, {
+            ...expected, total: expected.input + expected.output + expected.cacheRead,
+          });
+          assert.equal(usage.cost, cost);
+        });
+      }
+    }
+  }
+
   for (const levels of [[], ["low"], ["low", "medium", "high"], ["off", "minimal", "xhigh", "max"]]) {
     it(`normalizes declared suffix levels: ${levels.join(", ") || "none"}`, () => {
       const output = levels.length
@@ -21,26 +100,37 @@ describe("AGY model discovery", () => {
   }
 
   for (const map of [undefined, {}, { low: "custom-low", medium: "medium", high: "high", off: null }]) {
-    it(`normalizes cached maps without inventing capabilities: ${JSON.stringify(map)}`, (t) => {
-      const cached = [{ id: "model", name: "Model", reasoning: true, ...(map === undefined ? {} : { thinkingLevelMap: map }) }];
-      const originalRead = fs.readFileSync;
-      t.mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
-        if (args[0] === MODEL_CACHE_PATH) return JSON.stringify(cached);
-        return originalRead(...args);
-      });
+    it(`restores stored maps without inventing levels: ${JSON.stringify(map)}`, () => {
+      const [original] = parseModelsOutput("unknown-model  Model");
+      const { thinkingLevelMap: _map, ...fields } = original!;
+      const stored = { ...fields, api: "old-api", baseUrl: "old-url", contextWindow: 1, maxTokens: 1, ...(map === undefined ? {} : { thinkingLevelMap: map }) };
+      const [model] = restoreStoredAgyModels([stored]);
 
-      syncBuiltinESMExports();
-      t.after(() => {
-        t.mock.restoreAll();
-        syncBuiltinESMExports();
-      });
-
-      const [model] = loadCachedAgyModels();
-
-      assert.deepEqual(model?.thinkingLevelMap, { ...unsupported, ...map });
-
+      assert.deepEqual(model, { ...original, thinkingLevelMap: { ...unsupported, ...map } });
+      assert.equal(stored.contextWindow, 1);
     });
   }
+
+  for (const patch of [
+    { provider: "other" }, { type: "image" }, { id: "" }, { name: "" },
+    { reasoning: undefined }, { api: undefined }, { baseUrl: undefined },
+    { input: [] }, { cost: undefined }, { contextWindow: NaN }, { maxTokens: 0 },
+  ]) {
+    it(`rejects invalid stored models: ${JSON.stringify(patch)}`, () => {
+      const [model] = parseModelsOutput("model  Model");
+      const stored = { ...model, ...patch } as AnyModel;
+
+      assert.deepEqual(restoreStoredAgyModels([stored]), []);
+    });
+  }
+
+  it("restores implicit chat models without renaming fixed Thinking IDs", () => {
+    const [model] = parseModelsOutput("claude-opus-4-6-thinking  Claude Opus 4.6 (Thinking)");
+
+    const { type: _type, ...stored } = model!;
+
+    assert.deepEqual(restoreStoredAgyModels([stored]), [model]);
+  });
 
   for (const { id, name, expectedId, expectedName } of [
     { id: "claude-opus-4-6-thinking", name: "Claude Opus 4.6 (Thinking)", expectedId: "claude-opus-4-6-thinking", expectedName: "Claude Opus 4.6 (Thinking)" },
@@ -54,30 +144,6 @@ describe("AGY model discovery", () => {
       assert.equal(model?.name, expectedName);
       assert.deepEqual(model?.thinkingLevelMap, unsupported);
       assert.equal(model?.reasoning, /thinking/i.test(name));
-    });
-  }
-
-  for (const name of ["Claude Opus 4.6", "Claude Opus 4.6 (Thinking)"]) {
-    it(`repairs legacy fixed Thinking cache: ${name}`, (t) => {
-      const originalRead = fs.readFileSync;
-      t.mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
-        if (args[0] === MODEL_CACHE_PATH) return JSON.stringify([{
-          id: "claude-opus-4-6", name, reasoning: true, thinkingLevelMap: { thinking: "thinking" },
-        }]);
-        return originalRead(...args);
-      });
-      syncBuiltinESMExports();
-      t.after(() => {
-        t.mock.restoreAll();
-        syncBuiltinESMExports();
-      });
-
-      const [model] = loadCachedAgyModels();
-
-      assert.equal(model?.id, "claude-opus-4-6-thinking");
-      assert.equal(model?.name, "Claude Opus 4.6 (Thinking)");
-      assert.equal(model?.reasoning, true);
-      assert.deepEqual(model?.thinkingLevelMap, unsupported);
     });
   }
 
@@ -106,7 +172,7 @@ other-model-low        Other Model (Low)
     assert.deepEqual(models[3]?.thinkingLevelMap, { ...unsupported, low: "low" });
     assert.equal(models[3]?.contextWindow, 272_000);
     for (const model of models) {
-      assert.deepEqual(model.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+      assert.deepEqual(model.cost, proIds.includes(model.id) ? proCost : /^gemini-3\.[678]-flash$/.test(model.id) ? flashCost : zeroCost);
     }
   });
 
@@ -150,8 +216,15 @@ gpt-oss-120b-medium       GPT-OSS 120B (Medium)
     assert.equal(byId.get("claude-sonnet-4-6")?.contextWindow, 250_000);
     assert.equal(byId.get("gpt-oss-120b")?.contextWindow, 131_072);
     for (const model of models) {
+      assert.equal(model.provider, "agy");
+      assert.equal(model.api, "agy");
+      assert.equal(model.baseUrl, "agy");
+      assert.equal(model.type, "chat");
+      assert.equal(model.maxTokens, model.id.startsWith("gemini-") ? 65_536 : 16_384);
+      assert.deepEqual(model.input, ["text", "image"]);
+      assert.equal(typeof model.name, "string");
       assert.equal(model.reasoning, true);
-      assert.deepEqual(model.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+      assert.deepEqual(model.cost, proIds.includes(model.id) ? proCost : /^gemini-3\.[678]-flash$/.test(model.id) ? flashCost : zeroCost);
     }
   });
 

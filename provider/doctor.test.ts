@@ -9,10 +9,7 @@ test("doctor reads isolated fixtures without installing or discovering", async (
   const previous = process.env.HOME;
   process.env.HOME = home;
   try {
-    // Import after HOME is set: the cache path is computed at module initialization.
     const { collectDoctorReport } = await import("./doctor.ts");
-    const { MODEL_CACHE_PATH } = await import("../discovery/models.ts");
-    assert.ok(MODEL_CACHE_PATH.startsWith(home + path.sep));
     const source = path.join(home, "source");
     const target = path.join(home, ".gemini/config/plugins/example");
     const executable = path.join(home, "agy");
@@ -26,8 +23,8 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       { manifest: undefined, expected: /! Plugin not installed/, followup: /Will install automatically/ },
       { manifest: '{"name":"example","version":"2.0.0"}', expected: /✓ Plugin installed 2.0.0/, followup: /bundled 2.0.0/ },
       { manifest: '{"name":"example","version":"1.0.0"}', expected: /installed 1.0.0 -> bundled 2.0.0/, followup: /Will update automatically/ },
-      { manifest: '{broken', expected: /✗ Plugin error/, followup: /Models: no cache/ },
-      { manifest: '{}', expected: /✗ Plugin error/, followup: /Models: no cache/ },
+      { manifest: '{broken', expected: /✗ Plugin error/, followup: /Models: 0 cached \(Pi models-store\)/ },
+      { manifest: '{}', expected: /✗ Plugin error/, followup: /Models: 0 cached \(Pi models-store\)/ },
     ]) {
       await fs.rm(target, { recursive: true, force: true });
       if (row.manifest !== undefined) {
@@ -42,14 +39,16 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       if (row.manifest === undefined) await assert.rejects(fs.access(target));
       else assert.equal(await fs.readFile(path.join(target, "plugin.json"), "utf8"), row.manifest);
     }
-    await fs.mkdir(path.dirname(MODEL_CACHE_PATH), { recursive: true });
-    await fs.writeFile(MODEL_CACHE_PATH, '[{"id":"a","name":"A"}]');
-    assert.match(await collectDoctorReport(options), /1 cached/);
-    for (const value of ['{}', '[{}]', '{broken']) {
-      await fs.writeFile(MODEL_CACHE_PATH, value);
-      assert.match(await collectDoctorReport(options), /✗ Model cache error/);
-      assert.match(await collectDoctorReport({ ...options, models: [] }), /0 configured/);
-      assert.equal(await fs.readFile(MODEL_CACHE_PATH, "utf8"), value);
+    for (const row of [
+      { catalogModels: undefined, models: undefined, expected: /! Models: 0 cached \(Pi models-store\)/ },
+      { catalogModels: [], models: undefined, expected: /! Models: 0 cached \(Pi models-store\)/ },
+      { catalogModels: [{ id: "a", name: "A" }], models: undefined, expected: /✓ Models: 1 cached \(Pi models-store\)/ },
+      { catalogModels: [1], models: [], expected: /! Models: 0 configured/ },
+      { catalogModels: [], models: [1, 2], expected: /✓ Models: 2 configured/ },
+    ]) {
+      const report = await collectDoctorReport({ ...options, catalogModels: row.catalogModels, models: row.models });
+      assert.match(report, row.expected);
+      if (row.models !== undefined) assert.doesNotMatch(report, /cached/);
     }
     await fs.writeFile(path.join(source, "plugin.json"), '{}');
     const report = await collectDoctorReport({

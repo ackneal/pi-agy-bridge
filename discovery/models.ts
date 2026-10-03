@@ -1,66 +1,20 @@
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { promisify } from "node:util";
-import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import type { AnyModel, Api, Model } from "@earendil-works/pi-ai";
 import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "../runtime/version.ts";
 
-type AgyModelConfig = Extract<ProviderModelConfig, { reasoning: boolean }>;
+type ModelMetadata = Pick<Model<Api>, "contextWindow" | "maxTokens" | "input" | "cost">;
 
 const execFileAsync = promisify(execFile);
-export const MODEL_CACHE_PATH = path.join(os.homedir(), ".pi", "agent", "cache", "agy-models.json");
 const MODEL_METADATA = JSON.parse(
   readFileSync(new URL("./model.json", import.meta.url), "utf-8")
 ) as {
-  default: { contextWindow: number };
-  families: Record<string, { contextWindow: number }>;
+  default: ModelMetadata;
+  families: Record<string, Partial<ModelMetadata>>;
+  models: Record<string, Partial<ModelMetadata>>;
 };
-
-function contextWindowFor(modelId: string): number {
-  for (const [prefix, metadata] of Object.entries(MODEL_METADATA.families)) {
-    if (modelId.startsWith(prefix)) return metadata.contextWindow;
-  }
-  return MODEL_METADATA.default.contextWindow;
-}
-
-export function loadCachedAgyModels(): AgyModelConfig[] {
-  try {
-    const models: unknown = JSON.parse(readFileSync(MODEL_CACHE_PATH, "utf-8"));
-    if (!Array.isArray(models)) return [];
-    return models
-      .filter((model): model is AgyModelConfig =>
-        typeof model?.id === "string" && typeof model?.name === "string" &&
-        (model.type === undefined || model.type === "chat") && typeof model.reasoning === "boolean"
-      )
-      .map((model) => {
-        const legacyThinking = model.id === "claude-opus-4-6" &&
-          (model.thinkingLevelMap as Record<string, unknown> | undefined)?.thinking === "thinking";
-        const id = legacyThinking ? `${model.id}-thinking` : model.id;
-        const name = legacyThinking && !/\(Thinking\)\s*$/i.test(model.name)
-          ? `${model.name} (Thinking)` : model.name;
-
-        return {
-          ...model,
-          id,
-          name,
-          thinkingLevelMap: legacyThinking
-            ? { ...UNSUPPORTED_THINKING_LEVELS }
-            : { ...UNSUPPORTED_THINKING_LEVELS, ...model.thinkingLevelMap },
-          contextWindow: contextWindowFor(id),
-        };
-      });
-  } catch {
-    return [];
-  }
-}
-
-export async function cacheAgyModels(models: ProviderModelConfig[]): Promise<void> {
-  await mkdir(path.dirname(MODEL_CACHE_PATH), { recursive: true });
-  await writeFile(MODEL_CACHE_PATH, JSON.stringify(models), "utf-8");
-}
 
 const UNSUPPORTED_THINKING_LEVELS = {
   off: null,
@@ -72,20 +26,56 @@ const UNSUPPORTED_THINKING_LEVELS = {
   max: null,
 };
 
-const ZERO_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
+function modelDefaults(id: string) {
+  const family = Object.entries(MODEL_METADATA.families).find(([prefix]) => id.startsWith(prefix))?.[1];
+  const metadata = { ...MODEL_METADATA.default, ...family, ...MODEL_METADATA.models[id] };
 
-export function parseModelsOutput(output: string): AgyModelConfig[] {
+  return {
+    provider: "agy",
+    api: "agy" as Api,
+    baseUrl: "agy",
+    type: "chat" as const,
+    input: [...metadata.input],
+    cost: {
+      ...metadata.cost,
+      ...(metadata.cost.tiers ? { tiers: metadata.cost.tiers.map((tier) => ({ ...tier })) } : {}),
+    },
+    contextWindow: metadata.contextWindow,
+    maxTokens: metadata.maxTokens,
+  };
+}
+
+export function restoreStoredAgyModels(models: readonly AnyModel[]): Model<Api>[] {
+  return models
+    .filter((model): model is Model<Api> =>
+      model != null && typeof model === "object" &&
+      model.provider === "agy" && (model.type === undefined || model.type === "chat") &&
+      typeof model.id === "string" && model.id.trim().length > 0 &&
+      typeof model.name === "string" && model.name.trim().length > 0 &&
+      typeof model.reasoning === "boolean" &&
+      typeof model.api === "string" && typeof model.baseUrl === "string" &&
+      Array.isArray(model.input) && model.input.length > 0 &&
+      model.input.every((input) => input === "text" || input === "image") &&
+      model.cost != null &&
+      [model.cost.input, model.cost.output, model.cost.cacheRead, model.cost.cacheWrite]
+        .every((cost) => typeof cost === "number" && Number.isFinite(cost) && cost >= 0) &&
+      "contextWindow" in model && Number.isFinite(model.contextWindow) && model.contextWindow > 0 &&
+      "maxTokens" in model && Number.isFinite(model.maxTokens) && model.maxTokens > 0
+    )
+    .map((model) => ({
+      ...model,
+      ...modelDefaults(model.id),
+      thinkingLevelMap: { ...UNSUPPORTED_THINKING_LEVELS, ...model.thinkingLevelMap },
+    }));
+}
+
+export function parseModelsOutput(output: string): Model<Api>[] {
   const cleaned = output.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
   const rawLines = cleaned.split(/[\r\n]+/);
   const rows: { id: string; name: string }[] = [];
   const seenIds = new Set<string>();
-  const models: AgyModelConfig[] = [];
-  const modelsById = new Map<string, AgyModelConfig>();
+  const models: Model<Api>[] = [];
+  const modelsById = new Map<string, Model<Api>>();
 
   for (const rawLine of rawLines) {
     const match = rawLine.trim().match(/^([a-zA-Z0-9][-a-zA-Z0-9_.:/]*)(?: {2,}|\t+)\s*(\S.*)$/);
@@ -120,10 +110,7 @@ export function parseModelsOutput(output: string): AgyModelConfig[] {
         name: displayName,
         reasoning: /thinking|reasoning/i.test(`${id} ${name}`),
         thinkingLevelMap: { ...UNSUPPORTED_THINKING_LEVELS },
-        input: ["text", "image"],
-        cost: ZERO_COST,
-        contextWindow: contextWindowFor(modelId),
-        maxTokens: 16_384,
+        ...modelDefaults(modelId),
       };
       modelsById.set(modelId, model);
       models.push(model);
@@ -145,7 +132,7 @@ export function parseModelsOutput(output: string): AgyModelConfig[] {
 export async function discoverAgyModels(
   agyPath: string = "agy",
   signal?: AbortSignal
-): Promise<AgyModelConfig[]> {
+): Promise<Model<Api>[]> {
   const resolvedPath = resolveAgyExecutable(agyPath);
 
   let output = "";

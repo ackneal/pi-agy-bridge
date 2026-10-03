@@ -15,7 +15,7 @@ A standalone Antigravity CLI (`agy`) provider and capability bridge plugin for [
 
 - **Native Pi tool execution**: Pi tools (`read`, `edit`, `bash`, custom extensions, and PTY terminals) are exposed to AGY through an ephemeral local MCP server over Unix domain sockets. AGY delegates tool calls back to Pi's runtime environment and policy controls.
 - **Per-request token usage**: Input, output, cache-read, and thinking tokens are reported per model request (the latest AGY step's snapshot). AGY's session-cumulative `result` usage is intentionally excluded so Pi's context display and auto-compaction decisions operate on real context size.
-- **Dynamic model discovery**: Discovers available models directly via `agy models`, caches the catalog locally, and applies family-specific context windows (Claude, Gemini, GPT-OSS) alongside user `modelOverrides`.
+- **Dynamic model discovery**: Discovers available models directly via `agy models`, persists the catalog through Pi’s native models-store, and applies family-specific context windows (Claude, Gemini, GPT-OSS) alongside user `modelOverrides`.
 - **Three-tier session synchronization**: Preserves long-running AGY sub-processes across sequential turns (continue), resumes existing conversations across restarts via conversation IDs (resume), or reconstructs branched history cleanly using structured XML payloads (rebuild).
 - **Strict isolation & security**: Enforces a strict tool allowlist, restricts socket permissions to `0o600`, and virtualizes PTY terminal handles (`terminal-1`) to isolate internal process identifiers.
 
@@ -55,6 +55,12 @@ Available AGY models are detected automatically from `agy models`.
     Native Pi Tools                                            call_mcp_tool
  (read, edit, bash, pty)                                   (exposes Pi tools via MCP)
 ```
+
+### Model Discovery and Persistence
+
+Models discovered through `agy models` are persisted and restored through Pi’s
+native models-store. Model metadata defaults are defined in
+`discovery/model.json`; `models.json.modelOverrides` takes precedence.
 
 ### Tool Execution
 
@@ -96,8 +102,10 @@ setupAgyProvider(pi, {
 ### Health Check
 
 Run `/agy-bridge:doctor` to check the AGY executable and version, installed
-plugin version, model cache, and MCP entrypoint. The report is in English and
-does not install or update plugins or run model discovery. Missing or outdated
+plugin version, configured model count (when supplied) or cached catalog count
+from Pi’s models-store, and MCP entrypoint. The report is in English and
+does not read the models-store directly, install or update plugins, or run model
+discovery. Missing or outdated
 plugins are handled automatically on the next AGY runtime start.
 
 Recent plugin installation/update and model discovery errors are shown for the

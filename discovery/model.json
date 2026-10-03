@@ -1,6 +1,17 @@
 {
   "default": {
-    "contextWindow": 272000
+    "contextWindow": 272000,
+    "maxTokens": 16384,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    }
   },
   "families": {
     "claude-": {
@@ -11,6 +22,89 @@
     },
     "gemini-": {
       "contextWindow": 1048576
+    }
+  },
+  "models": {
+    "gemini-3.8-flash": {
+      "maxTokens": 65536,
+      "cost": {
+        "input": 1.5,
+        "output": 7.5,
+        "cacheRead": 0.15,
+        "cacheWrite": 0
+      }
+    },
+    "gemini-3.7-flash": {
+      "maxTokens": 65536,
+      "cost": {
+        "input": 1.5,
+        "output": 7.5,
+        "cacheRead": 0.15,
+        "cacheWrite": 0
+      }
+    },
+    "gemini-3.6-flash": {
+      "maxTokens": 65536,
+      "cost": {
+        "input": 1.5,
+        "output": 7.5,
+        "cacheRead": 0.15,
+        "cacheWrite": 0
+      }
+    },
+    "gemini-3.1-pro": {
+      "maxTokens": 65536,
+      "cost": {
+        "input": 2,
+        "output": 12,
+        "cacheRead": 0.2,
+        "cacheWrite": 0,
+        "tiers": [
+          {
+            "inputTokensAbove": 200000,
+            "input": 4,
+            "output": 18,
+            "cacheRead": 0.4,
+            "cacheWrite": 0
+          }
+        ]
+      }
+    },
+    "gemini-3.1-pro-preview": {
+      "maxTokens": 65536,
+      "cost": {
+        "input": 2,
+        "output": 12,
+        "cacheRead": 0.2,
+        "cacheWrite": 0,
+        "tiers": [
+          {
+            "inputTokensAbove": 200000,
+            "input": 4,
+            "output": 18,
+            "cacheRead": 0.4,
+            "cacheWrite": 0
+          }
+        ]
+      }
+    },
+    "gemini-3.1-pro-preview-customtools": {
+      "maxTokens": 65536,
+      "cost": {
+        "input": 2,
+        "output": 12,
+        "cacheRead": 0.2,
+        "cacheWrite": 0,
+        "tiers": [
+          {
+            "inputTokensAbove": 200000,
+            "input": 4,
+            "output": 18,
+            "cacheRead": 0.4,
+            "cacheWrite": 0
+          }
+        ]
+      }
     }
   }
 }

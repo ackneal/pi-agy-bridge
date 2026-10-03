@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { readPluginManifest, resolveMcpEntrypoint } from "../discovery/plugin-install.ts";
-import { MODEL_CACHE_PATH } from "../discovery/models.ts";
 import { DEFAULT_MIN_AGY_VERSION, resolveAgyExecutable, validateAgyVersion } from "../runtime/version.ts";
 
 export interface DoctorFailure {
@@ -14,16 +13,13 @@ export interface DoctorOptions {
   minVersion?: string | undefined;
   pluginDir: string;
   models?: readonly unknown[] | undefined;
+  catalogModels?: readonly unknown[] | undefined;
   pluginError?: DoctorFailure | undefined;
   discoveryError?: DoctorFailure | undefined;
 }
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function missing(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 /** Read-only checks; the only subprocess is AGY --version. */
@@ -59,17 +55,8 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
   if (options.models !== undefined) {
     lines.push(`${options.models.length > 0 ? "✓" : "!"} Models: ${options.models.length} configured`);
   } else {
-    try {
-      const value: unknown = JSON.parse(await fs.readFile(MODEL_CACHE_PATH, "utf8"));
-      if (!Array.isArray(value) || !value.every(model =>
-        model !== null && typeof model === "object" && !Array.isArray(model) &&
-        typeof model.id === "string" && typeof model.name === "string")) {
-        throw new Error(`Invalid model cache: ${MODEL_CACHE_PATH}`);
-      }
-      lines.push(`${value.length > 0 ? "✓" : "!"} Models: ${value.length} cached (${MODEL_CACHE_PATH})`);
-    } catch (error) {
-      lines.push(missing(error) ? `! Models: no cache (${MODEL_CACHE_PATH})` : `✗ Model cache error: ${message(error)}`);
-    }
+    const count = options.catalogModels?.length ?? 0;
+    lines.push(`${count > 0 ? "✓" : "!"} Models: ${count} cached (Pi models-store)`);
   }
 
   lines.push(`Node version: ${process.version}`);

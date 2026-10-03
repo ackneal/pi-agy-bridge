@@ -22,7 +22,7 @@ import {
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
 import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../discovery/plugin-install.ts";
 import { validateAgyVersion } from "../runtime/version.ts";
-import { cacheAgyModels, discoverAgyModels, loadCachedAgyModels } from "../discovery/models.ts";
+import { discoverAgyModels, restoreStoredAgyModels } from "../discovery/models.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
 import type { AgyBridgeConfig } from "../shared/types.ts";
 import { collectDoctorReport, type DoctorFailure } from "./doctor.ts";
@@ -462,6 +462,8 @@ export class AgyBridge {
   }
 
   public start(): void {
+    let models: ProviderModelConfig[] = this.config?.models ?? [];
+
     this.pi.registerCommand("agy-bridge:doctor", {
       description: "Check AGY CLI, plugin installation, models, and MCP",
       handler: async () => {
@@ -471,6 +473,7 @@ export class AgyBridge {
           minVersion: this.config?.minVersion,
           pluginDir: rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR,
           models: this.config?.models,
+          catalogModels: models,
           pluginError: this.pluginError,
           discoveryError: this.discoveryError,
         });
@@ -482,38 +485,16 @@ export class AgyBridge {
       },
     });
 
-    this.pi.on("session_start", (_event, ctx) => {
+    this.pi.on("session_start", async (_event, ctx) => {
       this.piContextAdapter.bind(ctx.sessionManager);
+      if (!this.config?.models) {
+        await ctx.modelRegistry.refresh({ providers: ["agy"], allowNetwork: true });
+      }
     });
     this.pi.on("session_shutdown", async () => {
       await this.liveSessions.disposeAll();
       this.piContextAdapter.clear();
     });
-
-    const models = this.config?.models ?? loadCachedAgyModels();
-    let refreshPromise: Promise<void> | undefined;
-    const refreshModels = (signal?: AbortSignal): Promise<ProviderModelConfig[]> => {
-      if (!refreshPromise) {
-        refreshPromise = discoverAgyModels(this.config?.agyPath, signal)
-          .then(async (discovered) => {
-            this.discoveryError = undefined;
-            models.splice(0, models.length, ...discovered);
-            await cacheAgyModels(discovered);
-          })
-          .catch((error) => {
-            this.discoveryError = {
-              time: new Date().toISOString(),
-              message: error instanceof Error ? error.message : String(error),
-            };
-            debugLog("models", "Model refresh failed; retaining cached models:", error);
-          })
-          .finally(() => {
-            refreshPromise = undefined;
-          });
-      }
-
-      return Promise.resolve(models);
-    };
 
     this.pi.registerProvider("agy", {
       name: "agy",
@@ -521,16 +502,40 @@ export class AgyBridge {
       apiKey: "not-used",
       api: "agy" as any,
       models,
-      ...(this.config?.models ? {} : { refreshModels: ({ signal }) => refreshModels(signal) }),
+      ...(this.config?.models ? {} : {
+        refreshModels: async (context) => {
+          if (context.signal.aborted) return models;
+
+          if (context.stored) {
+            const restored = restoreStoredAgyModels(context.stored.models);
+            const accepted = await context.publish({ update: () => { models = restored; } });
+            if (!accepted) return models;
+          }
+          if (!context.allowNetwork) return models;
+
+          try {
+            const discovered = await discoverAgyModels(this.config?.agyPath, context.signal);
+            await context.publish({
+              persist: { models: discovered },
+              update: () => {
+                models = discovered;
+                this.discoveryError = undefined;
+              },
+            });
+          } catch (error) {
+            if (context.signal.aborted) throw error;
+            this.discoveryError = {
+              time: new Date().toISOString(),
+              message: error instanceof Error ? error.message : String(error),
+            };
+            debugLog("models", "Model refresh failed; retaining cached models:", error);
+          }
+          return models;
+        },
+      }),
       streamSimple: (model, context, options) =>
         streamAgyProvider(model, context, options, this.config, this),
     });
-
-    if (!this.config?.models) {
-      void refreshModels().catch((error) => {
-        debugLog("models", "Background model refresh failed:", error);
-      });
-    }
   }
 }
 
