@@ -339,6 +339,21 @@ export function streamAgyProvider(
 
       turnCounted = true;
       debugArtifact("assistant-message", { sessionId: liveSession.piSessionId, message: adapter.message });
+      if (adapter.message.stopReason === "error") {
+        mcpServer?.setToolCallHandler(null);
+        cleanup();
+
+        // Both methods invalidate state synchronously before their asynchronous cleanup.
+        // Do not let the next Pi turn resume a conversation that just failed.
+        void bridge.runtimeSessionStore.delete(liveSession.piSessionId).catch((error) => {
+          debugLog("session", "Could not invalidate failed AGY runtime reference:", error);
+        });
+        void liveSession.dispose().catch((error) => {
+          debugLog("session", "Could not dispose failed AGY runtime:", error);
+        });
+        return;
+      }
+
       const responseId = adapter.message.responseId;
       if (!liveSession.conversationId && typeof responseId === "string" && responseId.length > 0) {
         liveSession.conversationId = responseId;
@@ -435,9 +450,15 @@ export function streamAgyProvider(
       const errorMsg = err instanceof Error ? err.message : String(err);
       debugLog("register", "Turn execution failed:", errorMsg);
       adapter.handleTermination(options?.signal?.aborted ? "aborted" : "error", errorMsg);
-      await liveSession.dispose();
+      if (adapter.message.stopReason === "error") {
+        completeTurn();
+      } else {
+        await liveSession.dispose();
+      }
     }
-  })();
+  })().catch((error) => {
+    debugLog("session", "AGY turn cleanup failed:", error);
+  });
 
   return stream;
 }
