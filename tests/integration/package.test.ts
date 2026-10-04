@@ -9,7 +9,7 @@ import { describe, it } from "node:test";
 const execFileAsync = promisify(execFile);
 const projectDir = path.resolve(import.meta.dirname, "../..");
 
-describe("AGY MCP package", () => {
+describe("Antigravity CLI MCP package", () => {
   it("resolves the documented package-root API to the shipped TypeScript entrypoint", async () => {
     assert.equal(import.meta.resolve("@ackneal/pi-agy-bridge"), new URL("../../src/extension/index.ts", import.meta.url).href);
     const api = await import("@ackneal/pi-agy-bridge");
