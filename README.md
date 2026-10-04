@@ -1,153 +1,99 @@
 # pi-agy-bridge
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Package Manager](https://img.shields.io/badge/managed_with-bun-black?logo=bun)](https://bun.sh)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)]()
 [![Pi Extension](https://img.shields.io/badge/pi-extension-purple.svg)](https://github.com/earendil-works/pi-coding-agent)
 
-A standalone Antigravity CLI (`agy`) provider and capability bridge plugin for [Pi](https://github.com/earendil-works/pi-coding-agent).
+Use Antigravity CLI (`agy`) as the model runtime for [Pi](https://github.com/earendil-works/pi-coding-agent), while Pi manages tools, permissions, and conversation history.
 
-`pi-agy-bridge` lets Pi delegate reasoning and code generation to Antigravity CLI while everything else stays native to Pi: tools execute in Pi's runtime under its policy controls, per-request token usage feeds Pi's context display and auto-compaction, models are discovered dynamically into the native model picker, and AGY sessions stay synchronized with Pi history.
-
----
+The bridge invokes your installed Antigravity CLI directly and uses its authentication flow. It does not extract authentication tokens or call Antigravity's backend APIs directly.
 
 ## Features
 
-- **Native Pi tool execution**: Pi tools (`read`, `edit`, `bash`, custom extensions, and PTY terminals) are exposed to AGY through an ephemeral local MCP server over Unix domain sockets. AGY delegates tool calls back to Pi's runtime environment and policy controls.
-- **Per-request token usage**: Input, output, cache-read, and thinking tokens are reported per model request (the latest AGY step's snapshot). AGY's session-cumulative `result` usage is intentionally excluded so Pi's context display and auto-compaction decisions operate on real context size.
-- **Dynamic model discovery**: Discovers available models directly via `agy models`, persists the catalog through Pi’s native models-store, and applies family-specific context windows (Claude, Gemini, GPT-OSS) alongside user `modelOverrides`.
-- **Three-tier session synchronization**: Preserves long-running AGY sub-processes across sequential turns (continue), resumes existing conversations across restarts via conversation IDs (resume), or reconstructs branched history cleanly using structured XML payloads (rebuild).
-- **Strict isolation & security**: Enforces a strict tool allowlist, restricts socket permissions to `0o600`, and virtualizes PTY terminal handles (`terminal-1`) to isolate internal process identifiers.
+- **Native Pi tools**: Run filesystem tools, shell commands, custom extensions, and PTY terminals in Pi through a local MCP bridge.
+- **Native model selection**: Select Antigravity CLI models in Pi's model picker, with automatic discovery and catalog caching.
+- **Conversation continuity**: Reuse conversations across turns and restarts, rebuilding context when Pi history changes.
+- **Context usage reporting**: Provide per-request token usage for Pi's context display and automatic compaction.
 
----
+## Requirements
 
-## Prerequisites
-
-- **Pi Coding Agent**: `@earendil-works/pi-coding-agent` (>= 1.0.0, < 2.0.0)
-- **Antigravity CLI**: `agy` (>= 1.1.15) installed in your `$PATH`; model use requires a valid AGY login
-- **Operating System**: macOS or Linux (requires Unix domain socket support)
-- **Node.js**: Required by Pi and the packaged MCP executable; Node.js >= 22.6 is required to run this repository's TypeScript test command directly
-
----
+- **Pi Coding Agent**: `@earendil-works/pi-coding-agent` >= 1.0.0, < 2.0.0, using a Node.js version supported by Pi.
+- **Antigravity CLI**: `agy` >= 1.1.15, installed at `~/.local/bin/agy` or available in your `PATH`.
+- **Supported platforms**: macOS or Linux with Unix domain socket support. Native Windows is not supported.
+- **CLI authentication**: Valid Antigravity CLI authentication is required to use models.
 
 ## Quick Start
 
-Install the bridge directly from Git:
+### 1. Install
 
 ```bash
-pi install git:git@github.com:ackneal/pi-agy-bridge.git
+pi install git:github.com/ackneal/pi-agy-bridge
 ```
 
-Start Pi. If `auth.json` has no `agy` credential, the bridge checks existing AGY login in the background using the CLI's built-in `agy --print /usage` report, not a model request. This can take several seconds; each probe allows up to 30 seconds without blocking Pi. The check succeeds only when the CLI exits normally and its output contains `Quota` or `Limit Remaining`. Unrecognized output leaves authentication status unknown; the bridge does not retry. The automatic check never asks for an authorization code. A successful quota report saves a local no-secret OAuth setup marker and refreshes the model selector. Missing CLI, no login, or a timeout leaves credentials unchanged and does not block Pi. This first background enablement happens after initial model selection and does not automatically switch models.
+Start Pi after installation. The bridge installs or updates its bundled plugin automatically when you use an Antigravity CLI model.
 
-To sign in explicitly, run Pi’s native `/login` and select **Antigravity CLI [pi-agy-bridge]**. The same quota report checks existing AGY login first, so a cached-login check can also take several seconds. If AGY explicitly reports that authentication is required, the bridge displays AGY's browser URL and forwards the authorization code entered in Pi back to AGY. No model prompt is sent.
+### 2. Sign In (If Needed)
 
-Interactive login uses the system `script`, `cat`, and `ps` utilities and requires PTY access; its real AGY handshake still needs validation. If PTY access is unavailable, authenticate with `agy` in a terminal and retry.
+If the bridge is not yet configured in Pi, it checks for existing Antigravity CLI authentication in the background at startup. If you are already authenticated, allow a few seconds for your models to appear, then continue to model selection.
 
-Pi treats this flow as a subscription login, not an API key (`isSubscription: true`); this classification does not verify subscription entitlements. Pi stores only a local `type: "oauth"` no-secret setup marker with empty `access` and `refresh` values and a one-year expiry, while actual credentials remain owned and saved by AGY CLI. Existing markers are used without another authentication probe. Legacy enabled `api_key` markers are upgraded to OAuth at startup without probing. OAuth refresh only extends the local expiry by one year: it makes no network request and does not change the login epoch. If the AGY login expires, the AGY runtime reports the failure; use `/login` to authenticate again.
+To sign in to Antigravity CLI through Pi, run `/login`, select **Antigravity CLI [pi-agy-bridge]**, and follow the authorization prompts.
 
-Open `/model`, search for `agy`, and select a model labeled `[agy]`. Available AGY models are detected automatically from `agy models`.
+Your credentials remain with Antigravity CLI. Pi stores only a local setting that enables the bridge.
 
-Pi’s `/logout` for AGY deletes the Pi credential, hides available AGY models, and blocks future bridge requests. It keeps the AGY CLI login; use `/login` and select **Antigravity CLI [pi-agy-bridge]** again to check that login or sign in again. On the next Pi restart, an AGY CLI login that is still valid enables the bridge automatically again. Reloading or branching a session does not automatically re-enable it in the same Pi process.
+> **Note:** `/logout` disables the bridge in Pi but does not sign you out of Antigravity CLI. Restarting Pi may automatically enable the bridge again.
 
----
+### 3. Choose a Model
+
+Open `/model`, search for `agy`, and select a model labeled `[agy]`. Continue using Pi's tools and commands as usual.
 
 ## How It Works
 
-```text
-┌────────────────────────┐      Unix Domain Socket       ┌────────────────────────┐
-│   Pi Coding Harness    │◄─────────────────────────────►│    Antigravity CLI     │
-│  (@earendil-works/pi)  │          MCP Broker           │     (`agy` runtime)    │
-└───────────┬────────────┘                               └───────────┬────────────┘
-            │                                                        │
-    Native Pi Tools                                            call_mcp_tool
- (read, edit, bash, pty)                                   (exposes Pi tools via MCP)
-```
+Pi sends context to Antigravity CLI through standard input and receives streamed responses and token usage through standard output.
 
-### Model Discovery and Persistence
+### Tools and Permissions
 
-Models discovered through `agy models` are persisted and restored through Pi’s native models-store. Model metadata defaults are defined in `discovery/model.json`; `models.json.modelOverrides` takes precedence.
+The bridge exposes Pi's current tools through a local MCP server. Requests travel from Antigravity CLI through the server and a Unix socket to Pi, where tools run under Pi's policies. Results return along the same path.
 
-### Tool Execution
+Pi also manages custom tools and skills. Antigravity CLI's own executable tools are blocked, keeping tool execution in Pi.
 
-The bridge exposes active Pi tools to AGY through an ephemeral MCP server over a private Unix domain socket. AGY delegates tool calls back to Pi, where they run with Pi's permissions, session resources, and policy controls. AGY cannot bypass Pi by invoking unapproved executable tools directly.
+### Sessions and Context
 
-The bridge follows Pi's current tool declarations, including transcript tool additions and removals. It does not expose every registered tool. Declared codemode and tool-search entrypoints are relayed like other Pi tool calls; the underlying tools remain managed by Pi.
+Sequential turns reuse the same Antigravity CLI conversation. The bridge saves a conversation reference with the Pi session to resume it after a restart when the history still matches.
 
-### Session and Conversation Synchronization
+After compaction, branching, or other history changes, the bridge rebuilds the context in a new conversation using Pi's current instructions, retained messages, and tool results. The Pi session itself is unchanged.
 
-Sequential turns reuse the same AGY process and conversation. After Pi or the AGY process restarts, the bridge resumes the AGY conversation when its recorded history still matches the active Pi branch.
+> **Note:** The bridge reuses existing Antigravity CLI conversations whenever possible instead of creating a one-shot conversation for each request, avoiding unnecessary conversation buildup.
 
-Pi compaction, branching, or another history rewrite invalidates that continuation. Additional Pi instructions arriving alongside pending tool results also require reconstruction: the bridge closes the waiting runtime before starting a replacement, rather than sending a second prompt into the active turn. The new AGY conversation receives Pi's current system instructions, compaction summary, retained messages, tool results, and current message. The Pi session itself remains unchanged.
+### Model Discovery
 
-### Usage Accounting
+The bridge reads Antigravity CLI's model catalog and caches it in Pi across restarts. If a refresh fails, it retains the cached catalog. Your Pi model overrides take precedence over the bridge's defaults.
 
-AGY's `step_update` events carry per-request usage; each assistant message reports the latest step's snapshot. `totalTokens` is computed as `input + output + cacheRead` (AGY's own `total_tokens` field omits cache reads, which would make the reported context size swing with the cache hit/miss cycle). The session-cumulative `result` usage is billing data only and is never merged into Pi-facing usage, so Pi's threshold and overflow compaction checks always see the true single-request context size.
+### Token Usage
 
----
+The bridge reports token usage from the latest model request, not the conversation's accumulated totals. The context count includes cache-read tokens so Pi can use it for context display and automatic compaction.
 
-## Programmatic API
+### Cancellation and Errors
 
-For custom Pi harnesses or scripting, use a runtime or loader that supports TypeScript dependencies (such as Bun). The package exports TypeScript source, not compiled JavaScript:
+Cancelling a request stops its Antigravity CLI process and closes the MCP connection. If the process does not initialize within 30 seconds, the bridge terminates it and reports an error to Pi.
 
-```typescript
-import { setupAgyProvider } from "pi-agy-bridge";
+Input-stream failures and unexpected exits during an active request are also reported as errors, rather than leaving Pi waiting for a response.
 
-setupAgyProvider(pi, {
-  agyPath: "agy",            // Custom binary path (defaults to "agy")
-  minVersion: "1.1.15",      // Minimum supported CLI version
-  agentName: "pi-bridge",    // Bridge agent configuration name
-  pluginDir: "./plugin",     // Optional custom AGY plugin source directory
-  authPath: "./auth.json",   // Optional SDK custom credential storage path
-  debug: false               // Enable verbose stderr logging
-});
-```
+## Troubleshooting
 
-`authPath?: string` defaults to `auth.json` under Pi’s `getAgentDir()`. SDK harnesses with a custom auth path should pass the same path here so startup detection reads and writes the correct credential store.
+Run `/agy-bridge:doctor` in Pi to check the Antigravity CLI version, plugin status, and recent errors. The report shows the last known authentication status; use `/login` for a fresh check.
 
-### Health Check
+- **Missing models**: Run `/login`, select **Antigravity CLI [pi-agy-bridge]**, then reopen `/model`. If models are still missing, run `agy models` in a terminal to check model availability directly.
+- **Sign-in failures**: If authentication expires, run `/login` again. If interactive sign-in fails in Pi, sign in to Antigravity CLI in a terminal using `agy`, then retry `/login` in Pi.
 
-Run `/agy-bridge:doctor` to check the AGY executable and version, installed plugin version, configured model count (when supplied) or cached catalog count from Pi’s models-store, and MCP entrypoint. The report is in English and does not read the models-store directly, install or update plugins, or run model discovery. Missing or outdated plugins are handled automatically on the next AGY runtime start.
+### Diagnostic Logs
 
-The report shows the most recent explicit-login or startup auto-detection snapshot (unknown means no login was verified in the current Pi process) and recent login, plugin installation/update, and model discovery errors for the current Pi process only. An existing setup marker alone does not establish that authentication is valid. Doctor does not probe live authentication; model execution and Unix socket creation are also not tested.
-
-### Debugging
-
-Enable verbose diagnostic logs across all bridge components:
+For additional detail, enable logging before starting Pi:
 
 ```bash
 export AGY_BRIDGE_DEBUG=1
 ```
 
-Logs are printed to `stderr` with scoped tags such as `[agy:mcp]`, `[agy:process]`, `[agy:session]`, and `[agy:events]`.
-
----
-
-## Development
-
-The project is developed and managed using [Bun](https://bun.sh).
-
-```bash
-# Install dependencies
-bun install
-
-# Run TypeScript type check
-bun run typecheck
-
-# Run test suite
-bun run test
-```
-
----
-
-## Limitations
-
-- **Platform**: Requires Unix domain sockets. Supported on macOS and Linux. Native Windows is unsupported; WSL2 may work but is not covered by the test suite.
-- **Startup credential race**: Pi 1.0.0 does not expose a conditional credential commit. A login or logout that occurs between the background check's final credential comparison and Pi's write can still be overwritten.
-- **Sandboxed Environments**: Environments that strictly restrict Unix socket creation (`EPERM`) cannot run the MCP broker.
-- **External Tools**: Non-Pi AGY internal tools (except internal coordination tools like `call_mcp_tool`) are blocked by design to prevent bypassing Pi policy.
-
----
+Start Pi from the same terminal. Diagnostic logs are written to `stderr` with `[agy:...]` tags.
 
 ## License
 
