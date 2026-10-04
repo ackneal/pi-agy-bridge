@@ -41,6 +41,7 @@
     ]
   },
   "scripts": {
+    "check:version": "node scripts/check-version.js",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --experimental-strip-types --test --test-timeout=15000 \"**/*.test.ts\""
   },
