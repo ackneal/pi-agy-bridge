@@ -12,25 +12,21 @@
   "license": "MIT",
   "packageManager": "bun@1.3.13",
   "type": "module",
-  "exports": "./index.ts",
+  "exports": "./src/extension/index.ts",
   "bin": {
-    "pi-agy-bridge-mcp": "./mcp/index.js"
+    "pi-agy-bridge-mcp": "./src/mcp/index.js"
   },
   "files": [
-    "index.ts",
-    "shared",
-    "runtime",
-    "bridge",
-    "session",
-    "discovery",
-    "provider",
-    "mcp",
+    "src/extension",
+    "src/mcp",
     "plugin",
+    "README.md",
+    "LICENSE",
     "!**/*.test.ts"
   ],
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./src/extension/index.ts"
     ]
   },
   "scripts": {

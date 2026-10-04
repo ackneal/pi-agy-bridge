@@ -7,17 +7,17 @@ import { promisify } from "node:util";
 import { describe, it } from "node:test";
 
 const execFileAsync = promisify(execFile);
-const projectDir = path.resolve(import.meta.dirname);
+const projectDir = path.resolve(import.meta.dirname, "../..");
 
 describe("AGY MCP package", () => {
   it("resolves the documented package-root API to the shipped TypeScript entrypoint", async () => {
-    assert.equal(import.meta.resolve("pi-agy-bridge"), new URL("./index.ts", import.meta.url).href);
+    assert.equal(import.meta.resolve("pi-agy-bridge"), new URL("../../src/extension/index.ts", import.meta.url).href);
     const api = await import("pi-agy-bridge");
     assert.equal(typeof api.setupAgyProvider, "function");
     assert.equal(typeof api.default, "function");
   });
 
-  it("packs the static plugin and executable JavaScript without local artifacts", async () => {
+  it("packs the plugin payload and executable JavaScript without local artifacts", async () => {
     const cache = await mkdtemp(path.join(os.tmpdir(), "pi-gear-npm-cache-"));
     try {
       const { stdout } = await execFileAsync(
@@ -29,10 +29,13 @@ describe("AGY MCP package", () => {
       const files = report[0]?.files.map((file) => file.path) ?? [];
 
       for (const required of [
-        "index.ts",
-        "discovery/model.json",
-        "mcp/index.js",
-        "mcp/socket.js",
+        "src/extension/index.ts",
+        "src/extension/discovery/model.json",
+        "src/mcp/index.js",
+        "src/mcp/socket.js",
+        "src/mcp/socket.d.ts",
+        "README.md",
+        "LICENSE",
         "plugin/plugin.json",
         "plugin/mcp_config.json",
         "plugin/agents/pi-bridge.md",
@@ -42,18 +45,18 @@ describe("AGY MCP package", () => {
 
       const moduleDirs = ["shared", "runtime", "bridge", "session", "discovery", "provider"];
       for (const dir of moduleDirs) {
-        const entries = await readdir(path.join(projectDir, dir), { recursive: true });
+        const entries = await readdir(path.join(projectDir, "src/extension", dir), { recursive: true });
         const modules = entries
           .map(String)
           .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
         for (const module of modules) {
-          const packedPath = path.posix.join(dir, ...module.split(path.sep));
+          const packedPath = path.posix.join("src/extension", dir, ...module.split(path.sep));
           assert.ok(files.includes(packedPath), `missing packed module: ${packedPath}`);
         }
       }
       assert.ok(!files.some((file) => file.includes("/.gemini/") || file.includes("/__tests__/") || file.endsWith(".test.ts")));
 
-      const binPath = path.join(projectDir, "mcp/index.js");
+      const binPath = path.join(projectDir, "src/mcp/index.js");
       await access(binPath);
       assert.notEqual((await stat(binPath)).mode & 0o111, 0, "packaged MCP bin must be executable");
     } finally {

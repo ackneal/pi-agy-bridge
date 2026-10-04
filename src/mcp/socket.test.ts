@@ -9,7 +9,7 @@ import {
   formatBridgeUri,
   parseBridgeUri,
   type BridgeSocketClient,
-} from "../mcp/socket.js";
+} from "./socket.js";
 
 type Message = Record<string, unknown>;
 type Fixture = {

@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import { Type } from "typebox";
 import { fileURLToPath } from "node:url";
 import { AgyMcpServer, cleanOrphanSockets } from "./bridge-ipc.ts";
-import { connectBridge, parseBridgeUri } from "../mcp/socket.js";
+import { connectBridge, parseBridgeUri } from "../../mcp/socket.js";
 
 describe("AgyMcpServer", () => {
   for (const phase of ["mkdir", "listen", "chmod", "failure"] as const) {
@@ -333,7 +333,7 @@ describe("AgyMcpServer", () => {
     ["unix:///tmp/pi.sock", "Bridge URI must use unix:///absolute/socket/path?session=<session-id>"],
   ] as const) {
     it(`fails clearly for invalid MCP command endpoint ${JSON.stringify(bridgeUri)}`, async () => {
-      const scriptPath = fileURLToPath(new URL("../mcp/index.js", import.meta.url));
+      const scriptPath = fileURLToPath(new URL("../../mcp/index.js", import.meta.url));
       const child = spawn("sh", ["-c", 'exec "$PI_AGY_BRIDGE_MCP_NODE" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'], {
         stdio: ["pipe", "pipe", "pipe"],
         env: {

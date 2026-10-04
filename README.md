@@ -95,6 +95,20 @@ export AGY_BRIDGE_DEBUG=1
 
 Start Pi from the same terminal. Diagnostic logs are written to `stderr` with `[agy:...]` tags.
 
+## Repository Boundaries and Development
+
+The target repository layout separates the Pi extension in `src/extension/` (entry point: `index.ts`) from the Node.js MCP companion in `src/mcp/` (entry point: `index.js`). The bundled Antigravity plugin payload lives in `plugin/`; tool execution remains in Pi. Unit tests are colocated with their source as `*.test.ts`, while integration tests live in `tests/`. Tests are excluded from the published package.
+
+Use Bun for dependency installation and development commands:
+
+```bash
+bun install
+bun run typecheck
+bun run test
+```
+
+These commands preserve the existing package scripts: typechecking uses TypeScript, and the test suite uses Node.js with `node:test` and type stripping, not Bun's test runner. A Node.js version supporting the test script's flags is required.
+
 ## License
 
 [MIT](LICENSE)

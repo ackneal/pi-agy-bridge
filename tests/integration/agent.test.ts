@@ -2,19 +2,19 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { BridgeIPC } from "./bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../../src/extension/bridge/bridge-ipc.ts";
 import { mkdtemp, symlink, writeFile, rm, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-const projectDir = fileURLToPath(new URL("./", import.meta.url));
-const pluginDir = fileURLToPath(new URL("./plugin/", import.meta.url));
+const projectDir = fileURLToPath(new URL("../../", import.meta.url));
+const pluginDir = fileURLToPath(new URL("../../plugin/", import.meta.url));
 
 describe("static AGY bridge plugin", () => {
   it("keeps package, plugin, and MCP versions aligned", async () => {
     const packageManifest = JSON.parse(await readFile(`${projectDir}/package.json`, "utf-8"));
     const pluginManifest = JSON.parse(await readFile(`${pluginDir}/plugin.json`, "utf-8"));
-    const mcpEntrypoint = await readFile(`${projectDir}/mcp/index.js`, "utf-8");
+    const mcpEntrypoint = await readFile(`${projectDir}/src/mcp/index.js`, "utf-8");
 
     assert.equal(packageManifest.version, "0.1.3");
     assert.equal(pluginManifest.version, packageManifest.version);
@@ -83,7 +83,7 @@ describe("static AGY bridge plugin", () => {
         process.execPath = originalNodePath;
       }
       assert.equal(environment.PI_AGY_BRIDGE_MCP_NODE, nodePath);
-      assert.equal(environment.PI_AGY_BRIDGE_MCP_ENTRYPOINT, fileURLToPath(new URL("./mcp/index.js", import.meta.url)));
+      assert.equal(environment.PI_AGY_BRIDGE_MCP_ENTRYPOINT, fileURLToPath(new URL("../../src/mcp/index.js", import.meta.url)));
       assert.equal(environment.PI_AGY_BRIDGE_MCP_ENDPOINT, bridge.bridgeUri);
 
       const result = spawnSync(command.command, command.args, {
