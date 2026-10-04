@@ -314,3 +314,130 @@ process.stdin.resume();
     assert.deepEqual(await iterator.next(), { value: undefined, done: true });
   });
 }
+
+for (const row of [
+  { name: "before init", phase: "starting", failure: "event", result: false },
+  { name: "during a turn", phase: "started", failure: "event", result: false },
+  { name: "write callback failure without an emitted error", phase: "started", failure: "callback-only", result: false },
+  { name: "write callback then emitted error", phase: "started", failure: "callback", result: false },
+  { name: "asynchronous writable destruction", phase: "started", failure: "destroy", result: false },
+  { name: "synchronous write failure", phase: "started", failure: "throw", result: false },
+  { name: "after a completed turn", phase: "started", failure: "event", result: true },
+  { name: "after abort", phase: "aborted", failure: "event", result: false },
+] as const) {
+  test(`handles stdin failure ${row.name}`, { timeout: 5000 }, async (t) => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-stdin-"));
+    t.after(() => rm(tempDir, { recursive: true, force: true }));
+    const executable = path.join(tempDir, "agy");
+    await writeFile(executable, `#!${process.execPath}
+${row.phase === "starting" ? "" : "process.stdout.write('{\"event\":\"init\"}\\n');"}
+process.stdin.resume();
+`, { mode: 0o755 });
+    const before = process.listeners("exit");
+    const proc = new AgyProcess({ agyPath: executable, agentName: "test", model: "test" });
+    t.after(() => proc.abort());
+    const starting = proc.start();
+    const child = (proc as unknown as { child: ChildProcess }).child;
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const rejection = row.phase === "starting"
+      ? assert.rejects(starting, (error: unknown) => {
+          assert.ok(error instanceof AgyProcessError);
+          assert.match(error.message, /stdin error: broken pipe/);
+          return true;
+        })
+      : null;
+    if (row.phase !== "starting") await starting;
+    if (row.phase === "aborted") await proc.abort();
+    if (row.result) child.stdout!.emit("data", Buffer.from('{"event":"result","status":"success"}\n'));
+    const iterator = proc.events()[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const error = Object.assign(new Error("broken pipe"), { code: "EPIPE" });
+
+    if (row.failure === "destroy") {
+      child.stdin!.destroy(error);
+      await new Promise<void>((resolve) => child.stdin!.once("close", resolve));
+    } else if (row.failure !== "event") {
+      t.mock.method(child.stdin!, "write", (_payload: unknown, _encoding: unknown, callback: (error: Error) => void) => {
+        if (row.failure === "throw") throw error;
+        callback(error);
+        if (row.failure === "callback") child.stdin!.emit("error", error);
+        return false;
+      });
+      await assert.rejects(proc.send({ event: "user", message: { content: "test" } }), (failure: unknown) => {
+        assert.ok(failure instanceof AgyProcessError);
+        assert.match(failure.message, /Failed to write turn to stdin: broken pipe/);
+        return true;
+      });
+    } else {
+      assert.doesNotThrow(() => child.stdin!.emit("error", error));
+    }
+    assert.equal(proc.isRunning, false);
+    // A second error during shutdown must stay handled without another result.
+    assert.doesNotThrow(() => child.stdin!.emit("error", error));
+    await rejection;
+    await closed;
+
+    const received = await pending;
+    if (row.phase === "started" && !row.result) {
+      assert.equal(received.value?.event, "result");
+      assert.equal(received.value?.status, "error");
+      assert.deepEqual(received.value?.error, { message: "Antigravity CLI stdin error: broken pipe" });
+      assert.equal((await iterator.next()).done, true);
+    } else {
+      assert.equal(received.done, true);
+    }
+    assert.equal(proc.isRunning, false);
+    assert.ok(child.exitCode !== null || child.signalCode !== null);
+    assert.deepEqual(process.listeners("exit"), before);
+    await assert.rejects(proc.send({ event: "user", message: { content: "later" } }), AgyProcessError);
+  });
+}
+
+for (const row of [
+  { name: "terminates a live child that never initializes", init: false, ignoreInterrupt: false },
+  { name: "escalates termination when a non-initializing child ignores SIGINT", init: false, ignoreInterrupt: true },
+  { name: "clears the timeout after successful initialization", init: true, ignoreInterrupt: false },
+] as const) {
+  test(row.name, { timeout: 5000 }, async (t) => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-timeout-"));
+    t.after(() => rm(tempDir, { recursive: true, force: true }));
+    const executable = path.join(tempDir, "agy");
+    await writeFile(executable, `#!${process.execPath}
+${row.ignoreInterrupt ? 'process.on("SIGINT", () => {});' : ""}
+process.stderr.write("waiting for initialization");
+${row.init ? "process.stdout.write('{\"event\":\"init\"}\\n');" : ""}
+process.stdin.resume();
+`, { mode: 0o755 });
+    const before = process.listeners("exit");
+    const proc = new AgyProcess({ agyPath: executable, agentName: "test", model: "test", initTimeoutMs: 500 });
+    t.after(() => proc.abort());
+    const starting = proc.start();
+    const child = (proc as unknown as { child: ChildProcess }).child;
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+
+    if (row.init) {
+      assert.equal((await starting).event, "init");
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      assert.equal(proc.isRunning, true);
+      await proc.abort();
+    } else {
+      await new Promise<void>((resolve) => child.stderr!.once("data", () => resolve()));
+      assert.equal(proc.isRunning, true);
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, null);
+
+      await assert.rejects(starting, (error: unknown) => {
+        assert.ok(error instanceof AgyProcessError);
+        assert.match(error.message, /Timed out waiting for agy init event after 500ms: waiting for initialization/);
+        assert.equal(error.stderr, "waiting for initialization");
+        return true;
+      });
+    }
+    await closed;
+
+    if (!row.init) assert.equal(child.signalCode, row.ignoreInterrupt ? "SIGKILL" : "SIGINT");
+    assert.equal(proc.isRunning, false);
+    assert.deepEqual(process.listeners("exit"), before);
+    assert.equal((await proc.events()[Symbol.asyncIterator]().next()).done, true);
+  });
+}

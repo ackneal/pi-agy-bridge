@@ -14,6 +14,7 @@ export interface AgyProcessOptions {
   cwd?: string | undefined;
   environment?: NodeJS.ProcessEnv | undefined;
   disableSlashCommands?: boolean | undefined;
+  initTimeoutMs?: number | undefined;
 }
 
 export class AgyRuntime {
@@ -27,6 +28,7 @@ export class AgyRuntime {
   private isTerminated = false;
   private hasTurnResult = false;
   private nodeExitListener: (() => void) | null = null;
+  private stdinErrorListener: ((error: Error) => void) | null = null;
 
   constructor(options: AgyProcessOptions) {
     this.options = options;
@@ -127,12 +129,47 @@ export class AgyRuntime {
 
     return new Promise<AgyInitEvent>((resolve, reject) => {
       let settled = false;
+      let failed = false;
       let unsubscribe = () => {};
+      const initTimeoutMs = this.options.initTimeoutMs ?? 30_000;
+      const initTimer = setTimeout(() => {
+        fail(new AgyProcessError(
+          `Timed out waiting for agy init event after ${initTimeoutMs}ms` +
+            (this.stderrBuffer.trim() ? `: ${this.stderrBuffer.trim().slice(-500)}` : ""),
+          { stderr: this.stderrBuffer }
+        ));
+      }, initTimeoutMs);
+
+      const fail = (error: AgyProcessError) => {
+        if (failed || this.eventStreamEnded) return;
+        failed = true;
+        clearTimeout(initTimer);
+        unsubscribe();
+
+        const awaitingInit = !settled;
+        settled = true;
+        if (!awaitingInit && !this.hasTurnResult) {
+          this.dispatchEvent({ event: "result", status: "error", error: { message: error.message } });
+        }
+
+        const cleanup = this.abort();
+        if (awaitingInit) void cleanup.then(() => reject(error), reject);
+      };
+
+      this.stdinErrorListener = (error) => {
+        fail(new AgyProcessError(`Antigravity CLI stdin error: ${error.message}`, {
+          stderr: this.stderrBuffer,
+        }));
+      };
+      // Writable errors can follow a write callback or arrive during teardown.
+      this.child!.stdin?.on("error", this.stdinErrorListener);
 
       const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
         this.cleanupNodeExitListener();
         this.isTerminated = true;
         this.endEventStream();
+        clearTimeout(initTimer);
+        if (failed) return;
 
         if (!settled) {
           settled = true;
@@ -166,6 +203,8 @@ export class AgyRuntime {
         this.cleanupNodeExitListener();
         this.isTerminated = true;
         this.endEventStream();
+        clearTimeout(initTimer);
+        if (failed) return;
 
         if (!settled) {
           settled = true;
@@ -196,6 +235,7 @@ export class AgyRuntime {
         if (event.event === "init") {
           if (!settled) {
             settled = true;
+            clearTimeout(initTimer);
             unsubscribe();
             resolve(event as AgyInitEvent);
           }
@@ -215,18 +255,22 @@ export class AgyRuntime {
     const payload = `${JSON.stringify(input)}\n`;
     this.hasTurnResult = false;
 
-    await new Promise<void>((resolve, reject) => {
-      this.child!.stdin!.write(payload, "utf-8", (err) => {
-        if (err) {
-          reject(
-            new AgyProcessError(`Failed to write turn to stdin: ${err.message}`, {
-              stderr: this.stderrBuffer,
-            })
-          );
-        } else {
-          resolve();
-        }
+    const writeError = (error: Error) => {
+      this.stdinErrorListener?.(error);
+      return new AgyProcessError(`Failed to write turn to stdin: ${error.message}`, {
+        stderr: this.stderrBuffer,
       });
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      try {
+        this.child!.stdin!.write(payload, "utf-8", (err) => {
+          if (err) reject(writeError(err));
+          else resolve();
+        });
+      } catch (err) {
+        reject(writeError(err instanceof Error ? err : new Error(String(err))));
+      }
     });
   }
 
