@@ -1,6 +1,5 @@
 # pi-agy-bridge
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)]()
 [![Pi Extension](https://img.shields.io/badge/pi-extension-purple.svg)](https://github.com/earendil-works/pi-coding-agent)
 
@@ -17,7 +16,7 @@ The bridge invokes your installed Antigravity CLI directly and uses its authenti
 
 ## Requirements
 
-- **Pi Coding Agent**: `@earendil-works/pi-coding-agent` >= 1.0.0, < 2.0.0, using a Node.js version supported by Pi.
+- **Pi Coding Agent**: Use a Node.js version supported by Pi. Development checks currently use `@earendil-works/pi-coding-agent` 1.0.2.
 - **Antigravity CLI**: `agy` >= 1.1.15, installed at `~/.local/bin/agy` or available in your `PATH`.
 - **Supported platforms**: macOS or Linux with Unix domain socket support. Native Windows is not supported.
 - **CLI authentication**: Valid Antigravity CLI authentication is required to use models.
@@ -25,6 +24,14 @@ The bridge invokes your installed Antigravity CLI directly and uses its authenti
 ## Quick Start
 
 ### 1. Install
+
+After the first npm publication, install the Pi package:
+
+```bash
+pi install npm:@ackneal/pi-agy-bridge
+```
+
+Until then, or to install directly from GitHub:
 
 ```bash
 pi install git:github.com/ackneal/pi-agy-bridge
@@ -97,18 +104,17 @@ Start Pi from the same terminal. Diagnostic logs are written to `stderr` with `[
 
 ## Repository Boundaries and Development
 
-The target repository layout separates the Pi extension in `src/extension/` (entry point: `index.ts`) from the Node.js MCP companion in `src/mcp/` (entry point: `index.js`). The bundled Antigravity plugin payload lives in `plugin/`; tool execution remains in Pi. Unit tests are colocated with their source as `*.test.ts`, while integration tests live in `tests/`. Tests are excluded from the published package.
+The repository separates the Pi extension in `src/extension/` (entry point: `src/extension/index.ts`, declared in `pi.extensions`) from the Node.js MCP companion in `src/mcp/` (entry point: `src/mcp/index.js`). The bundled Antigravity plugin payload lives in `plugin/`; tool execution remains in Pi. Unit tests are colocated with their source as `*.test.ts`, while integration tests live in `tests/integration/`. Tests are excluded from the published package.
 
 Use Bun for dependency installation and development commands:
 
 ```bash
 bun install
+bun run check:version
 bun run typecheck
 bun run test
 ```
 
+The pinned Pi packages in `devDependencies` are for local checks only; Pi provides them when loading an installed package.
+
 These commands preserve the existing package scripts: typechecking uses TypeScript, and the test suite uses Node.js with `node:test` and type stripping, not Bun's test runner. A Node.js version supporting the test script's flags is required.
-
-## License
-
-[MIT](LICENSE)

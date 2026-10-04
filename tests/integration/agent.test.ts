@@ -16,9 +16,9 @@ describe("static AGY bridge plugin", () => {
     const pluginManifest = JSON.parse(await readFile(`${pluginDir}/plugin.json`, "utf-8"));
     const mcpEntrypoint = await readFile(`${projectDir}/src/mcp/index.js`, "utf-8");
 
-    assert.equal(packageManifest.version, "0.1.3");
+    assert.match(packageManifest.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
     assert.equal(pluginManifest.version, packageManifest.version);
-    assert.match(mcpEntrypoint, new RegExp(`SERVER_INFO = \\{ name: "pi-agy-bridge", version: "${packageManifest.version}" \\}`));
+    assert.match(mcpEntrypoint, new RegExp(`SERVER_INFO = \\{ name: "pi-agy-bridge", version: "${packageManifest.version.replaceAll(".", "\\.")}" \\}`));
   });
 
   it("contains a static manifest and bridge agent", async () => {
@@ -26,7 +26,8 @@ describe("static AGY bridge plugin", () => {
     const markdown = await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8");
 
     assert.equal(manifest.name, "pi-agy-bridge");
-    assert.equal(manifest.version, "0.1.3");
+    const packageManifest = JSON.parse(await readFile(`${projectDir}/package.json`, "utf-8"));
+    assert.equal(manifest.version, packageManifest.version);
     assert.match(markdown, /^---\nname: pi-bridge\n/);
     assert.match(markdown, /\nmainAgent: true\n/);
     assert.match(markdown, /\nsubagent: false\n/);
