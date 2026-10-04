@@ -39,12 +39,12 @@ for (const scenario of [
     const authentication = new AgyAuthentication(undefined, async () => { throw new Error("real login forbidden"); });
     const runtime = await ModelRuntime.create({ authPath, modelsPath: null, refreshOnCreate: false });
     const models = parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)");
-    runtime.registerNativeProvider({ ...noRequests, id: "agy", name: "AGY", getModels: () => models, auth: { oauth: authentication.oauth } });
+    runtime.registerNativeProvider({ ...noRequests, id: "agy", name: "Antigravity CLI", getModels: () => models, auth: { oauth: authentication.oauth } });
     const registry = new ModelRegistry(runtime);
     const interaction = { signal: controller.signal, notify: () => {}, prompt: async () => { throw new Error("prompt forbidden"); } };
     const store = async (credential: Credential) => {
       const writer = await ModelRuntime.create({ authPath, modelsPath: null, refreshOnCreate: false });
-      writer.registerNativeProvider({ ...noRequests, id: "agy", name: "AGY", getModels: () => [], auth: {
+      writer.registerNativeProvider({ ...noRequests, id: "agy", name: "Antigravity CLI", getModels: () => [], auth: {
         ...(credential.type === "oauth"
           ? { oauth: { ...authentication.oauth, login: async () => credential } }
           : { apiKey: { name: "test", login: async () => credential, resolve: async () => undefined } }),

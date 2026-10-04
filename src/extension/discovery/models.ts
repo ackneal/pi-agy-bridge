@@ -146,12 +146,12 @@ export async function discoverAgyModels(
     output = (stdout || stderr || "").trim();
   } catch (err) {
     if (signal?.aborted) throw err;
-    throw new Error(`Failed to discover AGY models via "${resolvedPath} models"`, { cause: err });
+    throw new Error(`Failed to discover Antigravity CLI models via "${resolvedPath} models"`, { cause: err });
   }
 
   const models = parseModelsOutput(output);
   if (models.length === 0) {
-    throw new Error(`AGY returned no models from "${resolvedPath} models"`);
+    throw new Error(`Antigravity CLI returned no models from "${resolvedPath} models"`);
   }
 
   debugLog("models", `Discovered ${models.length} models from "${resolvedPath} models"`);

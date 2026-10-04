@@ -29,7 +29,7 @@ export function getAgyBridgeAuthEnvironment(apiKey?: string): Record<string, str
   }
 }
 
-/** Pi stores consent to use the bridge, not AGY's authentication tokens. */
+/** Pi stores consent to use the bridge, not Antigravity CLI's authentication tokens. */
 export class AgyAuthentication {
   public status: "authenticated" | "unauthenticated" | "unknown" = "unknown";
   public failure: DoctorFailure | undefined;
@@ -45,11 +45,11 @@ export class AgyAuthentication {
   constructor(agyPath: string | undefined, beforeLogin: () => Promise<void>) {
     this.agyPath = agyPath;
     this.method = {
-      name: "AGY CLI",
+      name: "Antigravity CLI CLI",
       check: async ({ credential, signal }) => {
         signal.throwIfAborted();
         return isAgyBridgeEnabled(credential)
-          ? { type: "api_key", source: "AGY CLI" }
+          ? { type: "api_key", source: "Antigravity CLI CLI" }
           : undefined;
       },
       resolve: async ({ credential, signal }) => {
@@ -61,12 +61,12 @@ export class AgyAuthentication {
         return {
           auth: {},
           env: { AGY_BRIDGE_ENABLED: "1", ...(typeof epoch === "string" && epoch.length > 0 ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },
-          source: "AGY CLI",
+          source: "Antigravity CLI CLI",
         };
       },
     };
     this.oauth = {
-      name: "AGY CLI",
+      name: "Antigravity CLI CLI",
       isSubscription: true,
       refresh: async (credential, signal) => {
         signal.throwIfAborted();

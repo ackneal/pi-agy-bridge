@@ -267,7 +267,7 @@ process.stdin.resume();
 
 for (const row of [
   { name: "exit before init", script: 'process.stderr.write("init failed"); process.exit(1);', message: /exited prematurely/ },
-  { name: "spawn failure", script: null, message: /Failed to spawn/ },
+  { name: "spawn failure", script: null, message: /Failed to start Antigravity CLI/ },
 ]) {
   test(`rejects ${row.name}`, async (t) => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-init-"));
@@ -428,7 +428,7 @@ process.stdin.resume();
 
       await assert.rejects(starting, (error: unknown) => {
         assert.ok(error instanceof AgyProcessError);
-        assert.match(error.message, /Timed out waiting for agy init event after 500ms: waiting for initialization/);
+        assert.match(error.message, /Timed out waiting for Antigravity CLI init event after 500ms: waiting for initialization/);
         assert.equal(error.stderr, "waiting for initialization");
         return true;
       });

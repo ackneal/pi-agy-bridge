@@ -105,9 +105,9 @@ test("successful logins return unique epochs and resolve forwards only nonempty 
     const env = { AGY_BRIDGE_ENABLED: "1", ...(epoch === undefined ? {} : { AGY_BRIDGE_LOGIN_EPOCH: epoch }) };
     const credential = { type: "api_key" as const, env };
     const context = { ctx: defaultProviderAuthContext(), signal, credential };
-    assert.deepEqual(await auth.method.check!(context), { type: "api_key", source: "AGY CLI" });
+    assert.deepEqual(await auth.method.check!(context), { type: "api_key", source: "Antigravity CLI CLI" });
     assert.deepEqual(await auth.method.resolve(context), {
-      auth: {}, source: "AGY CLI",
+      auth: {}, source: "Antigravity CLI CLI",
       env: { AGY_BRIDGE_ENABLED: "1", ...(epoch ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },
     });
     assert.equal(children.length, 2);
@@ -187,9 +187,9 @@ test("slow detection leaves credential checks and resolution spawn-free", async 
   for (const enabled of [false, true]) {
     const credential = { type: "api_key" as const, env: { AGY_BRIDGE_ENABLED: enabled ? "1" : "0" } };
     const context = { ctx: defaultProviderAuthContext(), signal, credential };
-    assert.deepEqual(await auth.method.check!(context), enabled ? { type: "api_key", source: "AGY CLI" } : undefined);
+    assert.deepEqual(await auth.method.check!(context), enabled ? { type: "api_key", source: "Antigravity CLI CLI" } : undefined);
     assert.deepEqual(await auth.method.resolve(context), enabled ? {
-      auth: {}, source: "AGY CLI", env: { AGY_BRIDGE_ENABLED: "1" },
+      auth: {}, source: "Antigravity CLI CLI", env: { AGY_BRIDGE_ENABLED: "1" },
     } : undefined);
     assert.equal(children.length, 1);
   }

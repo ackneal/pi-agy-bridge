@@ -25,7 +25,7 @@ for (const status of ["unknown", "authenticated", "unauthenticated"] as const) {
         const authentication = new AgyAuthentication(undefined, async () => {});
         t.after(() => authentication.close());
         authentication.status = status;
-        const spawn = t.mock.method(cp, "spawn", () => { throw new Error("AGY authentication timed out"); });
+        const spawn = t.mock.method(cp, "spawn", () => { throw new Error("Antigravity CLI authentication timed out"); });
         syncBuiltinESMExports();
         t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
         const controller = new AbortController();
@@ -37,7 +37,7 @@ for (const status of ["unknown", "authenticated", "unauthenticated"] as const) {
           ...(scenario.credential ? { credential: scenario.credential } : {}),
         });
         if (aborted) await assert.rejects(Promise.resolve(check), (error) => error === reason);
-        else assert.deepEqual(await check, scenario.enabled ? { type: "api_key", source: "AGY CLI" } : undefined);
+        else assert.deepEqual(await check, scenario.enabled ? { type: "api_key", source: "Antigravity CLI CLI" } : undefined);
 
         const resolution = authentication.method.resolve({
           ctx: defaultProviderAuthContext(), signal: controller.signal,
@@ -45,7 +45,7 @@ for (const status of ["unknown", "authenticated", "unauthenticated"] as const) {
         });
         if (aborted && scenario.enabled) await assert.rejects(Promise.resolve(resolution), (error) => error === reason);
         else assert.deepEqual(await resolution, scenario.enabled
-          ? { auth: {}, env: { AGY_BRIDGE_ENABLED: "1" }, source: "AGY CLI" }
+          ? { auth: {}, env: { AGY_BRIDGE_ENABLED: "1" }, source: "Antigravity CLI CLI" }
           : undefined);
 
         assert.equal(spawn.mock.callCount(), 0);
@@ -77,7 +77,7 @@ test("boot availability preserves stored scoped model selection without authenti
 
   const refreshed = await runtime.refresh({ providers: ["agy"], allowNetwork: false });
   assert.equal(refreshed.errors.size, 0);
-  assert.deepEqual(await runtime.checkAuth("agy"), { type: "api_key", source: "AGY CLI" });
+  assert.deepEqual(await runtime.checkAuth("agy"), { type: "api_key", source: "Antigravity CLI CLI" });
   const available = await runtime.getAvailable("agy");
   assert.deepEqual(available.map((model) => `${model.provider}/${model.id}`), scopedModels);
   for (const scoped of scopedModels) {

@@ -34,7 +34,7 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       const report = await collectDoctorReport(options);
       assert.match(report, row.expected);
       assert.match(report, row.followup);
-      assert.match(report, /✓ AGY 1.2.0 \(minimum 1.1.15\)/);
+      assert.match(report, /✓ Antigravity CLI 1.2.0 \(minimum 1.1.15\)/);
       assert.match(report, /MCP entrypoint exists/);
       if (row.manifest === undefined) await assert.rejects(fs.access(target));
       else assert.equal(await fs.readFile(path.join(target, "plugin.json"), "utf8"), row.manifest);
@@ -69,7 +69,7 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       authStatus: "unauthenticated",
       authError: { time: "2026-01-03T00:00:00Z", message: "login failed" },
     });
-    for (const pattern of [/✗ AGY error/, /Resolved AGY path:/, /✗ Plugin error/, /2 configured/, /Node version:/, /MCP entrypoint exists/, /Last plugin error at 2026-01-01T00:00:00Z: install failed/, /Last discovery error at 2026-01-02T00:00:00Z: discovery failed/, /Last authentication error at 2026-01-03T00:00:00Z: login failed/, /Authentication snapshot: unauthenticated/, /Authentication is a last-known snapshot; live authentication is not tested\./, /Model execution and Unix socket creation not tested\./]) assert.match(report, pattern);
+    for (const pattern of [/✗ Antigravity CLI error/, /Resolved Antigravity CLI path:/, /✗ Plugin error/, /2 configured/, /Node version:/, /MCP entrypoint exists/, /Last plugin error at 2026-01-01T00:00:00Z: install failed/, /Last discovery error at 2026-01-02T00:00:00Z: discovery failed/, /Last authentication error at 2026-01-03T00:00:00Z: login failed/, /Authentication snapshot: unauthenticated/, /Authentication is a last-known snapshot; live authentication is not tested\./, /Model execution and Unix socket creation not tested\./]) assert.match(report, pattern);
     assert.ok((await fs.readFile(calls, "utf8")).trim().split("\n").every(call => call === "--version"));
   } finally {
     if (previous === undefined) delete process.env.HOME;

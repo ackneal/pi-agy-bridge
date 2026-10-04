@@ -12,8 +12,8 @@ import { AgyAuthentication, createAgyBridgeCredential, getAgyBridgeAuthEnvironme
 import { registerAgyProvider } from "./provider.ts";
 
 for (const row of [
-  { name: "automatically enables an existing AGY login", stored: "missing", authenticated: true, enabled: true },
-  { name: "leaves an unauthenticated AGY unconfigured", stored: "missing", authenticated: false, enabled: false },
+  { name: "automatically enables an existing Antigravity CLI login", stored: "missing", authenticated: true, enabled: true },
+  { name: "leaves an unauthenticated Antigravity CLI unconfigured", stored: "missing", authenticated: false, enabled: false },
   { name: "uses existing OAuth without probing", stored: "oauth", authenticated: false, enabled: true },
   { name: "renews expired OAuth locally without probing", stored: "expired", authenticated: false, enabled: true },
   { name: "upgrades the legacy setup marker without probing", stored: "legacy", authenticated: false, enabled: true },

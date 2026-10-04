@@ -22,10 +22,10 @@ export async function autoConfigureAgyAuthentication(
   const runtime = await ModelRuntime.create({ authPath, modelsPath: null, refreshOnCreate: false, signal });
   runtime.registerNativeProvider({
     id: "agy",
-    name: "AGY CLI",
+    name: "Antigravity CLI",
     getModels: () => [],
-    stream: () => { throw new Error("AGY startup authentication cannot stream"); },
-    streamSimple: () => { throw new Error("AGY startup authentication cannot stream"); },
+    stream: () => { throw new Error("Antigravity CLI startup authentication cannot stream"); },
+    streamSimple: () => { throw new Error("Antigravity CLI startup authentication cannot stream"); },
     auth: {
       oauth: {
         ...authentication.oauth,
@@ -35,7 +35,7 @@ export async function autoConfigureAgyAuthentication(
           await authentication.oauth.toAuth(marker);
           interaction.signal.throwIfAborted();
           if (!isDeepStrictEqual(readStoredCredential("agy", authPath), original)) {
-            throw new Error("AGY startup credential was superseded");
+            throw new Error("Antigravity CLI startup credential was superseded");
           }
           // Pi 1.0.0 exposes neither its file CredentialStore nor a login mutation predicate.
           // Login commits unconditionally, so these preflight checks cannot protect the commit window.
@@ -50,6 +50,6 @@ export async function autoConfigureAgyAuthentication(
   await runtime.login("agy", "oauth", {
     signal,
     notify: () => {},
-    prompt: async () => { throw new Error("AGY startup authentication cannot prompt"); },
+    prompt: async () => { throw new Error("Antigravity CLI startup authentication cannot prompt"); },
   });
 }
