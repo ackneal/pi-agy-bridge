@@ -67,7 +67,7 @@ export class BridgeIPC {
     };
   }
 
-  public async waitForConnection(timeoutMs: number = 5_000): Promise<void> {
+  public async waitForConnection(timeoutMs: number = 15_000): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
