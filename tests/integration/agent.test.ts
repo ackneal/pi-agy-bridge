@@ -45,7 +45,8 @@ describe("static Antigravity CLI bridge plugin", () => {
     assert.match(markdown, /ServerName: "pi-agy-bridge_pi"/);
     assert.match(markdown, /Set `ToolName` to its exact plain Pi tool name/);
     assert.match(markdown, /Do not claim that a tool or subagent is missing or unadvertised merely because/);
-    assert.match(markdown, /`researcher`, `worker`, `subagent_observe`, and `subagent_cancel`/);
+    assert.match(markdown, /Examples of Pi's default tools are `read`, `bash`, `edit`, and `write`/);
+    assert.match(markdown, /additional tools or subagents may be supplied by extensions/);
     assert.match(markdown, /Follow the current tool input schema/);
     assert.match(markdown, /If the MCP server explicitly reports that the tool is not registered/);
     assert.match(markdown, /A historical mention alone does not establish current availability/);

@@ -382,30 +382,23 @@ export class PiEventAdapter {
       this.partial.responseId = (result.conversation_id ?? result.session_id) as string;
     }
 
-    const status = result.status ?? "success";
-    if (status === "error" || result.error) {
-      const errorMsg = typeof result.error === "string"
-        ? result.error
-        : result.error?.message ?? "agy execution reported error status";
+    debugLog("events", "AGY result outcome:", { status: result.status, error: result.error });
 
-      this.partial.stopReason = "error";
-      this.partial.errorMessage = errorMsg;
+    // An explicit terminal status describes this turn, not an attached historical error.
+    const status = result.status?.toLowerCase();
+    if (status === "aborted" || status === "error" || (status !== "success" && result.error)) {
+      const reason = status === "aborted" ? "aborted" : "error";
+      this.partial.stopReason = reason;
+      if (result.error || reason === "error") {
+        this.partial.errorMessage = typeof result.error === "string"
+          ? result.error
+          : result.error?.message ?? "agy execution reported error status";
+      }
 
       this.completed = true;
       this.stream.push({
         type: "error",
-        reason: "error",
-        error: this.snapshot(),
-      });
-      return;
-    }
-
-    if (status === "aborted") {
-      this.partial.stopReason = "aborted";
-      this.completed = true;
-      this.stream.push({
-        type: "error",
-        reason: "aborted",
+        reason,
         error: this.snapshot(),
       });
       return;

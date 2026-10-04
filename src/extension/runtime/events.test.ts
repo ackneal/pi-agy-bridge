@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe, it } from "node:test";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
+import type { AgyResultEvent } from "../shared/types.ts";
 import { AgyEventAdapter } from "./events.ts";
 
 async function collectStreamEvents(adapter: AgyEventAdapter): Promise<AssistantMessageEvent[]> {
@@ -171,30 +172,235 @@ describe("AgyEventAdapter", () => {
     assert.deepEqual(tc.arguments, { command: "ls -la" });
   });
 
-  it("maps result error statuses to error events", async () => {
-    const cases = [
-      {
-        input: { event: "result", status: "error", error: { message: "Quota exceeded" } },
-        reason: "error",
-        message: "Quota exceeded",
-      },
-      { input: { event: "result", status: "aborted" }, reason: "aborted" },
-    ] as Array<{ input: Parameters<AgyEventAdapter["handleEvent"]>[0]; reason: "error" | "aborted"; message?: string | { message: string } }>;
+  const quotaError = "Claude quota exceeded. Resets in 3h27m34s.";
+  const resultCases: Array<{
+    name: string;
+    input: AgyResultEvent;
+    reason: "stop" | "toolUse" | "error" | "aborted";
+    errorMessage?: string;
+    toolCall?: boolean;
+    previousFailure?: boolean;
+  }> = [
+    {
+      name: "lowercase success ignores a stale string error",
+      input: { event: "result", status: "success", error: quotaError },
+      reason: "stop",
+    },
+    {
+      name: "nested uppercase SUCCESS ignores a stale object error",
+      input: { event: "result", result: { status: "SUCCESS", error: { message: quotaError } } },
+      reason: "stop",
+    },
+    {
+      name: "uppercase SUCCESS ignores a stale flat object error",
+      input: { event: "result", status: "SUCCESS", error: { message: quotaError } },
+      reason: "stop",
+    },
+    {
+      name: "nested uppercase SUCCESS ignores a stale string error",
+      input: { event: "result", result: { status: "SUCCESS", error: quotaError } },
+      reason: "stop",
+    },
+    {
+      name: "mixed-case success ignores a stale object error",
+      input: { event: "result", status: "SuCcEsS", error: { message: quotaError } },
+      reason: "stop",
+    },
+    {
+      name: "explicit success with a stale error preserves toolUse",
+      input: { event: "result", status: "SUCCESS", error: quotaError },
+      reason: "toolUse",
+      toolCall: true,
+    },
+    {
+      name: "lowercase error reports an object error after text output",
+      input: { event: "result", status: "error", error: { message: quotaError } },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "nested uppercase ERROR reports a string error after text output",
+      input: { event: "result", result: { status: "ERROR", error: quotaError } },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "mixed-case error without diagnostics uses the default error",
+      input: { event: "result", status: "ErRoR" },
+      reason: "error",
+      errorMessage: "agy execution reported error status",
+    },
+    {
+      name: "omitted status with a string error still fails",
+      input: { event: "result", error: quotaError },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "omitted status with an object error still fails",
+      input: { event: "result", result: { error: { message: quotaError } } },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "unknown status with a string error still fails",
+      input: { event: "result", status: "UNKNOWN", error: quotaError },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "unknown status with an object error still fails",
+      input: { event: "result", status: "unknown", error: { message: quotaError } },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "omitted status with an empty error object uses the default error",
+      input: { event: "result", error: {} },
+      reason: "error",
+      errorMessage: "agy execution reported error status",
+    },
+    {
+      name: "unknown status with an empty error object uses the default error",
+      input: { event: "result", status: "unknown", error: {} },
+      reason: "error",
+      errorMessage: "agy execution reported error status",
+    },
+    {
+      name: "omitted status without an error still succeeds",
+      input: { event: "result" },
+      reason: "stop",
+    },
+    {
+      name: "unknown status without an error still succeeds",
+      input: { event: "result", status: "UNKNOWN" },
+      reason: "stop",
+    },
+    {
+      name: "lowercase aborted without diagnostics remains aborted",
+      input: { event: "result", status: "aborted" },
+      reason: "aborted",
+    },
+    {
+      name: "uppercase ABORTED without diagnostics remains aborted",
+      input: { event: "result", result: { status: "ABORTED" } },
+      reason: "aborted",
+    },
+    {
+      name: "lowercase aborted retains a string diagnostic without becoming error",
+      input: { event: "result", status: "aborted", error: "Cancelled by user" },
+      reason: "aborted",
+      errorMessage: "Cancelled by user",
+    },
+    {
+      name: "uppercase ABORTED retains an object diagnostic without becoming error",
+      input: { event: "result", result: { status: "ABORTED", error: { message: "Cancelled by user" } } },
+      reason: "aborted",
+      errorMessage: "Cancelled by user",
+    },
+    {
+      name: "fresh adapter carries no previous error into a clean success",
+      input: { event: "result", status: "success" },
+      reason: "stop",
+      previousFailure: true,
+    },
+    {
+      name: "fresh adapter carries no previous error into SUCCESS with the same stale quota error",
+      input: { event: "result", result: { status: "SUCCESS", error: { message: quotaError } } },
+      reason: "stop",
+      previousFailure: true,
+    },
+  ];
 
-    for (const expected of cases) {
+  for (const expected of resultCases) {
+    it(expected.name, async () => {
+      const previous = expected.previousFailure
+        ? new AgyEventAdapter({ model: "claude-sonnet-4-6" })
+        : undefined;
+      if (previous) {
+        previous.handleEvent({ event: "result", status: "ERROR", error: quotaError });
+        const previousEvents = await collectStreamEvents(previous);
+        const error = previousEvents.find((event) => event.type === "error");
+        assert.ok(error);
+        assert.equal(error.error.errorMessage, quotaError);
+      }
+
       const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+      const text = "Hello! How can I help you today?";
+      if (previous) {
+        assert.equal(adapter.isCompleted(), false);
+        assert.equal(Object.hasOwn(adapter.message, "errorMessage"), false);
+        assert.deepEqual(adapter.message.content, []);
+      }
+      adapter.handleEvent({ event: "step_update", delta: text });
+      if (expected.toolCall) {
+        adapter.handleEvent({
+          event: "step_update",
+          tool_call: { id: "call-1", name: "mcp__pi__read", arguments: { path: "README.md" } },
+        });
+      }
+
       adapter.handleEvent(expected.input);
 
       const events = await collectStreamEvents(adapter);
-      const errorEvent = events.find((event) => event.type === "error") as any;
-      assert.ok(errorEvent);
-      assert.equal(errorEvent.reason, expected.reason);
-      assert.equal(errorEvent.error.stopReason, expected.reason);
-      const expectedMessage = expected.message;
-      const errorMessage = typeof expectedMessage === "string" ? expectedMessage : expectedMessage?.message;
-      if (errorMessage) assert.equal(errorEvent.error.errorMessage, errorMessage);
-    }
-  });
+      const terminalEvents = events.filter((event) => event.type === "done" || event.type === "error");
+      assert.equal(terminalEvents.length, 1);
+      const terminal = terminalEvents[0];
+      assert.ok(terminal);
+      assert.equal(terminal.type, expected.reason === "error" || expected.reason === "aborted" ? "error" : "done");
+      assert.equal(terminal.reason, expected.reason);
+      const message = terminal.type === "done" ? terminal.message : terminal.error;
+      assert.equal(message.stopReason, expected.reason);
+      assert.equal(message.errorMessage, expected.errorMessage);
+      assert.deepEqual(message.content[0], { type: "text", text });
+      assert.equal(events.filter((event) => event.type === "text_end").length, 1);
+      if (expected.toolCall) {
+        assert.deepEqual(message.content[1], {
+          type: "toolCall", id: "call-1", name: "mcp__pi__read", arguments: { path: "README.md" },
+        });
+      }
+      if (previous) {
+        for (const event of events) {
+          const snapshot = event.type === "done" ? event.message : "partial" in event ? event.partial : undefined;
+          assert.ok(snapshot);
+          assert.equal(Object.hasOwn(snapshot, "errorMessage"), false);
+          assert.equal(snapshot.model, "gemini-3.8-flash-high");
+        }
+        assert.equal(Object.hasOwn(adapter.message, "errorMessage"), false);
+        assert.equal(previous.message.errorMessage, quotaError);
+      }
+    });
+  }
+
+  const completedCases: Array<{ name: string; input: AgyResultEvent; type: "done" | "error" }> = [
+    { name: "successful stream ignores late events without changing its message", input: { event: "result", status: "SUCCESS" }, type: "done" },
+    { name: "failed stream ignores late events without changing its message", input: { event: "result", status: "ERROR", error: quotaError }, type: "error" },
+  ];
+
+  for (const expected of completedCases) {
+    it(expected.name, async (t) => {
+      const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+      adapter.handleEvent({ event: "step_update", delta: "Completed text" });
+      adapter.handleEvent(expected.input);
+      const events = await collectStreamEvents(adapter);
+      const terminal = events.find((event) => event.type === "done" || event.type === "error");
+      assert.ok(terminal);
+      assert.equal(terminal.type, expected.type);
+      assert.equal(adapter.isCompleted(), true);
+      const message = structuredClone(adapter.message);
+      const push = t.mock.method(adapter.stream, "push");
+      t.after(() => push.mock.restore());
+
+      adapter.handleEvent(expected.input);
+      adapter.handleEvent({ event: "init", conversation_id: "late-conversation" });
+      adapter.handleEvent({ event: "step_update", delta: "late text", usage: { input_tokens: 999 } });
+      adapter.handleEvent({ event: "result", status: "error", error: "late error" });
+      adapter.handleEvent({ event: "result", status: "success" });
+
+      assert.equal(push.mock.callCount(), 0);
+      assert.deepEqual(adapter.message, message);
+    });
+  }
 
   it("handleTermination handles process termination with reason aborted and closes active text", async () => {
     const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });

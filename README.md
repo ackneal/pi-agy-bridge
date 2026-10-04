@@ -25,13 +25,13 @@ The bridge invokes your installed Antigravity CLI directly and uses its authenti
 
 ### 1. Install
 
-After the first npm publication, install the Pi package:
+Install the Pi package from npm:
 
 ```bash
 pi install npm:@ackneal/pi-agy-bridge
 ```
 
-Until then, or to install directly from GitHub:
+Alternatively, install directly from GitHub:
 
 ```bash
 pi install git:github.com/ackneal/pi-agy-bridge
@@ -102,9 +102,7 @@ export AGY_BRIDGE_DEBUG=1
 
 Start Pi from the same terminal. Diagnostic logs are written to `stderr` with `[agy:...]` tags.
 
-## Repository Boundaries and Development
-
-The repository separates the Pi extension in `src/extension/` (entry point: `src/extension/index.ts`, declared in `pi.extensions`) from the Node.js MCP companion in `src/mcp/` (entry point: `src/mcp/index.js`). The bundled Antigravity plugin payload lives in `plugin/`; tool execution remains in Pi. Unit tests are colocated with their source as `*.test.ts`, while integration tests live in `tests/integration/`. Tests are excluded from the published package.
+## Development
 
 Use Bun for dependency installation and development commands:
 
