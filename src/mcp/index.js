@@ -4,7 +4,7 @@ import readline from "node:readline";
 import { connectBridge, parseBridgeUri } from "./socket.js";
 
 const JSON_RPC_VERSION = "2.0";
-const SERVER_INFO = { name: "pi-agy-bridge", version: "0.1.3" };
+const SERVER_INFO = { name: "pi-agy-bridge", version: "0.1.4" };
 
 async function main() {
   const bridgeUri = getBridgeEndpoint();
