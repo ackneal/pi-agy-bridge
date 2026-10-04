@@ -182,7 +182,7 @@ export class PiEventAdapter {
 
   private handleStepUpdate(step: AgyStepUpdateEvent): void {
     if (step.usage) {
-      debugLog("usage", "AGY step usage:", step.usage);
+      debugLog("usage", "Antigravity CLI step usage:", step.usage);
       this.hasStepUsage = true;
       this.addUsage(step.usage);
     }
@@ -196,7 +196,7 @@ export class PiEventAdapter {
     const toolCall = this.extractToolCall(step);
     if (toolCall !== null) {
       if (AGY_INTERNAL_TOOL_NAMES.has(toolCall.name)) {
-        debugLog("events", `Allowing AGY internal coordination tool: ${toolCall.name}`);
+        debugLog("events", `Allowing Antigravity CLI internal coordination tool: ${toolCall.name}`);
       } else if (!this.isAllowedAgyTool(toolCall.name)) {
         this.blockTool(toolCall.name);
       } else if (this.bridgeToolCallsExternally) {
@@ -361,8 +361,8 @@ export class PiEventAdapter {
   }
 
   private blockTool(name: string): void {
-    debugLog("security", `Blocked Agy tool call outside the Pi bridge allowlist: ${name}`);
-    this.handleTermination("error", `AgY attempted to call an unavailable tool: ${name}`);
+    debugLog("security", `Blocked Antigravity CLI tool call outside the Pi bridge allowlist: ${name}`);
+    this.handleTermination("error", `The model attempted to call an unavailable tool: ${name}`);
     this.onBlockedTool?.(name);
   }
 
@@ -370,7 +370,7 @@ export class PiEventAdapter {
     this.ensureStarted();
     this.closeActiveText();
 
-    debugLog("usage", "AGY result accounting fields:", Object.fromEntries(
+    debugLog("usage", "Antigravity CLI result accounting fields:", Object.fromEntries(
       Object.entries(result).filter(([key]) => /usage|token|metric|stat|metadata/i.test(key))
     ));
     if (result.usage) {
@@ -410,7 +410,7 @@ export class PiEventAdapter {
     this.partial.stopReason = stopReason;
     this.completed = true;
     const message = this.snapshot();
-    debugLog("usage", "Pi done message usage (AGY result):", message.usage);
+    debugLog("usage", "Pi done message usage (Antigravity CLI result):", message.usage);
 
     this.stream.push({
       type: "done",
@@ -424,7 +424,7 @@ export class PiEventAdapter {
     const output = agyUsage.output_tokens ?? 0;
     const cacheRead = agyUsage.cache_read_tokens ?? 0;
     const reasoning = agyUsage.thinking_tokens ?? 0;
-    // Each step's usage describes that single model request. AGY's total_tokens
+    // Each step's usage describes that single model request. Antigravity CLI's total_tokens
     // field omits cache_read_tokens, so compute the true per-request context size
     // ourselves; keep the latest snapshot for Pi's overflow/compaction checks.
     this.partial.usage = {

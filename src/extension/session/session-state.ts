@@ -163,7 +163,7 @@ export class RuntimeSessionSync {
       return { action: "resume", conversationId: ref.conversationId };
     }
 
-    debugLog("session", "Rebuilding AGY runtime instead of reusing", {
+    debugLog("session", "Rebuilding Antigravity CLI runtime instead of reusing", {
       syncKeyMatches: session.syncKey === input.syncKey,
       sessionTurnIndex: session.turnIndex,
       inputTurnIndex: input.turnIndex,

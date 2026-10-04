@@ -417,7 +417,7 @@ describe("AgyEventAdapter", () => {
     assert.equal(errorEvent.error.errorMessage, "Child process was terminated");
   });
 
-  it("allows AGY internal dispatchers without exposing them as Pi tool calls", () => {
+  it("allows Antigravity CLI internal dispatchers without exposing them as Pi tool calls", () => {
     for (const internalTool of ["manage_task", "call_mcp_tool"]) {
       const adapter = new AgyEventAdapter({
         model: "gemini-3.8-flash-high",
@@ -438,7 +438,7 @@ describe("AgyEventAdapter", () => {
     }
   });
 
-  it("blocks native executable AGY tool calls when a Pi tool allowlist is active", async () => {
+  it("blocks native executable Antigravity CLI tool calls when a Pi tool allowlist is active", async () => {
     const adapter = new AgyEventAdapter({
       model: "gemini-3.8-flash-high",
       allowedToolNames: new Set(["read"]),
@@ -455,7 +455,7 @@ describe("AgyEventAdapter", () => {
 
     const events = await collectStreamEvents(adapter);
     const error = events.find((event) => event.type === "error") as any;
-    assert.equal(error.error.errorMessage, "AgY attempted to call an unavailable tool: run_command");
+    assert.equal(error.error.errorMessage, "The model attempted to call an unavailable tool: run_command");
   });
 
   it("emits Pi-native tool names for calls relayed through MCP", async () => {

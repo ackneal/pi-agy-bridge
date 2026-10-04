@@ -13,7 +13,7 @@ const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const unsupported = { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null };
 
-describe("AGY model discovery", () => {
+describe("Antigravity CLI model discovery", () => {
   for (const { id, maxTokens, cost } of [
     { id: "gemini-3.8-flash", maxTokens: 65_536, cost: flashCost },
     { id: "gemini-3.7-flash", maxTokens: 65_536, cost: flashCost },
@@ -247,10 +247,10 @@ missing-name
     assert.deepEqual(parseModelsOutput("\n---\n"), []);
   });
 
-  it("fails discovery when AGY is unavailable instead of returning fallback models", async () => {
+  it("fails discovery when Antigravity CLI is unavailable instead of returning fallback models", async () => {
     await assert.rejects(
       discoverAgyModels("__invalid_binary_name__"),
-      /Failed to discover AGY models/
+      /Failed to discover Antigravity CLI models/
     );
   });
 });

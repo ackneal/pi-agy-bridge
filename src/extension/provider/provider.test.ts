@@ -32,7 +32,7 @@ const resolverCases: ResolverCase[] = [
     ...["off", "minimal", "xhigh", "max", "unknown", ""].flatMap((effort) =>
       ["other-model", "other-model-high"].map((modelId) => ({
         name: `rejects ${option}=${JSON.stringify(effort)} for ${modelId}`, modelId, options: { [option]: effort },
-        error: `Unsupported AGY reasoning effort: ${effort}. Supported values: low, medium, high.`,
+        error: `Unsupported Antigravity CLI reasoning effort: ${effort}. Supported values: low, medium, high.`,
       }))),
     ...(["low", "medium", "high"] as const).flatMap((effort) =>
       ["other-model", "other-model-low"].map((modelId) => ({
@@ -82,7 +82,7 @@ for (const modelId of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) {
         const message = await stream.result();
 
         assert.equal(message.stopReason, "error");
-        assert.equal(message.errorMessage, `Unsupported AGY reasoning effort for ${modelId}: ${effort}.`);
+        assert.equal(message.errorMessage, `Unsupported Antigravity CLI reasoning effort for ${modelId}: ${effort}.`);
         assert.equal(runtimeLookup.mock.callCount(), 0);
       });
     }
@@ -115,7 +115,7 @@ test("doctor reports installation errors without starting a model turn", async (
   const [message, options] = sendMessage.mock.calls[0]!.arguments;
   assert.equal(message.customType, "pi-agy-bridge:doctor");
   assert.equal(message.display, true);
-  assert.match(message.content, /AGY plugin manifest not found/);
+  assert.match(message.content, /Antigravity CLI plugin manifest not found/);
   assert.match(message.content, /Authentication/);
   assert.deepEqual(options, { triggerTurn: false });
 });
@@ -156,7 +156,7 @@ test("doctor clears the recorded installation error after successful installatio
   assert.doesNotMatch(report, /Last plugin error/);
 });
 
-test("registers the AGY provider and session lifecycle without starting runtime work", async (t) => {
+test("registers the Antigravity CLI provider and session lifecycle without starting runtime work", async (t) => {
   const spawn = t.mock.method(cp, "spawn", () => { throw new Error("Registration must not start a process"); });
   const execFile = t.mock.method(cp, "execFile", () => { throw new Error("Registration must not execute a command"); });
   const runtimeStart = t.mock.method(AgyRuntime.prototype, "start", async () => { throw new Error("Registration must not start the runtime"); });
@@ -209,7 +209,7 @@ test("registers the AGY provider and session lifecycle without starting runtime 
   await shutdown();
 });
 
-test("explicit AGY models are native static models preserving configured fields", () => {
+test("explicit Antigravity CLI models are native static models preserving configured fields", () => {
   let provider: Provider | undefined;
   const configured = {
     id: "custom", name: "Custom", reasoning: true, input: ["text"] as ("text" | "image")[],

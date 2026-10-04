@@ -134,7 +134,7 @@ export class AgyRuntime {
       const initTimeoutMs = this.options.initTimeoutMs ?? 30_000;
       const initTimer = setTimeout(() => {
         fail(new AgyProcessError(
-          `Timed out waiting for agy init event after ${initTimeoutMs}ms` +
+          `Timed out waiting for Antigravity CLI init event after ${initTimeoutMs}ms` +
             (this.stderrBuffer.trim() ? `: ${this.stderrBuffer.trim().slice(-500)}` : ""),
           { stderr: this.stderrBuffer }
         ));
@@ -178,7 +178,7 @@ export class AgyRuntime {
           const detail = recentStderr ? `: ${recentStderr.slice(-500)}` : "";
           reject(
             new AgyProcessError(
-              `agy process exited prematurely with code ${code} and signal ${signal}${detail}`,
+              `Antigravity CLI process exited prematurely with code ${code} and signal ${signal}${detail}`,
               { exitCode: code, signal, stderr: this.stderrBuffer }
             )
           );
@@ -210,7 +210,7 @@ export class AgyRuntime {
           settled = true;
           unsubscribe();
           reject(
-            new AgyProcessError(`Failed to spawn agy process: ${err.message}`, {
+            new AgyProcessError(`Failed to start Antigravity CLI: ${err.message}`, {
               stderr: this.stderrBuffer,
             })
           );

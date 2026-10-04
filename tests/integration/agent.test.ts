@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 const projectDir = fileURLToPath(new URL("../../", import.meta.url));
 const pluginDir = fileURLToPath(new URL("../../plugin/", import.meta.url));
 
-describe("static AGY bridge plugin", () => {
+describe("static Antigravity CLI bridge plugin", () => {
   it("keeps package, plugin, and MCP versions aligned", async () => {
     const packageManifest = JSON.parse(await readFile(`${projectDir}/package.json`, "utf-8"));
     const pluginManifest = JSON.parse(await readFile(`${pluginDir}/plugin.json`, "utf-8"));

@@ -80,7 +80,7 @@ for (const scenario of [
     } as unknown as ExtensionAPI);
     t.after(() => bridge.liveSessions.disposeAll());
     const lookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
-      throw new Error("Reached runtime using existing AGY login");
+      throw new Error("Reached runtime using existing Antigravity CLI login");
     });
     bridge.start();
     assert.ok(provider);
@@ -96,7 +96,7 @@ for (const scenario of [
 
       assert.equal(message.stopReason, "error");
       assert.equal(message.errorMessage, scenario.enabled
-        ? "Reached runtime using existing AGY login"
+        ? "Reached runtime using existing Antigravity CLI login"
         : "Antigravity CLI disabled in Pi");
     }
     assert.equal(lookup.mock.callCount(), scenario.enabled ? 2 : 0);

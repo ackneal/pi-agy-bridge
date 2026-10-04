@@ -35,7 +35,7 @@ for (const scenario of [
     const detection = deferred<OAuthCredential | undefined>();
     const discovery = deferred<void>();
     const detect = t.mock.method(AgyAuthentication.prototype, "detect", () => detection.promise);
-    const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("Unexpected AGY subprocess"); });
+    const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("Unexpected Antigravity CLI subprocess"); });
     syncBuiltinESMExports();
     let sessionStart: ((event: SessionStartEvent, ctx: ExtensionContext) => void | Promise<void>) | undefined;
     let shutdown: (() => Promise<void>) | undefined;

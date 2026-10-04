@@ -43,7 +43,7 @@ export async function ensureAgyPluginInstalled(
 ): Promise<void> {
   const sourceDir = path.resolve(pluginDir);
   const sourceManifest = await readPluginManifest(path.join(sourceDir, "plugin.json"));
-  if (!sourceManifest) throw new Error(`AGY plugin manifest not found: ${sourceDir}`);
+  if (!sourceManifest) throw new Error(`Antigravity CLI plugin manifest not found: ${sourceDir}`);
 
   const targetDir = path.join(os.homedir(), ".gemini", "config", "plugins", sourceManifest.name);
   const installedManifest = await readPluginManifest(path.join(targetDir, "plugin.json"));
@@ -59,8 +59,8 @@ export async function ensureAgyPluginInstalled(
   debugLog(
     "plugin",
     installedManifest
-      ? `AGY plugin "${sourceManifest.name}" updated to ${sourceManifest.version} in ${targetDir}`
-      : `AGY plugin "${sourceManifest.name}" installed at ${targetDir}`
+      ? `Antigravity CLI plugin "${sourceManifest.name}" updated to ${sourceManifest.version} in ${targetDir}`
+      : `Antigravity CLI plugin "${sourceManifest.name}" installed at ${targetDir}`
   );
 }
 
@@ -74,7 +74,7 @@ async function installWithAgy(executable: string, sourceDir: string): Promise<vo
     installation.child.stdin?.end();
     await installation;
   } catch (error) {
-    throw new Error(`agy plugin install failed: ${error instanceof Error ? error.message : String(error)}`, {
+    throw new Error(`Antigravity CLI plugin installation failed: ${error instanceof Error ? error.message : String(error)}`, {
       cause: error,
     });
   }
@@ -123,7 +123,7 @@ export async function readPluginManifest(filePath: string): Promise<{ name: stri
   try {
     const value: unknown = JSON.parse(await fs.readFile(filePath, "utf-8"));
     if (!isRecord(value) || typeof value.name !== "string" || typeof value.version !== "string") {
-      throw new Error(`Invalid AGY plugin manifest: ${filePath}`);
+      throw new Error(`Invalid Antigravity CLI plugin manifest: ${filePath}`);
     }
     return { name: value.name, version: value.version };
   } catch (error) {

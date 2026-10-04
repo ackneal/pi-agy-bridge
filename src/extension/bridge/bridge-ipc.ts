@@ -67,14 +67,14 @@ export class BridgeIPC {
     };
   }
 
-  public async waitForConnection(timeoutMs: number = 5_000): Promise<void> {
+  public async waitForConnection(timeoutMs: number = 15_000): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
         this.connected,
         new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () => reject(new Error("AgY did not connect to the Pi stdio MCP server")),
+            () => reject(new Error("Antigravity CLI did not connect to the Pi stdio MCP server")),
             timeoutMs
           );
         }),
