@@ -11,8 +11,8 @@ const projectDir = path.resolve(import.meta.dirname, "../..");
 
 describe("AGY MCP package", () => {
   it("resolves the documented package-root API to the shipped TypeScript entrypoint", async () => {
-    assert.equal(import.meta.resolve("pi-agy-bridge"), new URL("../../src/extension/index.ts", import.meta.url).href);
-    const api = await import("pi-agy-bridge");
+    assert.equal(import.meta.resolve("@ackneal/pi-agy-bridge"), new URL("../../src/extension/index.ts", import.meta.url).href);
+    const api = await import("@ackneal/pi-agy-bridge");
     assert.equal(typeof api.setupAgyProvider, "function");
     assert.equal(typeof api.default, "function");
   });
@@ -55,6 +55,9 @@ describe("AGY MCP package", () => {
         }
       }
       assert.ok(!files.some((file) => file.includes("/.gemini/") || file.includes("/__tests__/") || file.endsWith(".test.ts")));
+      for (const developmentPath of [".github/", "scripts/", "docs/", "tests/", "bun.lock", "tsconfig.json"]) {
+        assert.ok(!files.some((file) => file.startsWith(developmentPath)), `packed development artifact: ${developmentPath}`);
+      }
 
       const binPath = path.join(projectDir, "src/mcp/index.js");
       await access(binPath);

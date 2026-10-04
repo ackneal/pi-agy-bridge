@@ -1,5 +1,5 @@
 {
-  "name": "pi-agy-bridge",
+  "name": "@ackneal/pi-agy-bridge",
   "version": "0.1.3",
   "description": "Standalone AGY provider and Pi capability bridge plugin for Pi",
   "keywords": [
@@ -10,7 +10,18 @@
     "mcp"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ackneal/pi-agy-bridge.git"
+  },
+  "homepage": "https://github.com/ackneal/pi-agy-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/ackneal/pi-agy-bridge/issues"
+  },
   "packageManager": "bun@1.3.13",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "exports": "./src/extension/index.ts",
   "bin": {
@@ -34,8 +45,8 @@
     "test": "node --experimental-strip-types --test --test-timeout=15000 \"**/*.test.ts\""
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=1.0.0 <2.0.0",
-    "@earendil-works/pi-coding-agent": ">=1.0.0 <2.0.0",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "devDependencies": {
