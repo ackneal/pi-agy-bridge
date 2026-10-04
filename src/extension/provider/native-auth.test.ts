@@ -185,12 +185,12 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     await runtime.logout("agy");
     assert.deepEqual(await runtime.getAvailable("agy"), []);
     assert.equal(runtime.isUsingSubscription("agy"), false);
-    assert.equal(authenticated, true, "Pi logout must leave AGY's external login untouched");
+    assert.equal(authenticated, true, "Pi logout must leave Antigravity CLI's external login untouched");
     const countBeforeDisabledRequest = processCount;
     const disabled = await runtime.streamSimple(models[0]!, { messages: [] }, { sessionId: "auth-test" }).result();
     assert.equal(disabled.stopReason, "error");
     assert.match(disabled.errorMessage ?? "", /not configured/);
-    assert.equal(processCount, countBeforeDisabledRequest, "disabled requests must not launch AGY");
+    assert.equal(processCount, countBeforeDisabledRequest, "disabled requests must not launch Antigravity CLI");
 
     const relogin = await runtime.login("agy", "oauth", interaction);
     assert.ok(relogin.type === "oauth");
@@ -211,7 +211,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     assert.equal(startRuntime.mock.callCount(), 1, "expired login must be reported by the runtime, not an auth probe");
     assert.equal(processCount, countBeforeExpiredRequest, "requests must not launch a separate authentication process");
     assert.equal((await runtime.getAvailable("agy")).length, 1,
-      "configured models remain selectable even when AGY authentication expires");
+      "configured models remain selectable even when Antigravity CLI authentication expires");
     assert.deepEqual(writes, scenario === "native URL and code login" ? ["authorization-code\n"] : [],
       "authentication may only send an authorization code, never a user/model request");
     assert.equal(children.size, 0);

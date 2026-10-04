@@ -15,7 +15,7 @@ for (const scenario of [
   { name: "failed discovery retains cache", allowNetwork: true, accept: true, fail: true, aborted: false, expected: "claude-sonnet-4-6", publishes: 0 },
   { name: "aborted refresh skips work", allowNetwork: true, accept: true, fail: false, aborted: true, expected: undefined, publishes: 0 },
 ]) {
-  test(`native AGY catalog: ${scenario.name}`, async (t) => {
+  test(`native Antigravity CLI catalog: ${scenario.name}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-catalog-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const agyPath = path.join(directory, "agy");
@@ -76,7 +76,7 @@ async function registerAndAwaitRefresh(t: TestContext, runtime: ModelRuntime, re
   }
 }
 
-test("Pi persists raw AGY discovery and reapplies models.json overrides after restore", async (t) => {
+test("Pi persists raw Antigravity CLI discovery and reapplies models.json overrides after restore", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-native-store-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const modelsPath = path.join(directory, "models.json");

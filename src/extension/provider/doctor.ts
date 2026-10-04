@@ -24,17 +24,17 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Read-only checks; the only subprocess is AGY --version. */
+/** Read-only checks; the only subprocess is Antigravity CLI --version. */
 export async function collectDoctorReport(options: DoctorOptions): Promise<string> {
   const lines: string[] = ["agy-bridge doctor (read-only)"];
   try {
     const executable = resolveAgyExecutable(options.agyPath);
-    lines.push(`Resolved AGY path: ${executable}`);
+    lines.push(`Resolved Antigravity CLI path: ${executable}`);
     const minimum = options.minVersion ?? DEFAULT_MIN_AGY_VERSION;
     const { version } = await validateAgyVersion(executable, minimum);
-    lines.push(`✓ AGY ${version} (minimum ${minimum})`);
+    lines.push(`✓ Antigravity CLI ${version} (minimum ${minimum})`);
   } catch (error) {
-    lines.push(`✗ AGY error: ${message(error)}`);
+    lines.push(`✗ Antigravity CLI error: ${message(error)}`);
   }
 
   try {
@@ -44,11 +44,11 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
     lines.push(`Plugin: ${source.name}; target: ${target}`);
     const installed = await readPluginManifest(path.join(target, "plugin.json"));
     if (!installed) {
-      lines.push(`! Plugin not installed (bundled ${source.version})`, "Will install automatically on next AGY use.");
+      lines.push(`! Plugin not installed (bundled ${source.version})`, "Will install automatically on next Antigravity CLI use.");
     } else if (installed.version === source.version) {
       lines.push(`✓ Plugin installed ${installed.version} (bundled ${source.version})`);
     } else {
-      lines.push(`! Plugin installed ${installed.version} -> bundled ${source.version}`, "Will update automatically on next AGY use.");
+      lines.push(`! Plugin installed ${installed.version} -> bundled ${source.version}`, "Will update automatically on next Antigravity CLI use.");
     }
   } catch (error) {
     lines.push(`✗ Plugin error: ${message(error)}`);

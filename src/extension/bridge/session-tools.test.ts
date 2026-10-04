@@ -226,7 +226,7 @@ describe("isAllowedPiToolName", () => {
       expected: false,
     },
     {
-      name: "rejects native AgY tools",
+      name: "rejects native Antigravity tools",
       toolName: "manage_task",
       allowed: ["mcp__pi__manage_task"],
       expected: false,

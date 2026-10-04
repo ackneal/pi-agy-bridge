@@ -71,7 +71,7 @@ async function assertSingleInstallCall(calls: string, sourceDir: string): Promis
   assert.equal((await fs.readFile(calls, "utf8")).trim(), `plugin install ${sourceDir}`);
 }
 
-test("missing AGY plugin invokes the CLI and copies every static asset byte-for-byte", async () => {
+test("missing Antigravity CLI plugin invokes the CLI and copies every static asset byte-for-byte", async () => {
   await withTemporaryHome(async (home) => {
     const { executable, calls } = await writeFakeAgy(home);
     const target = path.join(home, ".gemini", "config", "plugins", "pi-agy-bridge");
@@ -91,7 +91,7 @@ test("failed CLI installation preserves stderr and does not copy assets", async 
 
     await assert.rejects(
       ensureAgyPluginInstalled(executable, DEFAULT_AGY_PLUGIN_DIR),
-      /agy plugin install failed:.*installation denied/s
+      /Antigravity CLI plugin installation failed:.*installation denied/s
     );
     await assert.rejects(fs.access(target), { code: "ENOENT" });
   });
@@ -151,7 +151,7 @@ test("same-version ensures are a true no-op and never rewrite the static tree", 
   });
 });
 
-test("outdated AGY plugin synchronizes the exact static tree without invoking AGY", async () => {
+test("outdated Antigravity CLI plugin synchronizes the exact static tree without invoking Antigravity CLI", async () => {
   await withTemporaryHome(async (home) => {
     const target = path.join(home, ".gemini", "config", "plugins", "pi-agy-bridge");
     const otherPlugin = path.join(home, ".gemini", "config", "plugins", "unrelated-plugin");

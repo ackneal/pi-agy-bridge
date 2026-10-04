@@ -74,7 +74,7 @@ export class BridgeIPC {
         this.connected,
         new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () => reject(new Error("AgY did not connect to the Pi stdio MCP server")),
+            () => reject(new Error("Antigravity CLI did not connect to the Pi stdio MCP server")),
             timeoutMs
           );
         }),
