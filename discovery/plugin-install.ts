@@ -31,7 +31,7 @@ export function generateMcpConfig(): {
     mcpServers: {
       pi: {
         command: "sh",
-        args: ["-c", "exec $PI_AGY_BRIDGE_MCP_COMMAND"],
+        args: ["-c", 'exec "$PI_AGY_BRIDGE_MCP_NODE" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'],
       },
     },
   };
@@ -91,11 +91,31 @@ async function synchronizePlugin(sourceDir: string, targetDir: string): Promise<
       path.join(temporaryDir, "mcp_config.json"),
       JSON.stringify(effectiveMcpConfig, null, 2)
     );
-    await fs.rm(targetDir, { recursive: true, force: true });
-    await fs.rename(temporaryDir, targetDir);
-  } catch (error) {
-    await fs.rm(temporaryDir, { recursive: true, force: true }).catch(() => {});
-    throw error;
+    const backupDir = `${temporaryDir}.backup`;
+    let backedUp = false;
+    try {
+      await fs.rename(targetDir, backupDir);
+      backedUp = true;
+    } catch (error) {
+      if (!isNodeError(error, "ENOENT")) throw error;
+    }
+
+    try {
+      await fs.rename(temporaryDir, targetDir);
+    } catch (error) {
+      if (backedUp) {
+        try {
+          await fs.rename(backupDir, targetDir);
+        } catch (restoreError) {
+          throw new AggregateError([error, restoreError], `Plugin update failed; the previous plugin remains at ${backupDir}`);
+        }
+      }
+      throw error;
+    }
+
+    if (backedUp) await fs.rm(backupDir, { recursive: true, force: true });
+  } finally {
+    await fs.rm(temporaryDir, { recursive: true, force: true });
   }
 }
 

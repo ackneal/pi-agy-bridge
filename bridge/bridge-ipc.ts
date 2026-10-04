@@ -3,6 +3,7 @@ import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import os from "node:os";
+import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
 import type { JsonObject, Message, Tool } from "@earendil-works/pi-ai";
 import { debugArtifact, debugLog, isDebugEnabled } from "../shared/debug.ts";
@@ -26,6 +27,8 @@ export class BridgeIPC {
   private readonly sockets = new Set<Socket>();
   private readonly authenticatedSockets = new Set<Socket>();
   private broker: Server | null = null;
+  private startPromise: Promise<void> | null = null;
+  private closePromise: Promise<void> | null = null;
   private socketPath: string | null = null;
   private exitListener: (() => void) | null = null;
   private markConnected: (() => void) | null = null;
@@ -58,7 +61,9 @@ export class BridgeIPC {
   public get processEnvironment(): NodeJS.ProcessEnv {
     const { nodePath, entrypointPath } = resolveMcpEntrypoint();
     return {
-      PI_AGY_BRIDGE_MCP_COMMAND: [nodePath, entrypointPath, "--endpoint", this.bridgeUri].join(" "),
+      PI_AGY_BRIDGE_MCP_NODE: nodePath,
+      PI_AGY_BRIDGE_MCP_ENTRYPOINT: entrypointPath,
+      PI_AGY_BRIDGE_MCP_ENDPOINT: this.bridgeUri,
     };
   }
 
@@ -88,39 +93,65 @@ export class BridgeIPC {
   }
 
   public async start(): Promise<void> {
-    if (this.broker) throw new Error("Pi MCP broker is already running");
+    if (this.broker || this.startPromise || this.closePromise) {
+      throw new Error("Pi MCP broker is already running");
+    }
 
-    const runtimeDir = path.join(os.tmpdir(), "pab");
-    await fs.mkdir(runtimeDir, { recursive: true });
-    await cleanOrphanSockets(runtimeDir);
-
-    this.socketPath = path.join(
-      runtimeDir,
-      `${process.pid}-${randomBytes(6).toString("hex")}.sock`
-    );
-    this.broker = createServer((socket) => this.handleConnection(socket));
-
-    const socketPath = this.socketPath;
-    this.exitListener = () => {
-      try {
-        unlinkSync(socketPath);
-      } catch {
-        // Process is terminating; ignore unlinking errors.
-      }
-    };
-    process.on("exit", this.exitListener);
-
+    this.startPromise = this.startBroker();
     try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
+  }
+
+  private async startBroker(): Promise<void> {
+    const runtimeDir = path.join(os.tmpdir(), "pab");
+    try {
+      await fs.mkdir(runtimeDir, { recursive: true });
+      await cleanOrphanSockets(runtimeDir);
+
+      this.socketPath = path.join(
+        runtimeDir,
+        `${process.pid}-${randomBytes(6).toString("hex")}.sock`
+      );
+      this.broker = createServer((socket) => this.handleConnection(socket));
+
+      const socketPath = this.socketPath;
+      this.exitListener = () => {
+        try {
+          unlinkSync(socketPath);
+        } catch {
+          // Process is terminating; ignore unlinking errors.
+        }
+      };
+      process.on("exit", this.exitListener);
+
       await listen(this.broker, this.socketPath);
       await fs.chmod(this.socketPath, 0o600);
       debugLog("mcp", `Pi MCP broker listening at ${this.socketPath} for session ${this.sessionId}`);
     } catch (error) {
-      await this.close();
+      await this.disposeBroker();
       throw error;
     }
   }
 
   public async close(): Promise<void> {
+    if (!this.closePromise) {
+      this.closePromise = (async () => {
+        await this.startPromise?.catch(() => {});
+        await this.disposeBroker();
+      })();
+    }
+
+    try {
+      await this.closePromise;
+    } finally {
+      this.closePromise = null;
+    }
+  }
+
+  private async disposeBroker(): Promise<void> {
     this.cleanupExitListener();
 
     this.gateway.setToolCallHandler(null);
@@ -153,6 +184,10 @@ export class BridgeIPC {
 
   private handleConnection(socket: Socket): void {
     this.sockets.add(socket);
+    socket.on("error", (error) => {
+      debugLog("mcp", "Pi MCP broker socket error:", error);
+      socket.destroy();
+    });
     socket.once("close", () => {
       this.sockets.delete(socket);
       const disconnectedCalls = [...this.resultSockets.entries()]
@@ -166,11 +201,12 @@ export class BridgeIPC {
       }
     });
 
+    const decoder = new StringDecoder("utf8");
     let buffer = "";
     let authenticated = false;
 
     socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf-8");
+      buffer += decoder.write(chunk);
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
         const line = buffer.slice(0, newline);

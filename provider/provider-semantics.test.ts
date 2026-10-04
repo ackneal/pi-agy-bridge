@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
-import { formatContextPrompt } from "./provider.ts";
+import { normalizeContext } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context, Model, Provider } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { AgyBridge, formatContextPrompt } from "./provider.ts";
 
 const assistant: AssistantMessage = {
   role: "assistant",
@@ -62,3 +64,44 @@ describe("formatContextPrompt provider semantics", () => {
     });
   }
 });
+
+for (const scenario of [
+  { name: "legacy enabled", marker: "1", apiKey: undefined, enabled: true, epoch: undefined },
+  { name: "missing credential", marker: undefined, apiKey: undefined, enabled: false, epoch: undefined },
+  { name: "disabled marker", marker: "0", apiKey: undefined, enabled: false, epoch: undefined },
+  { name: "OAuth setup marker", marker: undefined, apiKey: "agy-bridge:test-epoch", enabled: true, epoch: "test-epoch" },
+  { name: "invalid OAuth marker", marker: undefined, apiKey: "agy-bridge:", enabled: false, epoch: undefined },
+]) {
+  it(`stream gate with unknown auth status: ${scenario.name}`, async (t) => {
+    let provider: Provider | undefined;
+    const bridge = new AgyBridge({
+      on: () => {}, registerCommand: () => {}, getActiveTools: () => [], getAllTools: () => [],
+      registerProvider: (registered: Provider) => { provider = registered; },
+    } as unknown as ExtensionAPI);
+    t.after(() => bridge.liveSessions.disposeAll());
+    const lookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
+      throw new Error("Reached runtime using existing AGY login");
+    });
+    bridge.start();
+    assert.ok(provider);
+
+    for (const stream of [provider.stream, provider.streamSimple]) {
+      assert.ok(stream);
+      const message = await stream({ id: "test", provider: "agy" } as Model<any>,
+        normalizeContext({ messages: [], tools: [] }), {
+          sessionId: "gate-test",
+          env: scenario.marker === undefined ? {} : { AGY_BRIDGE_ENABLED: scenario.marker },
+          ...(scenario.apiKey ? { apiKey: scenario.apiKey } : {}),
+        }).result();
+
+      assert.equal(message.stopReason, "error");
+      assert.equal(message.errorMessage, scenario.enabled
+        ? "Reached runtime using existing AGY login"
+        : "Antigravity CLI disabled in Pi");
+    }
+    assert.equal(lookup.mock.callCount(), scenario.enabled ? 2 : 0);
+    if (scenario.enabled) {
+      for (const call of lookup.mock.calls) assert.equal(call.arguments[1], scenario.epoch);
+    }
+  });
+}

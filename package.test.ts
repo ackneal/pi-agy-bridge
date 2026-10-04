@@ -10,6 +10,13 @@ const execFileAsync = promisify(execFile);
 const projectDir = path.resolve(import.meta.dirname);
 
 describe("AGY MCP package", () => {
+  it("resolves the documented package-root API to the shipped TypeScript entrypoint", async () => {
+    assert.equal(import.meta.resolve("pi-agy-bridge"), new URL("./index.ts", import.meta.url).href);
+    const api = await import("pi-agy-bridge");
+    assert.equal(typeof api.setupAgyProvider, "function");
+    assert.equal(typeof api.default, "function");
+  });
+
   it("packs the static plugin and executable JavaScript without local artifacts", async () => {
     const cache = await mkdtemp(path.join(os.tmpdir(), "pi-gear-npm-cache-"));
     try {

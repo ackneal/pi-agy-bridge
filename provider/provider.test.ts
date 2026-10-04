@@ -1,77 +1,71 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Provider, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import cp from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { AgyRuntime } from "../runtime/process.ts";
 import { AgyBridge, registerAgyProvider, resolveModelAndEffort, streamAgyProvider } from "./provider.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-test("resolves explicit model suffix levels without defaulting Gemini effort", () => {
-  assert.deepEqual(resolveModelAndEffort("gemini-3.8-flash"), {
-    baseModel: "gemini-3.8-flash",
-    effort: undefined,
-  });
-  assert.deepEqual(resolveModelAndEffort("other-model-high"), {
-    baseModel: "other-model",
-    effort: "high",
-  });
-  assert.deepEqual(resolveModelAndEffort("gemini-3.8-flash-low", { reasoningEffort: "high" } as any), {
-    baseModel: "gemini-3.8-flash",
-    effort: "high",
-  });
-});
-
-for (const option of ["reasoningEffort", "reasoning", "thinkingLevel"] as const) {
-  for (const effort of ["off", "minimal", "xhigh", "max", "unknown", ""] as const) {
-    for (const modelId of ["other-model", "other-model-high"]) {
-      test(`rejects ${option}=${JSON.stringify(effort)} for ${modelId}`, () => {
-        assert.throws(
-          () => resolveModelAndEffort(modelId, { [option]: effort } as any),
-          { message: `Unsupported AGY reasoning effort: ${effort}. Supported values: low, medium, high.` },
-        );
-      });
-    }
-  }
-
-  for (const effort of ["low", "medium", "high"] as const) {
-    for (const modelId of ["other-model", "other-model-low"]) {
-      test(`accepts ${option}=${effort} for ${modelId}`, () => {
-        assert.deepEqual(resolveModelAndEffort(modelId, { [option]: effort } as any), {
-          baseModel: "other-model",
-          effort,
-        });
-      });
-    }
-  }
-}
-
-for (const [modelId, baseModel, effort] of [
-  ["other-model", "other-model", undefined],
-  ["other-model-low", "other-model", "low"],
-  ["other-model-medium", "other-model", "medium"],
-  ["other-model-HIGH", "other-model", "high"],
-] as const) {
-  test(`preserves absent effort behavior for ${modelId}`, () => {
-    for (const options of [undefined, {}]) {
-      assert.deepEqual(resolveModelAndEffort(modelId, options), { baseModel, effort });
-    }
-  });
-}
-
 const allNullThinkingLevels = {
   off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null,
 };
 
-for (const modelId of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) {
-  test(`preserves fixed model ${modelId} without effort`, () => {
-    for (const options of [undefined, {}]) {
-      assert.deepEqual(resolveModelAndEffort(modelId, options, allNullThinkingLevels), {
-        baseModel: modelId, effort: undefined,
-      });
-    }
-  });
+type ResolverCase = {
+  name: string;
+  modelId: string;
+  options?: Record<string, string> | undefined;
+  thinkingLevelMap?: Model<any>["thinkingLevelMap"];
+  expected?: ReturnType<typeof resolveModelAndEffort>;
+  error?: string;
+};
 
+const resolverCases: ResolverCase[] = [
+  { name: "Gemini has no default effort", modelId: "gemini-3.8-flash", expected: { baseModel: "gemini-3.8-flash", effort: undefined } },
+  { name: "explicit effort overrides suffix", modelId: "gemini-3.8-flash-low", options: { reasoningEffort: "high" }, expected: { baseModel: "gemini-3.8-flash", effort: "high" } },
+  ...["reasoningEffort", "reasoning", "thinkingLevel"].flatMap((option) => [
+    ...["off", "minimal", "xhigh", "max", "unknown", ""].flatMap((effort) =>
+      ["other-model", "other-model-high"].map((modelId) => ({
+        name: `rejects ${option}=${JSON.stringify(effort)} for ${modelId}`, modelId, options: { [option]: effort },
+        error: `Unsupported AGY reasoning effort: ${effort}. Supported values: low, medium, high.`,
+      }))),
+    ...(["low", "medium", "high"] as const).flatMap((effort) =>
+      ["other-model", "other-model-low"].map((modelId) => ({
+        name: `accepts ${option}=${effort} for ${modelId}`, modelId, options: { [option]: effort },
+        expected: { baseModel: "other-model", effort },
+      }))),
+  ]),
+  ...([
+    ["other-model", "other-model", undefined],
+    ["other-model-low", "other-model", "low"],
+    ["other-model-medium", "other-model", "medium"],
+    ["other-model-HIGH", "other-model", "high"],
+  ] as const).flatMap(([modelId, baseModel, effort]) => [undefined, {}].map((options) => ({
+    name: `absent effort for ${modelId} with ${JSON.stringify(options)}`, modelId, options, expected: { baseModel, effort },
+  }))),
+  ...["claude-sonnet-4-6", "claude-opus-4-6-thinking"].flatMap((modelId) => [undefined, {}].map((options) => ({
+    name: `fixed ${modelId} with ${JSON.stringify(options)}`, modelId, options, thinkingLevelMap: allNullThinkingLevels,
+    expected: { baseModel: modelId, effort: undefined },
+  }))),
+  ...(["low", "medium", "high"] as const).map((effort) => ({
+    name: `supported Gemini ${effort}`, modelId: "gemini-3.8-flash", options: { reasoning: effort },
+    thinkingLevelMap: { ...allNullThinkingLevels, low: "low", medium: "medium", high: "high" },
+    expected: { baseModel: "gemini-3.8-flash", effort },
+  })),
+];
+
+for (const row of resolverCases) {
+  test(row.name, () => {
+    const resolve = () => resolveModelAndEffort(row.modelId, row.options as SimpleStreamOptions, row.thinkingLevelMap);
+    if (row.error) assert.throws(resolve, { message: row.error });
+    else assert.deepEqual(resolve(), row.expected);
+  });
+}
+
+for (const modelId of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) {
   for (const option of ["reasoningEffort", "reasoning", "thinkingLevel"]) {
     for (const effort of ["low", "medium", "high"]) {
       test(`rejects fixed ${modelId} ${option}=${effort} before runtime preparation`, async (t) => {
@@ -91,14 +85,6 @@ for (const modelId of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) {
       });
     }
   }
-}
-
-for (const effort of ["low", "medium", "high"] as const) {
-  test(`accepts supported Gemini ${effort}`, () => {
-    assert.deepEqual(resolveModelAndEffort("gemini-3.8-flash", { reasoning: effort }, {
-      ...allNullThinkingLevels, low: "low", medium: "medium", high: "high",
-    }), { baseModel: "gemini-3.8-flash", effort });
-  });
 }
 
 test("doctor reports installation errors without starting a model turn", async (t) => {
@@ -168,22 +154,21 @@ test("doctor clears the recorded installation error after successful installatio
   assert.doesNotMatch(report, /Last plugin error/);
 });
 
-test("registers the AGY provider and session lifecycle without starting runtime work", async () => {
+test("registers the AGY provider and session lifecycle without starting runtime work", async (t) => {
+  const spawn = t.mock.method(cp, "spawn", () => { throw new Error("Registration must not start a process"); });
+  const execFile = t.mock.method(cp, "execFile", () => { throw new Error("Registration must not execute a command"); });
+  const runtimeStart = t.mock.method(AgyRuntime.prototype, "start", async () => { throw new Error("Registration must not start the runtime"); });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+
   const handlers = new Map<string, unknown>();
   const commands = new Map<string, unknown>();
-  let provider: {
-    name: string;
-    baseUrl: string;
-    apiKey: string;
-    models: unknown[];
-    refreshModels?: unknown;
-    streamSimple: unknown;
-  } | undefined;
+  let provider: Provider | undefined;
 
   const pi = {
     on: (event: string, handler: unknown) => handlers.set(event, handler),
     registerCommand: (name: string, options: unknown) => commands.set(name, options),
-    registerProvider: (_name: string, registered: typeof provider) => {
+    registerProvider: (registered: Provider) => {
       provider = registered;
     },
   } as unknown as ExtensionAPI;
@@ -192,15 +177,51 @@ test("registers the AGY provider and session lifecycle without starting runtime 
 
   assert.ok(commands.has("agy-bridge:doctor"));
   assert.ok(provider);
-  assert.equal(provider.name, "agy");
+  assert.equal(provider.id, "agy");
+  assert.equal(provider.name, "Antigravity CLI [pi-agy-bridge]");
   assert.equal(provider.baseUrl, "agy");
-  assert.equal(provider.apiKey, "not-used");
-  assert.ok(Array.isArray(provider.models));
+  assert.ok(provider.auth.apiKey);
+  assert.equal(provider.auth.apiKey.login, undefined);
+  assert.ok(provider.auth.oauth);
+  assert.equal(provider.auth.oauth.isSubscription, true);
+  assert.equal(typeof provider.auth.oauth.login, "function");
+  assert.equal(typeof provider.auth.oauth.refresh, "function");
+  assert.equal(typeof provider.auth.oauth.toAuth, "function");
+  assert.equal(typeof provider.auth.apiKey.check, "function");
+  assert.equal(typeof provider.auth.apiKey.resolve, "function");
+  const persisted = { type: "api_key" as const, env: { AGY_BRIDGE_ENABLED: "1" } };
+  const catalog = provider.getModels();
+  assert.deepEqual(provider.filterModels?.(catalog, persisted), catalog);
+  assert.deepEqual(provider.filterModels?.(catalog, undefined), []);
+  assert.ok(Array.isArray(provider.getModels()));
   assert.equal(typeof provider.refreshModels, "function");
   assert.equal(typeof provider.streamSimple, "function");
   assert.equal(typeof handlers.get("session_start"), "function");
   assert.equal(typeof handlers.get("session_shutdown"), "function");
 
+  assert.equal(spawn.mock.callCount(), 0);
+  assert.equal(execFile.mock.callCount(), 0);
+  assert.equal(runtimeStart.mock.callCount(), 0);
+
   const shutdown = handlers.get("session_shutdown") as (() => Promise<void>);
   await shutdown();
+});
+
+test("explicit AGY models are native static models preserving configured fields", () => {
+  let provider: Provider | undefined;
+  const configured = {
+    id: "custom", name: "Custom", reasoning: true, input: ["text"] as ("text" | "image")[],
+    contextWindow: 12345, maxTokens: 678,
+    cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+  };
+  registerAgyProvider({
+    on: () => {}, registerCommand: () => {},
+    registerProvider: (registered: Provider) => { provider = registered; },
+  } as unknown as ExtensionAPI, { models: [configured], agyPath: "__invalid_binary_name__" });
+
+  assert.ok(provider);
+  assert.equal(provider.refreshModels, undefined);
+  assert.deepEqual(provider.getModels(), [{
+    ...configured, api: "agy", provider: "agy", baseUrl: "agy", type: "chat",
+  }]);
 });

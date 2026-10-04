@@ -4,7 +4,7 @@
       "command": "sh",
       "args": [
         "-c",
-        "exec $PI_AGY_BRIDGE_MCP_COMMAND"
+        "exec \"$PI_AGY_BRIDGE_MCP_NODE\" \"$PI_AGY_BRIDGE_MCP_ENTRYPOINT\" --endpoint \"$PI_AGY_BRIDGE_MCP_ENDPOINT\""
       ]
     }
   }

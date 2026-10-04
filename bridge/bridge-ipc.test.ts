@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
+import net, { type Socket } from "node:net";
+import { syncBuiltinESMExports } from "node:module";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +13,147 @@ import { AgyMcpServer, cleanOrphanSockets } from "./bridge-ipc.ts";
 import { connectBridge, parseBridgeUri } from "../mcp/socket.js";
 
 describe("AgyMcpServer", () => {
+  for (const phase of ["mkdir", "listen", "chmod", "failure"] as const) {
+    it(`serializes concurrent starts and close during ${phase}`, async (t) => {
+      const bridge = new AgyMcpServer([]);
+      const exitListeners = process.listeners("exit");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let reached!: () => void;
+      const entered = new Promise<void>((resolve) => { reached = resolve; });
+      let created = 0;
+      let closed = 0;
+      const unlinked: string[] = [];
+      let endpoint = "";
+      const server = Object.assign(new EventEmitter(), {
+        listening: false,
+        listen(socketPath: string, callback: () => void) {
+          endpoint = socketPath;
+          void (async () => {
+            if (phase === "listen") {
+              reached();
+              await gate;
+            }
+            server.listening = true;
+            callback();
+          })();
+        },
+        close(callback: () => void) {
+          closed++;
+          server.listening = false;
+          callback();
+        },
+      });
+
+      t.after(async () => {
+        release();
+        await bridge.close();
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      });
+      t.mock.method(net, "createServer", () => { created++; return server; });
+      syncBuiltinESMExports();
+      t.mock.method(fs, "mkdir", async () => {
+        if (phase === "mkdir") {
+          reached();
+          await gate;
+        }
+      });
+      t.mock.method(fs, "readdir", async () => []);
+      t.mock.method(fs, "chmod", async () => {
+        if (phase === "chmod" || phase === "failure") {
+          reached();
+          await gate;
+        }
+        if (phase === "failure") throw new Error("chmod failed");
+      });
+      t.mock.method(fs, "unlink", async (socketPath: string) => { unlinked.push(socketPath); });
+
+      const starting = bridge.start();
+      const startOutcome = phase === "failure"
+        ? assert.rejects(starting, /chmod failed/)
+        : assert.doesNotReject(starting);
+      await entered;
+      await assert.rejects(bridge.start(), /already running/);
+      const closing = bridge.close();
+      const secondClose = bridge.close();
+      await assert.rejects(bridge.start(), /already running/);
+      release();
+      await Promise.all([startOutcome, closing, secondClose]);
+
+      assert.equal(created, 1);
+      assert.equal(closed, 1);
+      assert.equal(server.listening, false);
+      assert.deepEqual(unlinked, [endpoint]);
+      assert.deepEqual(process.listeners("exit"), exitListeners);
+      assert.throws(() => bridge.bridgeUri, /not been started/);
+    });
+  }
+
+  for (const event of ["error", "close"] as const) {
+    it(`cancels a pending call on socket ${event}`, async (t) => {
+      const bridge = new AgyMcpServer([{
+        name: "read", description: "Read", parameters: Type.Object({}),
+      }]);
+      const socket = Object.assign(new EventEmitter(), {
+        destroyed: false,
+        write: () => true,
+        end: () => assert.fail("Rejected message"),
+        destroy() {
+          socket.destroyed = true;
+          socket.emit("close");
+        },
+      });
+      t.after(() => bridge.close());
+      bridge.setToolCallHandler(() => {});
+      (bridge as unknown as { handleConnection(socket: Socket): void }).handleConnection(socket as unknown as Socket);
+      socket.emit("data", Buffer.from(
+        `${JSON.stringify({ type: "hello", sessionId: bridge.sessionId })}\n` +
+        `${JSON.stringify({ type: "call", id: "1", name: "read", arguments: {} })}\n`
+      ));
+      assert.equal(bridge.hasPendingCalls, true);
+
+      if (event === "error") {
+        assert.doesNotThrow(() => socket.emit("error", new Error("connection reset")));
+        assert.equal(socket.destroyed, true);
+      } else {
+        socket.destroy();
+      }
+      assert.equal(bridge.hasPendingCalls, false);
+      await Promise.resolve();
+    });
+  }
+
+  it("decodes Chinese broker messages across Buffer boundaries without a socket", async () => {
+    const text = "中文路徑";
+    const hello = Buffer.from(`${JSON.stringify({ type: "hello", sessionId: text })}\n`);
+    const call = Buffer.from(`${JSON.stringify({ type: "call", id: "1", name: "read", arguments: { path: text } })}\n`);
+    const wire = Buffer.concat([hello, call]);
+    const firstChineseByte = wire.indexOf(Buffer.from("中"));
+    const cases = [
+      [wire],
+      [wire.subarray(0, firstChineseByte + 1), wire.subarray(firstChineseByte + 1)],
+      [wire.subarray(0, firstChineseByte + 2), wire.subarray(firstChineseByte + 2)],
+      Array.from(wire, (byte) => Buffer.from([byte])),
+    ];
+
+    for (const chunks of cases) {
+      const bridge = new AgyMcpServer([{ name: "read", description: "Read", parameters: Type.Object({ path: Type.String() }) }], text);
+      const socket = Object.assign(new EventEmitter(), { write: () => true, end: () => assert.fail("Rejected message"), destroy: () => { socket.emit("close"); } });
+      let relayed: unknown;
+      bridge.setToolCallHandler((batch) => { relayed = batch.calls[0]?.arguments; });
+
+      try {
+        (bridge as unknown as { handleConnection(socket: Socket): void }).handleConnection(socket as unknown as Socket);
+        for (const chunk of chunks) socket.emit("data", chunk);
+        await waitFor(() => relayed !== undefined);
+        assert.deepEqual(relayed, { path: text });
+      } finally {
+        await bridge.close();
+      }
+    }
+  });
+
   it("exposes only its Pi context tools over stdio and relays results", async (t) => {
     const bridge = new AgyMcpServer([{
       name: "read",
@@ -29,18 +173,17 @@ describe("AgyMcpServer", () => {
         throw error;
       }
       const environment = bridge.processEnvironment;
-      assert.deepEqual(Object.keys(environment), ["PI_AGY_BRIDGE_MCP_COMMAND"]);
-      assert.match(environment.PI_AGY_BRIDGE_MCP_COMMAND!, /--endpoint/);
+      assert.equal(environment.PI_AGY_BRIDGE_MCP_NODE, process.execPath);
+      assert.equal(environment.PI_AGY_BRIDGE_MCP_ENDPOINT, bridge.bridgeUri);
       const bridgeUri = new URL(bridge.bridgeUri);
       assert.equal(bridgeUri.protocol, "unix:");
       assert.equal(bridgeUri.searchParams.get("session"), bridge.sessionId);
 
-      const scriptPath = fileURLToPath(new URL("../mcp/index.js", import.meta.url));
-      child = spawn("sh", ["-c", "exec $PI_AGY_BRIDGE_MCP_COMMAND"], {
+      child = spawn("sh", ["-c", 'exec "$PI_AGY_BRIDGE_MCP_NODE" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'], {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
-          PI_AGY_BRIDGE_MCP_COMMAND: `${process.execPath} ${scriptPath} --endpoint ${bridge.bridgeUri}`,
+          ...environment,
         },
       });
       const responses = collectResponses(child);
@@ -155,43 +298,12 @@ describe("AgyMcpServer", () => {
     await assert.doesNotReject(() => cleanOrphanSockets(nonExistentDir));
   });
 
-  it("registers exit hook on start and unregisters on close", async (t) => {
-    const bridge = new AgyMcpServer([]);
+  for (const action of ["close", "exit"] as const) {
+    it(`removes the socket on ${action} and unregisters its exit hook on close`, async (t) => {
+      const bridge = new AgyMcpServer([]);
+      const listenersBefore = process.listeners("exit");
+      t.after(() => bridge.close());
 
-    try {
-      try {
-        await bridge.start();
-      } catch (error) {
-        if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") {
-          t.skip("Unix domain sockets are unavailable in this sandbox");
-          return;
-        }
-        throw error;
-      }
-
-      const exitListenersBefore = process.listeners("exit");
-      assert.ok(exitListenersBefore.length > 0);
-
-      const endpoint = parseBridgeUri(bridge.bridgeUri).endpoint;
-      const existsBefore = await fs.access(endpoint).then(() => true, () => false);
-      assert.equal(existsBefore, true);
-
-      await bridge.close();
-
-      const exitListenersAfter = process.listeners("exit");
-      assert.equal(exitListenersAfter.length, exitListenersBefore.length - 1);
-
-      const existsAfter = await fs.access(endpoint).then(() => true, () => false);
-      assert.equal(existsAfter, false);
-    } finally {
-      await bridge.close();
-    }
-  });
-
-  it("unlinks socket file synchronously when exit listener is executed", async (t) => {
-    const bridge = new AgyMcpServer([]);
-
-    try {
       try {
         await bridge.start();
       } catch (error) {
@@ -203,19 +315,18 @@ describe("AgyMcpServer", () => {
       }
 
       const endpoint = parseBridgeUri(bridge.bridgeUri).endpoint;
-      const existsBefore = await fs.access(endpoint).then(() => true, () => false);
-      assert.equal(existsBefore, true);
+      await fs.access(endpoint);
+      const addedListeners = process.listeners("exit").filter((listener) => !listenersBefore.includes(listener));
+      assert.equal(addedListeners.length, 1);
 
-      const listeners = process.listeners("exit");
-      const lastListener = listeners[listeners.length - 1] as () => void;
-      lastListener();
+      if (action === "exit") addedListeners[0]!(0);
+      else await bridge.close();
 
-      const existsAfter = await fs.access(endpoint).then(() => true, () => false);
-      assert.equal(existsAfter, false);
-    } finally {
+      await assert.rejects(fs.access(endpoint), { code: "ENOENT" });
       await bridge.close();
-    }
-  });
+      assert.deepEqual(process.listeners("exit"), listenersBefore);
+    });
+  }
 
   for (const [bridgeUri, expectedError] of [
     ["not-a-uri", "Bridge URI must be a valid unix: URI"],
@@ -223,11 +334,13 @@ describe("AgyMcpServer", () => {
   ] as const) {
     it(`fails clearly for invalid MCP command endpoint ${JSON.stringify(bridgeUri)}`, async () => {
       const scriptPath = fileURLToPath(new URL("../mcp/index.js", import.meta.url));
-      const child = spawn("sh", ["-c", "exec $PI_AGY_BRIDGE_MCP_COMMAND"], {
+      const child = spawn("sh", ["-c", 'exec "$PI_AGY_BRIDGE_MCP_NODE" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'], {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
-          PI_AGY_BRIDGE_MCP_COMMAND: `${process.execPath} ${scriptPath} --endpoint ${bridgeUri}`,
+          PI_AGY_BRIDGE_MCP_NODE: process.execPath,
+          PI_AGY_BRIDGE_MCP_ENTRYPOINT: scriptPath,
+          PI_AGY_BRIDGE_MCP_ENDPOINT: bridgeUri,
         },
       });
       let stdout = "";

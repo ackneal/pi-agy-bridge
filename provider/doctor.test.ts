@@ -50,13 +50,26 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       assert.match(report, row.expected);
       if (row.models !== undefined) assert.doesNotMatch(report, /cached/);
     }
+    for (const row of [
+      { authStatus: undefined, expected: /Authentication snapshot: unknown \(not verified\)/ },
+      { authStatus: "unknown", expected: /Authentication snapshot: unknown \(not verified\)/ },
+      { authStatus: "authenticated", expected: /Authentication snapshot: authenticated\n/ },
+      { authStatus: "unauthenticated", expected: /Authentication snapshot: unauthenticated\n/ },
+    ] as const) {
+      const report = await collectDoctorReport({ ...options, authStatus: row.authStatus });
+      assert.match(report, row.expected);
+      assert.match(report, /Authentication is a last-known snapshot; live authentication is not tested\./);
+      assert.doesNotMatch(report, /Last authentication error/);
+    }
     await fs.writeFile(path.join(source, "plugin.json"), '{}');
     const report = await collectDoctorReport({
       ...options, agyPath: path.join(home, "missing"), models: [1, 2],
       pluginError: { time: "2026-01-01T00:00:00Z", message: "install failed" },
       discoveryError: { time: "2026-01-02T00:00:00Z", message: "discovery failed" },
+      authStatus: "unauthenticated",
+      authError: { time: "2026-01-03T00:00:00Z", message: "login failed" },
     });
-    for (const pattern of [/✗ AGY error/, /Resolved AGY path:/, /✗ Plugin error/, /2 configured/, /Node version:/, /MCP entrypoint exists/, /Last plugin error at 2026-01-01T00:00:00Z: install failed/, /Last discovery error at 2026-01-02T00:00:00Z: discovery failed/, /Authentication, model execution, and Unix socket creation not tested\./]) assert.match(report, pattern);
+    for (const pattern of [/✗ AGY error/, /Resolved AGY path:/, /✗ Plugin error/, /2 configured/, /Node version:/, /MCP entrypoint exists/, /Last plugin error at 2026-01-01T00:00:00Z: install failed/, /Last discovery error at 2026-01-02T00:00:00Z: discovery failed/, /Last authentication error at 2026-01-03T00:00:00Z: login failed/, /Authentication snapshot: unauthenticated/, /Authentication is a last-known snapshot; live authentication is not tested\./, /Model execution and Unix socket creation not tested\./]) assert.match(report, pattern);
     assert.ok((await fs.readFile(calls, "utf8")).trim().split("\n").every(call => call === "--version"));
   } finally {
     if (previous === undefined) delete process.env.HOME;

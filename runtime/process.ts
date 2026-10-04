@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { AgyProtocolParser } from "./protocol.ts";
 import { AgyProcessError, type AgyEvent, type AgyInitEvent, type AgyInput } from "../shared/types.ts";
 import { debugLog } from "../shared/debug.ts";
@@ -24,6 +25,7 @@ export class AgyRuntime {
   private eventStreamEnded = false;
   private stderrBuffer = "";
   private isTerminated = false;
+  private hasTurnResult = false;
   private nodeExitListener: (() => void) | null = null;
 
   constructor(options: AgyProcessOptions) {
@@ -85,7 +87,7 @@ export class AgyRuntime {
     });
 
     this.nodeExitListener = () => {
-      if (this.child && this.child.exitCode === null && !this.child.killed) {
+      if (this.child && this.child.exitCode === null && this.child.signalCode === null) {
         try {
           this.child.kill("SIGKILL");
         } catch {
@@ -104,8 +106,9 @@ export class AgyRuntime {
       debugLog("process", `[stderr] ${text.trimEnd()}`);
     });
 
+    const stdoutDecoder = new StringDecoder("utf8");
     this.child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf-8");
+      const text = stdoutDecoder.write(chunk);
       const events = this.parser.push(text);
       for (const event of events) {
         this.dispatchEvent(event);
@@ -113,7 +116,10 @@ export class AgyRuntime {
     });
 
     this.child.stdout?.on("end", () => {
-      const remaining = this.parser.flush();
+      const remaining = [
+        ...this.parser.push(stdoutDecoder.end()),
+        ...this.parser.flush(),
+      ];
       for (const event of remaining) {
         this.dispatchEvent(event);
       }
@@ -141,6 +147,8 @@ export class AgyRuntime {
           );
           return;
         }
+
+        if (this.hasTurnResult) return;
 
         debugLog("process", `Process exited post-init with code ${code}, signal ${signal}`);
         const recentStderr = this.stderrBuffer.trim();
@@ -180,7 +188,8 @@ export class AgyRuntime {
         });
       };
 
-      this.child!.once("exit", onExit);
+      // close follows stdout end, so buffered results settle before termination.
+      this.child!.once("close", onExit);
       this.child!.once("error", onError);
 
       unsubscribe = this.onEvent((event) => {
@@ -204,6 +213,7 @@ export class AgyRuntime {
     }
 
     const payload = `${JSON.stringify(input)}\n`;
+    this.hasTurnResult = false;
 
     await new Promise<void>((resolve, reject) => {
       this.child!.stdin!.write(payload, "utf-8", (err) => {
@@ -259,7 +269,8 @@ export class AgyRuntime {
 
   public async abort(): Promise<void> {
     this.listeners.clear();
-    if (!this.child || this.child.exitCode !== null || this.child.killed || this.isTerminated) {
+    this.endEventStream();
+    if (!this.child || this.child.exitCode !== null || this.child.signalCode !== null || this.isTerminated) {
       this.cleanupNodeExitListener();
       return;
     }
@@ -289,7 +300,7 @@ export class AgyRuntime {
       }
 
       timer = setTimeout(() => {
-        if (!done && child.exitCode === null && !child.killed) {
+        if (!done && child.exitCode === null && child.signalCode === null) {
           try {
             child.kill("SIGKILL");
           } catch {
@@ -312,6 +323,7 @@ export class AgyRuntime {
   }
 
   private dispatchEvent(event: AgyEvent): void {
+    if (event.event === "result") this.hasTurnResult = true;
     for (const wake of this.eventWaiters) wake();
 
     for (const listener of this.listeners) {

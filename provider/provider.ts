@@ -1,7 +1,8 @@
 import os from "node:os";
 import path from "node:path";
-import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
+  AnyModel,
   AssistantMessageEventStream,
   Context,
   Message,
@@ -9,7 +10,7 @@ import type {
   SimpleStreamOptions,
   Tool,
 } from "@earendil-works/pi-ai";
-import { getCurrentTools, normalizeContext } from "@earendil-works/pi-ai";
+import { getCurrentTools, isModelType, normalizeContext } from "@earendil-works/pi-ai";
 import { PiEventAdapter } from "../runtime/events.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
@@ -26,8 +27,10 @@ import { discoverAgyModels, restoreStoredAgyModels } from "../discovery/models.t
 import { debugArtifact, debugLog } from "../shared/debug.ts";
 import type { AgyBridgeConfig } from "../shared/types.ts";
 import { collectDoctorReport, type DoctorFailure } from "./doctor.ts";
+import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
+import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
 
-export function formatMessageText(message: Message): string {
+function formatMessageText(message: Message): string {
   if (typeof message.content === "string") return message.content;
 
   return message.content
@@ -169,7 +172,7 @@ export function resolveModelAndEffort(
   return { baseModel, effort };
 }
 
-export function expandHome(filepath: string): string {
+function expandHome(filepath: string): string {
   if (filepath.startsWith("~/") || filepath === "~") {
     return path.join(os.homedir(), filepath.slice(1));
   }
@@ -185,6 +188,7 @@ async function prepareRuntime(
   bridge: AgyBridge,
   liveSession: LiveSession
 ): Promise<{ proc: AgyRuntime; mcpServer: BridgeIPC; reconstructContext: boolean }> {
+  options?.signal?.throwIfAborted();
   const { baseModel, effort } = resolveModelAndEffort(model.id, options, model.thinkingLevelMap);
   const agentName = config?.agentName ?? "pi-bridge";
   const toolSyncValues = tools.map((tool) => JSON.stringify({
@@ -198,7 +202,8 @@ async function prepareRuntime(
   const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
   const rawPluginDir = config?.pluginDir ?? config?.agentDir;
   const pluginDir = rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR;
-  const runtimeRef = await bridge.runtimeSessionStore.get(liveSession.piSessionId);
+  const runtimeRef = await bridge.runtimeSessionStore.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH);
+  options?.signal?.throwIfAborted();
   const decision = bridge.runtimeSessionSync.decide(liveSession, {
     syncKey,
     turnIndex,
@@ -233,12 +238,21 @@ async function prepareRuntime(
   });
   await liveSession.dispose();
   await validateAgyVersion(config?.agyPath, config?.minVersion);
+  options?.signal?.throwIfAborted();
 
   const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
   let proc: AgyRuntime | null = null;
+  const abortStartup = () => {
+    void mcpServer.close().catch((error) => debugLog("session", "Error closing cancelled MCP startup:", error));
+    void proc?.abort().catch((error) => debugLog("session", "Error aborting cancelled AGY startup:", error));
+  };
+  options?.signal?.addEventListener("abort", abortStartup, { once: true });
   try {
+    options?.signal?.throwIfAborted();
     await mcpServer.start();
+    options?.signal?.throwIfAborted();
     await bridge.ensureAgyPluginInstalled(pluginDir);
+    options?.signal?.throwIfAborted();
     proc = new AgyRuntime({
       agyPath: config?.agyPath,
       agentName,
@@ -250,6 +264,7 @@ async function prepareRuntime(
     const initEvent = await proc.start();
     debugLog("register", "AGY init conversation id:", initEvent.conversation_id);
     await mcpServer.waitForConnection();
+    options?.signal?.throwIfAborted();
     liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id);
     liveSession.turnIndex = turnIndex;
     return { proc, mcpServer, reconstructContext: decision.action === "rebuild" };
@@ -264,6 +279,8 @@ async function prepareRuntime(
       });
     }
     throw error;
+  } finally {
+    options?.signal?.removeEventListener("abort", abortStartup);
   }
 }
 
@@ -331,7 +348,7 @@ export function streamAgyProvider(
       if (liveSession.conversationId) {
         void bridge.runtimeSessionStore.set(liveSession.piSessionId, {
           conversationId: liveSession.conversationId,
-        }, [...context.messages, adapter.message]).catch((error) => {
+        }, [...context.messages, adapter.message], options?.env?.AGY_BRIDGE_LOGIN_EPOCH).catch((error) => {
           debugLog("session", "Could not persist AGY runtime reference:", error);
         });
       }
@@ -382,7 +399,7 @@ export function streamAgyProvider(
         if (liveSession.conversationId) {
           await bridge.runtimeSessionStore.set(liveSession.piSessionId, {
             conversationId: liveSession.conversationId,
-          }, context.messages);
+          }, context.messages, options?.env?.AGY_BRIDGE_LOGIN_EPOCH);
         }
         return;
       }
@@ -395,7 +412,7 @@ export function streamAgyProvider(
       if (options?.onPayload) {
         try {
           const payload = { prompt };
-          const rewritten = options.onPayload(payload, model);
+          const rewritten = await options.onPayload(payload, model);
           if (rewritten && typeof rewritten === "object" && "prompt" in rewritten) {
             prompt = (rewritten as { prompt: string }).prompt;
           }
@@ -403,6 +420,8 @@ export function streamAgyProvider(
           debugLog("register", "Error in options.onPayload:", err);
         }
       }
+
+      options?.signal?.throwIfAborted();
 
       debugArtifact("agy-payload", {
         sessionId: piSessionId,
@@ -415,7 +434,7 @@ export function streamAgyProvider(
       cleanup();
       const errorMsg = err instanceof Error ? err.message : String(err);
       debugLog("register", "Turn execution failed:", errorMsg);
-      adapter.handleTermination("error", errorMsg);
+      adapter.handleTermination(options?.signal?.aborted ? "aborted" : "error", errorMsg);
       await liveSession.dispose();
     }
   })();
@@ -428,6 +447,10 @@ export class AgyBridge {
   private readonly config: AgyBridgeConfig | undefined;
   private pluginError: DoctorFailure | undefined;
   private discoveryError: DoctorFailure | undefined;
+  private readonly authentication: AgyAuthentication;
+  private startupAuthenticationStarted = false;
+  private runtimeLifetime = new AbortController();
+  private readonly sessionIds = new Set<string>();
   public readonly liveSessions = new LiveSessionRegistry();
   public readonly runtimeSessionSync = new RuntimeSessionSync();
   public readonly piContextAdapter = new PiContextAdapter();
@@ -436,6 +459,16 @@ export class AgyBridge {
   constructor(pi: ExtensionAPI, config?: AgyBridgeConfig) {
     this.pi = pi;
     this.config = config;
+    this.authentication = new AgyAuthentication(config?.agyPath, async () => {
+      this.runtimeLifetime.abort(new Error("AGY login changed the bridge session"));
+      await this.liveSessions.disposeAll();
+      for (const sessionId of this.sessionIds) {
+        if (this.piContextAdapter.getSessionManager(sessionId)) {
+          await this.runtimeSessionStore.delete(sessionId);
+        }
+      }
+      this.runtimeLifetime = new AbortController();
+    });
   }
 
   public async ensureAgyPluginInstalled(pluginDir: string): Promise<void> {
@@ -462,7 +495,13 @@ export class AgyBridge {
   }
 
   public start(): void {
-    let models: ProviderModelConfig[] = this.config?.models ?? [];
+    let models: AnyModel[] = (this.config?.models ?? []).map((model) => ({
+      ...model,
+      provider: "agy",
+      api: model.api ?? "agy",
+      baseUrl: model.baseUrl ?? "agy",
+      type: model.type ?? "chat",
+    })) as AnyModel[];
 
     this.pi.registerCommand("agy-bridge:doctor", {
       description: "Check AGY CLI, plugin installation, models, and MCP",
@@ -476,6 +515,8 @@ export class AgyBridge {
           catalogModels: models,
           pluginError: this.pluginError,
           discoveryError: this.discoveryError,
+          authStatus: this.authentication.status,
+          authError: this.authentication.failure,
         });
         this.pi.sendMessage({
           customType: "pi-agy-bridge:doctor",
@@ -485,33 +526,71 @@ export class AgyBridge {
       },
     });
 
-    this.pi.on("session_start", async (_event, ctx) => {
-      this.piContextAdapter.bind(ctx.sessionManager);
-      if (!this.config?.models) {
-        await ctx.modelRegistry.refresh({ providers: ["agy"], allowNetwork: true });
-      }
+    this.pi.on("session_start", (event, ctx) => {
+      this.sessionIds.add(this.piContextAdapter.bind(ctx.sessionManager));
+      const lifetime = this.runtimeLifetime.signal;
+      const autoConfigure = event.reason === "startup" && !this.startupAuthenticationStarted;
+      if (autoConfigure) this.startupAuthenticationStarted = true;
+
+      void (async () => {
+        if (autoConfigure) {
+          try {
+            const authPath = this.config?.authPath ?? path.join(getAgentDir(), "auth.json");
+            await autoConfigureAgyAuthentication(this.authentication, authPath, lifetime);
+          } catch (error) {
+            debugLog("auth", "AGY startup auto-configuration skipped:", error);
+          }
+        }
+        if (lifetime.aborted) return;
+
+        try {
+          await ctx.modelRegistry.refresh({ providers: ["agy"], allowNetwork: true });
+        } catch (error) {
+          debugLog("discovery", "AGY background model refresh failed:", error);
+        }
+      })();
     });
     this.pi.on("session_shutdown", async () => {
+      this.authentication.close();
+      this.runtimeLifetime.abort(new Error("AGY bridge session ended"));
       await this.liveSessions.disposeAll();
       this.piContextAdapter.clear();
+      this.sessionIds.clear();
     });
 
-    this.pi.registerProvider("agy", {
-      name: "agy",
+    const stream = (model: Model<any>, context: Context, options?: SimpleStreamOptions) => {
+      const oauthEnvironment = getAgyBridgeAuthEnvironment(options?.apiKey);
+      const env = { ...options?.env, ...oauthEnvironment };
+      if (env.AGY_BRIDGE_ENABLED !== "1") {
+        const adapter = new PiEventAdapter({ model: model.id, provider: "agy" });
+        adapter.handleTermination("error", "Antigravity CLI disabled in Pi");
+        return adapter.stream;
+      }
+      const signal = options?.signal
+        ? AbortSignal.any([options.signal, this.runtimeLifetime.signal])
+        : this.runtimeLifetime.signal;
+      return streamAgyProvider(model, context, { ...options, env, signal }, this.config, this);
+    };
+
+    this.pi.registerProvider({
+      id: "agy",
+      name: "Antigravity CLI [pi-agy-bridge]",
       baseUrl: "agy",
-      apiKey: "not-used",
-      api: "agy" as any,
-      models,
+      auth: { oauth: this.authentication.oauth, apiKey: this.authentication.method },
+      getModels: () => models.filter((model) => isModelType(model, "chat")),
+      getAllModels: () => models,
+      filterModels: (catalog, credential) => isAgyBridgeEnabled(credential) ? catalog : [],
+      filterAllModels: (catalog, credential) => isAgyBridgeEnabled(credential) ? catalog : [],
       ...(this.config?.models ? {} : {
         refreshModels: async (context) => {
-          if (context.signal.aborted) return models;
+          if (context.signal.aborted) return;
 
           if (context.stored) {
             const restored = restoreStoredAgyModels(context.stored.models);
             const accepted = await context.publish({ update: () => { models = restored; } });
-            if (!accepted) return models;
+            if (!accepted) return;
           }
-          if (!context.allowNetwork) return models;
+          if (!context.allowNetwork) return;
 
           try {
             const discovered = await discoverAgyModels(this.config?.agyPath, context.signal);
@@ -530,11 +609,10 @@ export class AgyBridge {
             };
             debugLog("models", "Model refresh failed; retaining cached models:", error);
           }
-          return models;
         },
       }),
-      streamSimple: (model, context, options) =>
-        streamAgyProvider(model, context, options, this.config, this),
+      stream: (model, context, options) => stream(model, context, options as SimpleStreamOptions),
+      streamSimple: stream,
     });
   }
 }

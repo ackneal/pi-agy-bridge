@@ -27,10 +27,6 @@ async function readFileMetadata(root: string): Promise<Map<string, string>> {
   return metadata;
 }
 
-async function assertTreeEquals(actual: string, expected: string): Promise<void> {
-  assert.deepEqual([...await readTree(actual)], [...await readTree(expected)]);
-}
-
 async function assertPluginAssetsEqual(actual: string, source: string): Promise<void> {
   const actualPlugin = await fs.readFile(path.join(actual, "plugin.json"), "utf8");
   const sourcePlugin = await fs.readFile(path.join(source, "plugin.json"), "utf8");
@@ -42,7 +38,8 @@ async function assertPluginAssetsEqual(actual: string, source: string): Promise<
 
   const actualConfig = JSON.parse(await fs.readFile(path.join(actual, "mcp_config.json"), "utf8"));
   assert.equal(actualConfig.mcpServers["pi"].command, "sh");
-  assert.deepEqual(actualConfig.mcpServers["pi"].args, ["-c", "exec $PI_AGY_BRIDGE_MCP_COMMAND"]);
+  const sourceConfig = JSON.parse(await fs.readFile(path.join(source, "mcp_config.json"), "utf8"));
+  assert.deepEqual(actualConfig, sourceConfig);
 }
 
 async function withTemporaryHome(callback: (home: string) => Promise<void>): Promise<void> {
@@ -100,6 +97,42 @@ test("failed CLI installation preserves stderr and does not copy assets", async 
   });
 });
 
+for (const failureStage of ["backup", "replacement", "restoration"] as const) {
+  test(`failed plugin ${failureStage} preserves the installed tree`, async (t) => {
+    await withTemporaryHome(async (home) => {
+      const plugins = path.join(home, ".gemini", "config", "plugins");
+      const target = path.join(plugins, "pi-agy-bridge");
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(path.join(target, "plugin.json"), JSON.stringify({ name: "pi-agy-bridge", version: "0.1.1" }));
+      await fs.writeFile(path.join(target, "existing.txt"), "working plugin");
+      const before = await readTree(target);
+      const rename = fs.rename;
+      t.mock.method(fs, "rename", async (...[source, destination]: Parameters<typeof fs.rename>) => {
+        if ((failureStage === "backup" && String(destination).endsWith(".backup")) ||
+            (failureStage !== "backup" && String(source).endsWith(".tmp")) ||
+            (failureStage === "restoration" && String(source).endsWith(".backup"))) {
+          throw new Error("replacement denied");
+        }
+        return rename(source, destination);
+      });
+
+      await assert.rejects(ensureAgyPluginInstalled(path.join(home, "missing-agy")), failureStage === "restoration"
+        ? /Plugin update failed; the previous plugin remains at/
+        : /replacement denied/);
+
+      const entries = await fs.readdir(plugins);
+      if (failureStage === "restoration") {
+        assert.equal(entries.length, 1);
+        assert.ok(entries[0]!.endsWith(".backup"));
+        assert.deepEqual(await readTree(path.join(plugins, entries[0]!)), before);
+      } else {
+        assert.deepEqual(await readTree(target), before);
+        assert.deepEqual(entries, ["pi-agy-bridge"]);
+      }
+    });
+  });
+}
+
 test("same-version ensures are a true no-op and never rewrite the static tree", async () => {
   await withTemporaryHome(async (home) => {
     const { executable, calls } = await writeFakeAgy(home);
@@ -125,7 +158,7 @@ test("outdated AGY plugin synchronizes the exact static tree without invoking AG
     const configFile = path.join(home, ".gemini", "config", "unrelated.json");
     const otherPluginFile = path.join(otherPlugin, "keep.txt");
     await fs.mkdir(path.join(target, "stale", "nested"), { recursive: true });
-    await fs.writeFile(path.join(target, "plugin.json"), JSON.stringify({ name: "pi-agy-bridge", version: "0.9.0" }));
+    await fs.writeFile(path.join(target, "plugin.json"), JSON.stringify({ name: "pi-agy-bridge", version: "0.1.1" }));
     await fs.writeFile(path.join(target, "stale", "nested", "old.txt"), "stale");
     await fs.mkdir(otherPlugin, { recursive: true });
     await fs.writeFile(configFile, "keep config");

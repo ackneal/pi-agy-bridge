@@ -24,7 +24,7 @@ A standalone Antigravity CLI (`agy`) provider and capability bridge plugin for [
 ## Prerequisites
 
 - **Pi Coding Agent**: `@earendil-works/pi-coding-agent` (>= 1.0.0, < 2.0.0)
-- **Antigravity CLI**: `agy` (>= 1.1.15) installed and authenticated in your `$PATH`
+- **Antigravity CLI**: `agy` (>= 1.1.15) installed in your `$PATH`; model use requires a valid AGY login
 - **Operating System**: macOS or Linux (requires Unix domain socket support)
 - **Node.js**: Required by Pi and the packaged MCP executable; Node.js >= 22.6 is required to run this repository's TypeScript test command directly
 
@@ -38,9 +38,17 @@ Install the bridge directly from Git:
 pi install git:git@github.com:ackneal/pi-agy-bridge.git
 ```
 
-Open `/model`, search for `agy`, and select a model labeled `[agy]`.
+Start Pi. If `auth.json` has no `agy` credential, the bridge checks existing AGY login in the background using the CLI's built-in `agy --print /usage` report, not a model request. This can take several seconds; each probe allows up to 30 seconds without blocking Pi. The check succeeds only when the CLI exits normally and its output contains `Quota` or `Limit Remaining`. Unrecognized output leaves authentication status unknown; the bridge does not retry. The automatic check never asks for an authorization code. A successful quota report saves a local no-secret OAuth setup marker and refreshes the model selector. Missing CLI, no login, or a timeout leaves credentials unchanged and does not block Pi. This first background enablement happens after initial model selection and does not automatically switch models.
 
-Available AGY models are detected automatically from `agy models`.
+To sign in explicitly, run Pi’s native `/login` and select **Antigravity CLI [pi-agy-bridge]**. The same quota report checks existing AGY login first, so a cached-login check can also take several seconds. If AGY explicitly reports that authentication is required, the bridge displays AGY's browser URL and forwards the authorization code entered in Pi back to AGY. No model prompt is sent.
+
+Interactive login uses the system `script`, `cat`, and `ps` utilities and requires PTY access; its real AGY handshake still needs validation. If PTY access is unavailable, authenticate with `agy` in a terminal and retry.
+
+Pi treats this flow as a subscription login, not an API key (`isSubscription: true`); this classification does not verify subscription entitlements. Pi stores only a local `type: "oauth"` no-secret setup marker with empty `access` and `refresh` values and a one-year expiry, while actual credentials remain owned and saved by AGY CLI. Existing markers are used without another authentication probe. Legacy enabled `api_key` markers are upgraded to OAuth at startup without probing. OAuth refresh only extends the local expiry by one year: it makes no network request and does not change the login epoch. If the AGY login expires, the AGY runtime reports the failure; use `/login` to authenticate again.
+
+Open `/model`, search for `agy`, and select a model labeled `[agy]`. Available AGY models are detected automatically from `agy models`.
+
+Pi’s `/logout` for AGY deletes the Pi credential, hides available AGY models, and blocks future bridge requests. It keeps the AGY CLI login; use `/login` and select **Antigravity CLI [pi-agy-bridge]** again to check that login or sign in again. On the next Pi restart, an AGY CLI login that is still valid enables the bridge automatically again. Reloading or branching a session does not automatically re-enable it in the same Pi process.
 
 ---
 
@@ -58,18 +66,13 @@ Available AGY models are detected automatically from `agy models`.
 
 ### Model Discovery and Persistence
 
-Models discovered through `agy models` are persisted and restored through Pi’s
-native models-store. Model metadata defaults are defined in
-`discovery/model.json`; `models.json.modelOverrides` takes precedence.
+Models discovered through `agy models` are persisted and restored through Pi’s native models-store. Model metadata defaults are defined in `discovery/model.json`; `models.json.modelOverrides` takes precedence.
 
 ### Tool Execution
 
 The bridge exposes active Pi tools to AGY through an ephemeral MCP server over a private Unix domain socket. AGY delegates tool calls back to Pi, where they run with Pi's permissions, session resources, and policy controls. AGY cannot bypass Pi by invoking unapproved executable tools directly.
 
-The bridge follows Pi's current tool declarations, including transcript tool
-additions and removals. It does not expose every registered tool. Declared
-codemode and tool-search entrypoints are relayed like other Pi tool calls;
-the underlying tools remain managed by Pi.
+The bridge follows Pi's current tool declarations, including transcript tool additions and removals. It does not expose every registered tool. Declared codemode and tool-search entrypoints are relayed like other Pi tool calls; the underlying tools remain managed by Pi.
 
 ### Session and Conversation Synchronization
 
@@ -85,7 +88,7 @@ AGY's `step_update` events carry per-request usage; each assistant message repor
 
 ## Programmatic API
 
-For custom Pi harnesses or scripting:
+For custom Pi harnesses or scripting, use a runtime or loader that supports TypeScript dependencies (such as Bun). The package exports TypeScript source, not compiled JavaScript:
 
 ```typescript
 import { setupAgyProvider } from "pi-agy-bridge";
@@ -95,22 +98,18 @@ setupAgyProvider(pi, {
   minVersion: "1.1.15",      // Minimum supported CLI version
   agentName: "pi-bridge",    // Bridge agent configuration name
   pluginDir: "./plugin",     // Optional custom AGY plugin source directory
+  authPath: "./auth.json",   // Optional SDK custom credential storage path
   debug: false               // Enable verbose stderr logging
 });
 ```
 
+`authPath?: string` defaults to `auth.json` under Pi’s `getAgentDir()`. SDK harnesses with a custom auth path should pass the same path here so startup detection reads and writes the correct credential store.
+
 ### Health Check
 
-Run `/agy-bridge:doctor` to check the AGY executable and version, installed
-plugin version, configured model count (when supplied) or cached catalog count
-from Pi’s models-store, and MCP entrypoint. The report is in English and
-does not read the models-store directly, install or update plugins, or run model
-discovery. Missing or outdated
-plugins are handled automatically on the next AGY runtime start.
+Run `/agy-bridge:doctor` to check the AGY executable and version, installed plugin version, configured model count (when supplied) or cached catalog count from Pi’s models-store, and MCP entrypoint. The report is in English and does not read the models-store directly, install or update plugins, or run model discovery. Missing or outdated plugins are handled automatically on the next AGY runtime start.
 
-Recent plugin installation/update and model discovery errors are shown for the
-current Pi process only; restarting Pi clears these records. Authentication,
-model execution, and Unix socket creation are not tested.
+The report shows the most recent explicit-login or startup auto-detection snapshot (unknown means no login was verified in the current Pi process) and recent login, plugin installation/update, and model discovery errors for the current Pi process only. An existing setup marker alone does not establish that authentication is valid. Doctor does not probe live authentication; model execution and Unix socket creation are also not tested.
 
 ### Debugging
 
@@ -144,6 +143,7 @@ bun run test
 ## Limitations
 
 - **Platform**: Requires Unix domain sockets. Supported on macOS and Linux. Native Windows is unsupported; WSL2 may work but is not covered by the test suite.
+- **Startup credential race**: Pi 1.0.0 does not expose a conditional credential commit. A login or logout that occurs between the background check's final credential comparison and Pi's write can still be overwritten.
 - **Sandboxed Environments**: Environments that strictly restrict Unix socket creation (`EPERM`) cannot run the MCP broker.
 - **External Tools**: Non-Pi AGY internal tools (except internal coordination tools like `call_mcp_tool`) are blocked by design to prevent bypassing Pi policy.
 

@@ -16,6 +16,8 @@ export interface DoctorOptions {
   catalogModels?: readonly unknown[] | undefined;
   pluginError?: DoctorFailure | undefined;
   discoveryError?: DoctorFailure | undefined;
+  authStatus?: "authenticated" | "unauthenticated" | "unknown" | undefined;
+  authError?: DoctorFailure | undefined;
 }
 
 function message(error: unknown): string {
@@ -59,6 +61,9 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
     lines.push(`${count > 0 ? "✓" : "!"} Models: ${count} cached (Pi models-store)`);
   }
 
+  const authStatus = options.authStatus ?? "unknown";
+  lines.push(`Authentication snapshot: ${authStatus}${authStatus === "unknown" ? " (not verified)" : ""}`);
+
   lines.push(`Node version: ${process.version}`);
   try {
     const { nodePath, entrypointPath } = resolveMcpEntrypoint();
@@ -74,9 +79,9 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
     lines.push(`✗ MCP error: ${message(error)}`);
   }
   if (process.platform === "win32") lines.push("! Windows: Unix socket support is not verified.");
-  for (const [label, failure] of [["plugin", options.pluginError], ["discovery", options.discoveryError]] as const) {
+  for (const [label, failure] of [["plugin", options.pluginError], ["discovery", options.discoveryError], ["authentication", options.authError]] as const) {
     if (failure) lines.push(`Last ${label} error at ${failure.time}: ${failure.message}`);
   }
-  lines.push("Authentication, model execution, and Unix socket creation not tested.");
+  lines.push("Authentication is a last-known snapshot; live authentication is not tested. Model execution and Unix socket creation not tested.");
   return lines.join("\n");
 }

@@ -10,14 +10,16 @@ import { AgyRuntime } from "../runtime/process.ts";
 import { AgyBridge, streamAgyProvider } from "./provider.ts";
 
 const cases = [
-  { stage: "bridge.start", aborts: 0 },
-  { stage: "plugin install", aborts: 0 },
-  { stage: "proc.start", aborts: 1 },
-  { stage: "waitForConnection", aborts: 1 },
+  { stage: "bridge.start", aborts: 0, cancelled: false },
+  { stage: "plugin install", aborts: 0, cancelled: false },
+  { stage: "proc.start", aborts: 1, cancelled: false },
+  { stage: "waitForConnection", aborts: 1, cancelled: false },
+  { stage: "proc.start", aborts: 2, cancelled: true },
+  { stage: "waitForConnection", aborts: 2, cancelled: true },
 ] as const;
 
-for (const { stage, aborts } of cases) {
-  test(`streamAgyProvider cleans up after ${stage} failure`, async (t) => {
+for (const { stage, aborts, cancelled } of cases) {
+  test(`streamAgyProvider cleans up after ${stage} ${cancelled ? "cancellation" : "failure"}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-start-"));
     t.after(async () => {
       t.mock.restoreAll();
@@ -27,6 +29,7 @@ for (const { stage, aborts } of cases) {
     await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
 
     const failure = new Error(`injected ${stage} failure`);
+    const controller = new AbortController();
     const startBridge = t.mock.method(BridgeIPC.prototype, "start", async function (this: BridgeIPC) {
       // Supply the endpoint required by the real processEnvironment getter without opening a socket.
       (this as unknown as { socketPath: string }).socketPath = path.join(directory, "bridge.sock");
@@ -34,10 +37,16 @@ for (const { stage, aborts } of cases) {
     });
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const wait = t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {
-      if (stage === "waitForConnection") throw failure;
+      if (stage === "waitForConnection") {
+        if (cancelled) controller.abort(failure);
+        throw failure;
+      }
     });
     const startProc = t.mock.method(AgyRuntime.prototype, "start", async () => {
-      if (stage === "proc.start") throw failure;
+      if (stage === "proc.start") {
+        if (cancelled) controller.abort(failure);
+        throw failure;
+      }
       return { event: "init", conversation_id: "test-conversation" } as Awaited<ReturnType<AgyRuntime["start"]>>;
     });
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
@@ -63,7 +72,7 @@ for (const { stage, aborts } of cases) {
       contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId: `test-${stage}` }, config, bridge)) {
+    for await (const event of streamAgyProvider(model, context, { sessionId: `test-${stage}`, signal: controller.signal }, config, bridge)) {
       events.push(event);
       if (event.type === "error" || event.type === "done") break;
     }
@@ -72,12 +81,15 @@ for (const { stage, aborts } of cases) {
 
     const terminal = events.at(-1);
     assert.equal(terminal?.type, "error");
-    if (terminal?.type === "error") assert.equal(terminal.error.errorMessage, failure.message);
+    if (terminal?.type === "error") {
+      assert.equal(terminal.error.errorMessage, failure.message);
+      assert.equal(terminal.error.stopReason, cancelled ? "aborted" : "error");
+    }
     assert.equal(startBridge.mock.callCount(), 1);
     assert.equal(install.mock.callCount(), stage === "bridge.start" ? 0 : 1);
-    assert.equal(startProc.mock.callCount(), aborts);
+    assert.equal(startProc.mock.callCount(), aborts ? 1 : 0);
     assert.equal(wait.mock.callCount(), stage === "waitForConnection" ? 1 : 0);
-    assert.equal(close.mock.callCount(), 1, "IPC must be closed exactly once");
+    assert.equal(close.mock.callCount(), cancelled ? 2 : 1, "cancelled startup must close IPC before ownership transfers");
     assert.equal(abort.mock.callCount(), aborts, "only a constructed runtime must be aborted");
   });
 }

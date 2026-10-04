@@ -11,15 +11,18 @@ import type { RuntimeSessionDecision } from "../session/session-state.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
 import { AgyBridge, streamAgyProvider } from "./provider.ts";
 
-const cases: { decision: RuntimeSessionDecision; incremental?: boolean }[] = [
+const cases: { decision: RuntimeSessionDecision; incremental?: boolean; payload?: "replace" | "unchanged" | "reject" }[] = [
   { decision: { action: "continue" } },
   { decision: { action: "resume", conversationId: "old-conversation" } },
   { decision: { action: "rebuild" } },
   { decision: { action: "continue" }, incremental: true },
+  { decision: { action: "continue" }, payload: "replace" },
+  { decision: { action: "continue" }, payload: "unchanged" },
+  { decision: { action: "continue" }, payload: "reject" },
 ];
 
-for (const { decision, incremental } of cases) {
-  test(`streamAgyProvider completes a ${decision.action} turn${incremental ? " with all incremental messages" : ""}`, async (t) => {
+for (const { decision, incremental, payload } of cases) {
+  test(`streamAgyProvider completes a ${decision.action} turn${incremental ? " with all incremental messages" : ""}${payload ? ` with async payload ${payload}` : ""}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-turn-"));
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
@@ -95,10 +98,23 @@ for (const { decision, incremental } of cases) {
       contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId: "test-turn" }, config, bridge)) {
+    const onPayload = t.mock.fn(async (_value: unknown, _selectedModel: Model<any>) => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (payload === "reject") throw new Error("payload callback failed");
+      return payload === "replace" ? { prompt: "replacement prompt" } : undefined;
+    });
+    const options = {
+      sessionId: "test-turn",
+      ...(payload ? { onPayload } : {}),
+    };
+    for await (const event of streamAgyProvider(model, context, options, config, bridge)) {
       events.push(event);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(onPayload.mock.callCount(), payload ? 1 : 0);
+    if (payload) {
+      assert.deepEqual(onPayload.mock.calls[0]!.arguments, [{ prompt: "latest & request" }, model]);
+    }
     assert.equal(events.at(-1)?.type, "done");
     assert.equal(events.some((event) => event.type === "error"), false);
     const terminal = events.at(-1);
@@ -128,7 +144,9 @@ for (const { decision, incremental } of cases) {
         decision.action === "resume" ? "old-conversation" : undefined);
     }
     const prompt = send.mock.calls[0]!.arguments[0].message.content;
-    if (incremental) {
+    if (payload === "replace") {
+      assert.equal(prompt, "replacement prompt");
+    } else if (incremental) {
       assert.match(prompt, /purpose="incremental_conversation"/);
       assert.match(prompt, /role="system"/);
       assert.match(prompt, /new system instruction/);
@@ -145,7 +163,7 @@ for (const { decision, incremental } of cases) {
   });
 }
 
-for (const scenario of ["pending tool results", "mixed pending messages", "abort"] as const) {
+for (const scenario of ["pending tool results", "mixed pending messages", "abort", "payload abort"] as const) {
   test(`streamAgyProvider continue handles ${scenario}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-continue-"));
     const pi = {
@@ -179,13 +197,13 @@ for (const scenario of ["pending tool results", "mixed pending messages", "abort
     t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", () => scenario === "mixed pending messages");
     const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", () => {
       assert.ok(listener, "provider must subscribe before resolving tool results");
-      if (scenario === "abort") return 0;
+      if (scenario === "abort" || scenario === "payload abort") return 0;
       const captured = listener;
       setImmediate(() => captured({ event: "result", status: "success" }));
       return 1;
     });
     t.mock.method(bridge.runtimeSessionSync, "decide", () => ({ action: "continue" }) as RuntimeSessionDecision);
-    t.mock.method(bridge.runtimeSessionStore, "get", async () => undefined);
+    const restore = t.mock.method(bridge.runtimeSessionStore, "get", async () => undefined);
     const persist = t.mock.method(bridge.runtimeSessionStore, "set", async () => {});
     bridge.start();
     const session = bridge.liveSessions.getOrCreate("continue-regression");
@@ -193,7 +211,7 @@ for (const scenario of ["pending tool results", "mixed pending messages", "abort
     const mcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(proc, "old-sync-key", mcp, "old-conversation");
     const context: Context = {
-      messages: scenario !== "abort"
+      messages: scenario === "pending tool results" || scenario === "mixed pending messages"
         ? [{ role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 2 }]
         : [{ role: "user", content: "latest request", timestamp: 2 }],
       tools: [],
@@ -211,10 +229,19 @@ for (const scenario of ["pending tool results", "mixed pending messages", "abort
     const events: AssistantMessageEvent[] = [];
     for await (const event of streamAgyProvider(model, context, {
       sessionId: "continue-regression", signal: controller.signal,
+      env: { AGY_BRIDGE_LOGIN_EPOCH: "current-login" },
+      ...(scenario === "payload abort" ? {
+        onPayload: async () => {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          controller.abort();
+          return { prompt: "must not be sent" };
+        },
+      } : {}),
     }, config, bridge)) {
       events.push(event);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(restore.mock.calls[0]!.arguments, [session.piSessionId, "current-login"]);
     assert.equal(resolve.mock.callCount(), scenario === "mixed pending messages" ? 0 : 1);
     if (scenario !== "mixed pending messages") {
       assert.deepEqual(resolve.mock.calls[0]!.arguments, [context.messages]);
@@ -228,16 +255,17 @@ for (const scenario of ["pending tool results", "mixed pending messages", "abort
       assert.equal(session.turnIndex, 1);
       assert.equal(persist.mock.callCount(), 2);
       assert.deepEqual(persist.mock.calls[0]!.arguments, [
-        session.piSessionId, { conversationId: "old-conversation" }, context.messages,
+        session.piSessionId, { conversationId: "old-conversation" }, context.messages, "current-login",
       ]);
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "done");
       assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
+      assert.equal(persist.mock.calls[1]!.arguments[3], "current-login");
       assert.equal(session.activeProcess, proc);
       assert.equal(close.mock.callCount(), 0);
       assert.equal(abort.mock.callCount(), 0);
     } else {
-      assert.equal(send.mock.callCount(), scenario === "mixed pending messages" ? 0 : 1);
+      assert.equal(send.mock.callCount(), scenario === "abort" ? 1 : 0);
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "error");
       assert.equal(terminal.reason, scenario === "mixed pending messages" ? "error" : "aborted");

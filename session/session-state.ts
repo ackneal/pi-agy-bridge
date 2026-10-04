@@ -22,7 +22,7 @@ export class RuntimeSessionStore {
     this.piContext = piContext;
   }
 
-  public async get(piSessionId: string): Promise<AgyRuntimeSessionRef | undefined> {
+  public async get(piSessionId: string, loginEpoch?: string): Promise<AgyRuntimeSessionRef | undefined> {
     const sessionManager = this.piContext.getSessionManager(piSessionId);
     if (!sessionManager) return undefined;
 
@@ -36,7 +36,7 @@ export class RuntimeSessionStore {
       }
     }
     if (!entry || !isRecord(entry.data)) return undefined;
-    if (entry.data.deleted === true) return undefined;
+    if (entry.data.deleted === true || entry.data.loginEpoch !== loginEpoch) return undefined;
     if (typeof entry.data.conversationId !== "string") return undefined;
 
     return {
@@ -51,13 +51,15 @@ export class RuntimeSessionStore {
   public async set(
     piSessionId: string,
     ref: AgyRuntimeSessionRef,
-    canonicalHistory: readonly unknown[]
+    canonicalHistory: readonly unknown[],
+    loginEpoch?: string
   ): Promise<AgyRuntimeSessionRef> {
     const sessionManager = this.requireSessionManager(piSessionId);
     const historyHash = hashHistory(canonicalHistory);
     const historyLength = canonicalHistory.length;
     const syncedEntryId = sessionManager.appendCustomEntry(ENTRY_TYPE, {
       conversationId: ref.conversationId,
+      ...(loginEpoch ? { loginEpoch } : {}),
       historyHash,
       historyLength,
       historyFormat: HISTORY_FORMAT,
