@@ -78,7 +78,7 @@ The bridge follows Pi's current tool declarations, including transcript tool add
 
 Sequential turns reuse the same AGY process and conversation. After Pi or the AGY process restarts, the bridge resumes the AGY conversation when its recorded history still matches the active Pi branch.
 
-Pi compaction, branching, or another history rewrite invalidates that continuation. The bridge closes the old AGY runtime, starts a new AGY conversation, and reconstructs its context from Pi's current system instructions, compaction summary, retained messages, and current message. The Pi session itself remains unchanged.
+Pi compaction, branching, or another history rewrite invalidates that continuation. Additional Pi instructions arriving alongside pending tool results also require reconstruction: the bridge closes the waiting runtime before starting a replacement, rather than sending a second prompt into the active turn. The new AGY conversation receives Pi's current system instructions, compaction summary, retained messages, tool results, and current message. The Pi session itself remains unchanged.
 
 ### Usage Accounting
 

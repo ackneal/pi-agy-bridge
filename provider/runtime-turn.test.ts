@@ -7,6 +7,7 @@ import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-a
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import { AgyRuntime } from "../runtime/process.ts";
+import { calculateSyncKey } from "../session/session.ts";
 import type { RuntimeSessionDecision } from "../session/session-state.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
 import { AgyBridge, streamAgyProvider } from "./provider.ts";
@@ -164,7 +165,7 @@ for (const { decision, incremental, payload } of cases) {
 }
 
 for (const scenario of ["pending tool results", "mixed pending messages", "abort", "payload abort"] as const) {
-  test(`streamAgyProvider continue handles ${scenario}`, async (t) => {
+  test(`streamAgyProvider mocked continue ${scenario === "mixed pending messages" ? "fails closed for unexpected mixed pending state" : `handles ${scenario}`}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-continue-"));
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
@@ -281,5 +282,110 @@ for (const scenario of ["pending tool results", "mixed pending messages", "abort
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
     }
+  });
+}
+
+for (const roles of [["user"], ["system"], ["user", "system"], ["system", "user", "system"]] as const) {
+  test(`pending tool results rebuild with appended ${roles.join(" then ")}`, async (t) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "agy-mixed-pending-"));
+    const pi = {
+      on: () => {}, registerProvider: () => {}, registerCommand: () => {},
+      getActiveTools: () => [], getAllTools: () => [],
+    } as unknown as ExtensionAPI;
+    const config = { agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
+    const bridge = new AgyBridge(pi, config);
+    t.after(async () => {
+      try {
+        await bridge.liveSessions.disposeAll();
+      } finally {
+        t.mock.restoreAll();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+    await writeFile(config.agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
+    bridge.start();
+    const session = bridge.liveSessions.getOrCreate("mixed-pending");
+    const oldProc = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+    const oldMcp = new BridgeIPC([], session.id, session.resources);
+    const model = {
+      id: "test-model", name: "Test model", api: "agy", provider: "agy",
+      baseUrl: "agy", reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192, maxTokens: 1024,
+    } as Model<any>;
+    const prefix: Context["messages"] = [
+      { role: "user", content: "original request", timestamp: 1 },
+      { role: "assistant", content: [{ type: "toolCall", id: "pending-call", name: "test-tool", arguments: {} }],
+        api: "agy", provider: "agy", model: "test-model", responseId: "old-conversation",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "toolUse", timestamp: 2 },
+    ];
+    const instructions = roles.map((role, index) => ({ role, content: `additional instruction ${index}`, timestamp: 4 + index }));
+    const context: Context = { systemPrompt: "Rules", tools: [], messages: [
+      ...prefix,
+      { role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "pending tool answer" }], isError: false, timestamp: 3 },
+      ...instructions,
+    ] };
+    session.setSession(oldProc, calculateSyncKey("Rules", [], "test-model", "", "pi-bridge"), oldMcp, "old-conversation");
+    session.turnIndex = 1;
+    bridge.runtimeSessionSync.record(session, prefix);
+
+    const lifecycle: string[] = [];
+    const listeners = new Map<AgyRuntime, (event: AgyEvent) => void>();
+    t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
+    t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp; });
+    t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
+    t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
+    t.mock.method(BridgeIPC.prototype, "start", async () => { lifecycle.push("mcp-start"); });
+    t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {});
+    const close = t.mock.method(BridgeIPC.prototype, "close", async function (this: BridgeIPC) {
+      lifecycle.push(this === oldMcp ? "old-close" : "new-close");
+    });
+    const abort = t.mock.method(AgyRuntime.prototype, "abort", async function (this: AgyRuntime) {
+      lifecycle.push(this === oldProc ? "old-abort" : "new-abort");
+    });
+    const start = t.mock.method(AgyRuntime.prototype, "start", async () => {
+      lifecycle.push("start");
+      return { event: "init", conversation_id: "new-conversation" } as Awaited<ReturnType<AgyRuntime["start"]>>;
+    });
+    t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: (event: AgyEvent) => void) {
+      listeners.set(this, listener);
+      return () => { listeners.delete(this); };
+    });
+    const send = t.mock.method(AgyRuntime.prototype, "send", async function (this: AgyRuntime, _input: AgyInput) {
+      assert.notEqual(this, oldProc);
+      lifecycle.push("send");
+      const listener = listeners.get(this);
+      assert.ok(listener);
+      listener({ event: "step_update", delta: "finished" });
+      listener({ event: "result", status: "success" });
+    });
+
+    const events: AssistantMessageEvent[] = [];
+    for await (const event of streamAgyProvider(model, context, { sessionId: session.piSessionId }, config, bridge)) events.push(event);
+    assert.equal(events.some((event) => event.type === "error"), false);
+    const terminal = events.at(-1);
+    assert.ok(terminal?.type === "done");
+    assert.equal(terminal.reason, "stop");
+    assert.deepEqual(lifecycle, ["old-close", "old-abort", "mcp-start", "start", "send"]);
+    assert.equal(start.mock.callCount(), 1);
+    assert.equal(send.mock.callCount(), 1);
+    assert.equal(session.activeProcess?.options.conversationId, undefined);
+    assert.equal(session.conversationId, "new-conversation");
+    const prompt = send.mock.calls[0]!.arguments[0].message.content;
+    assert.match(prompt, /purpose="reconstructed_conversation"/);
+    for (const text of ["pending tool answer", ...instructions.map((message) => message.content)]) {
+      assert.equal(prompt.split(text).length - 1, 1);
+    }
+    const positions = instructions.map((message) => prompt.indexOf(message.content));
+    assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
+    assert.equal(session.turnIndex, 2);
+    assert.equal(listeners.size, 0);
+    await bridge.liveSessions.disposeAll();
+    assert.equal(close.mock.callCount(), 2);
+    assert.equal(abort.mock.callCount(), 2);
+    assert.equal(session.activeProcess, null);
   });
 }

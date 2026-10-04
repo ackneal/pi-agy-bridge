@@ -36,13 +36,18 @@ Later turns may contain plain user text or a `<pi_context purpose="incremental_c
 
 Executable capabilities are dynamically supplied by the MCP server `pi-agy-bridge_pi`.
 
-Use `call_mcp_tool` with that exact server name whenever an external action is required.
+The tools and subagents Pi provides in the current conversation context are your executable tools, hosted on `pi-agy-bridge_pi`. Pi's current tool declarations and the MCP tool list refer to the same capabilities, not two separate sets of tools.
 
-Use only the tools advertised by that MCP server for the current conversation. Tool availability may differ between Pi sessions or contexts.
+This includes filesystem tools such as `read`, `write`, and `edit`; shell tools such as `bash`; agent controls such as `task_state`, `researcher`, `worker`, `subagent_observe`, and `subagent_cancel`; and code navigation tools such as `find`, `grep`, and `diagnostics`, whenever Pi provides them in the current context.
 
-Pass the advertised tool name exactly as provided. Do not add another server prefix, invent tool names, or assume that a tool from an earlier conversation is still available.
+When Pi's instructions or the user's task require a tool or subagent:
 
-Follow each advertised tool input schema exactly, including property names, required fields, and value types. Do not translate argument names from other tool APIs or prior conventions. If a call fails schema validation, correct the arguments according to the validation error and retry it.
+- Invoke it directly through `call_mcp_tool` with `ServerName: "pi-agy-bridge_pi"`.
+- Set `ToolName` to its exact plain Pi tool name, such as `"read"`, `"bash"`, or `"worker"`. Do not add a server prefix.
+- Do not claim that a tool or subagent is missing or unadvertised merely because it is accessed through MCP rather than a direct function call.
+- Follow the current tool input schema, including property names, required fields, and value types. Do not substitute argument names from other APIs or prior conventions.
+- If a call fails schema validation, correct the arguments according to the validation error and retry it.
+- If the MCP server explicitly reports that the tool is not registered in this Pi session, respect that result. A historical mention alone does not establish current availability.
 
 Use tool results as the source of truth. Do not claim that an external action succeeded unless the corresponding tool result confirms it.
 

@@ -16,7 +16,7 @@ describe("static AGY bridge plugin", () => {
     const pluginManifest = JSON.parse(await readFile(`${pluginDir}/plugin.json`, "utf-8"));
     const mcpEntrypoint = await readFile(`${projectDir}/mcp/index.js`, "utf-8");
 
-    assert.equal(packageManifest.version, "0.1.2");
+    assert.equal(packageManifest.version, "0.1.3");
     assert.equal(pluginManifest.version, packageManifest.version);
     assert.match(mcpEntrypoint, new RegExp(`SERVER_INFO = \\{ name: "pi-agy-bridge", version: "${packageManifest.version}" \\}`));
   });
@@ -26,7 +26,7 @@ describe("static AGY bridge plugin", () => {
     const markdown = await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8");
 
     assert.equal(manifest.name, "pi-agy-bridge");
-    assert.equal(manifest.version, "0.1.2");
+    assert.equal(manifest.version, "0.1.3");
     assert.match(markdown, /^---\nname: pi-bridge\n/);
     assert.match(markdown, /\nmainAgent: true\n/);
     assert.match(markdown, /\nsubagent: false\n/);
@@ -40,8 +40,14 @@ describe("static AGY bridge plugin", () => {
     assert.match(markdown, /<history>/);
     assert.match(markdown, /<current_message>/);
     assert.match(markdown, /dynamically supplied by the MCP server `pi-agy-bridge_pi`/);
-    assert.match(markdown, /Use only the tools advertised by that MCP server/);
-    assert.match(markdown, /Follow each advertised tool input schema exactly/);
+    assert.match(markdown, /Pi's current tool declarations and the MCP tool list refer to the same capabilities/);
+    assert.match(markdown, /ServerName: "pi-agy-bridge_pi"/);
+    assert.match(markdown, /Set `ToolName` to its exact plain Pi tool name/);
+    assert.match(markdown, /Do not claim that a tool or subagent is missing or unadvertised merely because/);
+    assert.match(markdown, /`researcher`, `worker`, `subagent_observe`, and `subagent_cancel`/);
+    assert.match(markdown, /Follow the current tool input schema/);
+    assert.match(markdown, /If the MCP server explicitly reports that the tool is not registered/);
+    assert.match(markdown, /A historical mention alone does not establish current availability/);
     assert.match(markdown, /If a call fails schema validation, correct the arguments/);
     assert.match(markdown, /Do not claim that an external action succeeded unless the corresponding tool result confirms it/);
     assert.doesNotMatch(markdown, /session ID|conversation ID|PTY ID|socket|tool snapshot/i);

@@ -8,6 +8,7 @@ import { LiveSession, PiContextAdapter } from "./session.ts";
 import { historyMatches, RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import type { AgyProcess } from "../runtime/process.ts";
+import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
 
 describe("RuntimeSessionStore", () => {
   it("persists references, restores them after reopening, and preserves history metadata", async () => {
@@ -129,6 +130,50 @@ describe("RuntimeSessionSync", () => {
     const dead = createSession(false);
     assert.deepEqual(sync.decide(dead, input), { action: "resume", conversationId: "agy-conversation" });
     assert.deepEqual(sync.decide(dead, { ...input, conversationId: "other" }), { action: "rebuild" });
+  });
+
+  it("rebuilds pending mixed continuations without advancing synchronized history", async () => {
+    const history = [
+      { role: "user", content: "question" },
+      { role: "assistant", content: "tool call", stopReason: "toolUse" },
+    ];
+    const toolResult = { role: "toolResult", content: "result", toolCallId: "call", toolName: "read" };
+    const user = { role: "user", content: "next" };
+    const system = { role: "system", content: "new instructions" };
+    const manager = SessionManager.inMemory("/workspace");
+    const context = new PiContextAdapter();
+    const sessionId = context.bind(manager);
+    const runtimeRef = await new RuntimeSessionStore(context).set(sessionId, { conversationId: "agy-conversation" }, history);
+    const cases = [
+      { name: "pending user", pending: true, appended: [toolResult, user], action: "rebuild" },
+      { name: "pending system", pending: true, appended: [toolResult, system], action: "rebuild" },
+      { name: "pending pure tool result", pending: true, appended: [toolResult], action: "continue" },
+      { name: "no pending user", pending: false, appended: [toolResult, user], action: "continue" },
+      { name: "persisted fallback pending mixed", pending: true, appended: [toolResult, user], action: "rebuild", fallback: true },
+      { name: "unrecorded pending mixed", pending: true, appended: [toolResult, user], action: "rebuild", unrecorded: true },
+      { name: "unrecorded pure tool result", pending: true, appended: [toolResult], action: "continue", unrecorded: true, toolOnly: true },
+      { name: "rewritten prefix", pending: true, appended: [], action: "rebuild", rewritten: true },
+      { name: "shortened prefix", pending: true, appended: [], action: "rebuild", shortened: true },
+    ];
+
+    for (const row of cases) {
+      const sync = new RuntimeSessionSync();
+      const live = createSession(true);
+      live.activeMcpServer = { hasPendingCalls: row.pending } as BridgeIPC;
+      if (!row.unrecorded) sync.record(live, history);
+      const before = sync.getSyncedMessageCount(live);
+      const canonicalHistory = row.shortened ? history.slice(0, 1)
+        : row.rewritten ? [{ role: "user", content: "rewritten" }, history[1]!]
+        : [...(row.toolOnly ? [] : history), ...row.appended];
+
+      assert.deepEqual(sync.decide(live, {
+        ...input,
+        syncKey: row.fallback ? "other-key" : input.syncKey,
+        canonicalHistory,
+        ...(row.fallback ? { runtimeRef } : {}),
+      }), { action: row.action }, row.name);
+      assert.equal(sync.getSyncedMessageCount(live), before, row.name);
+    }
   });
 
   it("reuses a live process when Pi omits the conversation id for the latest turn", () => {

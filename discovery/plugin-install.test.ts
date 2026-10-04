@@ -158,7 +158,7 @@ test("outdated AGY plugin synchronizes the exact static tree without invoking AG
     const configFile = path.join(home, ".gemini", "config", "unrelated.json");
     const otherPluginFile = path.join(otherPlugin, "keep.txt");
     await fs.mkdir(path.join(target, "stale", "nested"), { recursive: true });
-    await fs.writeFile(path.join(target, "plugin.json"), JSON.stringify({ name: "pi-agy-bridge", version: "0.1.1" }));
+    await fs.writeFile(path.join(target, "plugin.json"), JSON.stringify({ name: "pi-agy-bridge", version: "0.1.2" }));
     await fs.writeFile(path.join(target, "stale", "nested", "old.txt"), "stale");
     await fs.mkdir(otherPlugin, { recursive: true });
     await fs.writeFile(configFile, "keep config");
