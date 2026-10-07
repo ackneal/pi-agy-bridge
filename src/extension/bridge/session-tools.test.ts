@@ -216,6 +216,34 @@ describe("CapabilityGateway", () => {
     });
   }
 
+  for (const failedIndex of [0, 1]) {
+    it(`settles result conversion failure at index ${failedIndex} with one context appendix`, async (t) => {
+      const relay = new CapabilityGateway([tool]);
+      t.after(() => relay.cancelPendingCalls("cleanup"));
+      const ids: string[] = [];
+      relay.setToolCallHandler((batch) => ids.push(...batch.calls.map((call) => call.id)));
+      const promises = [relay.call("echo", {}), relay.call("echo", {})];
+      await setImmediate();
+      const original = PiToolAdapter.prototype.toMcpResult;
+      t.mock.method(PiToolAdapter.prototype, "toMcpResult", function (this: PiToolAdapter, ...args: Parameters<PiToolAdapter["toMcpResult"]>) {
+        if (args[0].toolCallId === ids[failedIndex]) throw new Error("conversion failed");
+        return original.apply(this, args);
+      });
+      const results = ids.map((id, index) => toolResult(id, false, [{ type: "text", text: `answer-${index}` }]));
+
+      assert.equal(relay.resolveToolResults(results, "context"), 2);
+      const delivered = await Promise.all(promises);
+      assert.deepEqual(delivered, ids.map((_, index) => ({
+        isError: index === failedIndex,
+        content: [
+          { type: "text", text: index === failedIndex ? "conversion failed" : `answer-${index}` },
+          ...(index === 1 ? [{ type: "text", text: "context" }] : []),
+        ],
+      })));
+      assert.equal(relay.hasPendingCalls, false);
+    });
+  }
+
   it("returns a structured MCP error when call conversion rejects an unknown terminal", async () => {
     const relay = new CapabilityGateway([ptyTool], new SessionResources());
     const result = await relay.call("pty", { command: "write", ptyId: "terminal-1" });
