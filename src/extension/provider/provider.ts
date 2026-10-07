@@ -14,6 +14,7 @@ import { getCurrentTools, isModelType, normalizeContext } from "@earendil-works/
 import { PiEventAdapter } from "../runtime/events.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import type { PiToolCallBatch } from "../bridge/capabilities.ts";
 import {
   LiveSessionRegistry,
   PiContextAdapter,
@@ -396,22 +397,27 @@ export function streamAgyProvider(
         void liveSession.dispose();
       });
 
-      mcpServer.setToolCallHandler((batch) => {
+      const handleToolCalls = (batch: PiToolCallBatch) => {
         adapter.handleBridgeToolCalls(batch.calls);
         completeTurn();
         batch.complete();
-      });
+      };
 
       const syncedMessageCount = runtime.reconstructContext ? 0 :
         bridge.runtimeSessionSync.getSyncedMessageCount(liveSession) ?? Math.max(0, context.messages.length - 1);
       const newMessages = context.messages.slice(syncedMessageCount);
-      // MCP resumes the existing tool turn; a user event here could race that turn.
-      if (mcpServer.hasPendingCalls && newMessages.some((message) => message.role !== "toolResult")) {
-        throw new Error("Cannot safely deliver additional Pi messages while Antigravity CLI tool results are pending; no updates were marked synchronized");
-      }
-
-      const deliveredToolResults = mcpServer.resolveToolResults(newMessages);
-      if (deliveredToolResults > 0 && deliveredToolResults !== newMessages.length) {
+      const toolResults = newMessages.filter((message) => message.role === "toolResult");
+      const contextUpdates = newMessages.filter((message) => message.role !== "toolResult");
+      // A stdin prompt starts another AGY turn. Carry updates with the pending MCP
+      // response instead so the current turn sees them before resuming.
+      const hasPendingCalls = mcpServer.hasPendingCalls;
+      const contextUpdate = hasPendingCalls && contextUpdates.length > 0
+        ? formatContextUpdate(contextUpdates, "pending_tool_continuation")
+        : undefined;
+      const deliveredToolResults = hasPendingCalls
+        ? mcpServer.resolveToolResults(toolResults, contextUpdate)
+        : 0;
+      if (hasPendingCalls && deliveredToolResults !== toolResults.length) {
         throw new Error("Some appended Pi tool results were not delivered to Antigravity CLI; history was not marked synchronized");
       }
       if (deliveredToolResults > 0) {
@@ -421,12 +427,17 @@ export function streamAgyProvider(
             conversationId: liveSession.conversationId,
           }, context.messages, options?.env?.AGY_BRIDGE_LOGIN_EPOCH);
         }
+        // Installing a handler can immediately dispatch calls queued during the
+        // preceding Pi turn. Record its results before opening the next batch.
+        if (!adapter.isCompleted()) mcpServer.setToolCallHandler(handleToolCalls);
         return;
       }
 
       if (mcpServer.hasPendingCalls) {
         throw new Error("Antigravity CLI is waiting for Pi tool results, but no matching result was returned");
       }
+
+      mcpServer.setToolCallHandler(handleToolCalls);
 
       let prompt = formatContextPrompt(context, !runtime.reconstructContext, syncedMessageCount);
       if (options?.onPayload) {

@@ -103,7 +103,7 @@ describe("CapabilityGateway", () => {
 
     let settled = false;
     resultPromise.then(() => { settled = true; });
-    relay.resolveToolResults([toolResult("different-call", false, [{ type: "text", text: "wrong" }])]);
+    assert.throws(() => relay.resolveToolResults([toolResult("different-call", false, [{ type: "text", text: "wrong" }])]), /Unknown/);
     await setImmediate();
     assert.equal(settled, false);
 
@@ -122,6 +122,61 @@ describe("CapabilityGateway", () => {
     });
     assert.equal(relay.hasPendingCalls, false);
   });
+
+  for (const scenario of ["ordered", "reversed", "partial", "unknown", "duplicate", "name mismatch", "missing"] as const) {
+    it(`delivers an atomic result batch: ${scenario}`, async (t) => {
+      const relay = new CapabilityGateway([tool]);
+      t.after(() => relay.cancelPendingCalls("cleanup"));
+      const calls: string[] = [];
+      relay.setToolCallHandler((batch) => calls.push(...batch.calls.map((call) => call.id)));
+      let settled = 0;
+      const promises = [relay.call("echo", {}), relay.call("echo", {})];
+      for (const promise of promises) void promise.then(() => { settled++; });
+      await setImmediate();
+      const results = calls.map((id, index) => toolResult(id, index === 1, [
+        { type: "text", text: `result-${index}` },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      ]));
+      let supplied = [...results];
+      if (scenario === "reversed") supplied.reverse();
+      if (scenario === "partial") supplied.pop();
+      if (scenario === "missing") supplied = [];
+      if (scenario === "unknown") supplied.push(toolResult("unknown", false, []));
+      if (scenario === "duplicate") supplied.push(results[0]!);
+      if (scenario === "name mismatch") supplied[1] = { ...results[1]!, toolName: "wrong" } as Message;
+      const snapshot = structuredClone(supplied);
+
+      if (scenario !== "ordered" && scenario !== "reversed") {
+        assert.throws(() => relay.resolveToolResults(supplied, "context"));
+        await setImmediate();
+        assert.equal(settled, 0);
+        assert.equal(relay.hasPendingCalls, true);
+        supplied = results;
+      }
+      assert.equal(relay.resolveToolResults(supplied, "context"), 2);
+      const delivered = await Promise.all(promises);
+      for (let index = 0; index < 2; index++) {
+        const source = results[index]! as Extract<Message, { role: "toolResult" }>;
+        const last = (supplied.at(-1)! as Extract<Message, { role: "toolResult" }>).toolCallId === calls[index];
+        assert.deepEqual(delivered[index], {
+          isError: source.isError,
+          content: [...source.content, ...(last ? [{ type: "text", text: "context" }] : [])],
+        });
+      }
+      if (scenario === "ordered" || scenario === "reversed") assert.deepEqual(supplied, snapshot);
+      assert.equal(relay.hasPendingCalls, false);
+    });
+  }
+
+  for (const queued of [false, true]) {
+    it(`allows no dispatched results with queued=${queued}`, async (t) => {
+      const relay = new CapabilityGateway([tool]);
+      t.after(() => relay.cancelPendingCalls("cleanup"));
+      if (queued) void relay.call("echo", {});
+      assert.equal(relay.resolveToolResults([], "context"), 0);
+      assert.equal(relay.hasPendingCalls, queued);
+    });
+  }
 
   it("returns a structured MCP error when call conversion rejects an unknown terminal", async () => {
     const relay = new CapabilityGateway([ptyTool], new SessionResources());

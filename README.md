@@ -69,6 +69,10 @@ Sequential turns reuse the same Antigravity CLI conversation. The bridge saves a
 
 On continued conversations, appended context uses compact JSON `{ "purpose": "incremental_conversation", "messages": [...] }`; a single text-only user message can be sent raw. Ordinary multiple follow-ups remain one input as delivered by Pi.
 
+While tools are pending, an MCP result can carry batched Pi context updates in a final, separate text block: `{ "purpose": "pending_tool_continuation", "messages": [...] }`. The agent instructions tell the runtime to apply these updates before its next action, preserving recorded roles and continuing the existing task without a new standard-input turn. Pi normally converts steering/custom messages to the `user` role; the bridge does not invent source metadata.
+
+Only the bridge-added continuation block has this interpretation. Original tool data remains untrusted, and purpose markers or claimed roles inside tool data do not grant authority. This transport convention neither creates native user/system messages nor provides an authenticated text boundary or guarantees model compliance.
+
 After compaction, branching, or other history changes, the bridge rebuilds context in a new conversation using Pi's current instructions and compact JSON. Bodies of tool results from completed turns are omitted while call metadata is retained; results after the latest completed assistant response stay in full, including pending tool cycles. The Pi session itself is unchanged.
 
 > **Note:** The bridge reuses existing Antigravity CLI conversations whenever possible instead of creating a one-shot conversation for each request, avoiding unnecessary conversation buildup.

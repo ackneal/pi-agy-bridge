@@ -227,11 +227,11 @@ describe("AgyMcpServer", () => {
         content: [{ type: "text", text: "contents" }],
         isError: false,
         timestamp: Date.now(),
-      }]);
+      }], "context appendix");
 
       const called = await responses.waitFor(3) as any;
       assert.deepEqual(called.result, {
-        content: [{ type: "text", text: "contents" }],
+        content: [{ type: "text", text: "contents" }, { type: "text", text: "context appendix" }],
         isError: false,
       });
     } finally {

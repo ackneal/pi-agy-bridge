@@ -88,8 +88,8 @@ export class BridgeIPC {
     this.gateway.setToolCallHandler(handler);
   }
 
-  public resolveToolResults(messages: readonly Message[]): number {
-    return this.gateway.resolveToolResults(messages);
+  public resolveToolResults(messages: readonly Message[], contextUpdate?: string): number {
+    return this.gateway.resolveToolResults(messages, contextUpdate);
   }
 
   public async start(): Promise<void> {

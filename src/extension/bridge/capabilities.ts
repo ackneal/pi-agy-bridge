@@ -193,6 +193,7 @@ export class CapabilityGateway {
   private readonly piTools: PiToolAdapter;
   private readonly pending = new Map<string, {
     call: ToolCall;
+    dispatched: boolean;
     resolve: (result: McpToolResult) => void;
   }>();
   private queuedCalls: ToolCall[] = [];
@@ -231,13 +232,13 @@ export class CapabilityGateway {
 
     return new Promise((resolve) => {
       debugLog("mcp", "Queued Pi tool call", { id: toolCall.id, name: toolCall.name });
-      this.pending.set(toolCall.id, { call: toolCall, resolve });
+      this.pending.set(toolCall.id, { call: toolCall, dispatched: false, resolve });
       this.queuedCalls.push(toolCall);
       this.scheduleDispatch();
     });
   }
 
-  public resolveToolResults(messages: readonly Message[]): number {
+  public resolveToolResults(messages: readonly Message[], contextUpdate?: string): number {
     if (isDebugEnabled()) {
       debugLog("mcp", "Matching Pi tool results", {
         pending: [...this.pending.values()].map(({ call }) => ({ id: call.id, name: call.name })),
@@ -246,14 +247,26 @@ export class CapabilityGateway {
       });
     }
 
-    let resolved = 0;
-    for (const message of messages) {
-      if (message.role !== "toolResult") continue;
+    const messagesToResolve = messages.filter((message) => message.role === "toolResult");
+    const ids = new Set<string>();
+    for (const message of messagesToResolve) {
+      if (ids.has(message.toolCallId)) throw new Error(`Duplicate tool result ID: ${message.toolCallId}`);
+      ids.add(message.toolCallId);
       const pending = this.pending.get(message.toolCallId);
-      if (!pending) continue;
-      this.pending.delete(message.toolCallId);
+      if (!pending) throw new Error(`Unknown tool result ID: ${message.toolCallId}`);
+      if (message.toolName !== pending.call.name) {
+        throw new Error(`Tool name mismatch for result: ${message.toolCallId}`);
+      }
+    }
+    for (const [id, pending] of this.pending) {
+      if (pending.dispatched && !ids.has(id)) throw new Error(`Missing tool result ID: ${id}`);
+    }
+
+    const converted = messagesToResolve.map((message) => {
+      const pending = this.pending.get(message.toolCallId)!;
+      let result: McpToolResult;
       try {
-        const result = this.piTools.toMcpResult(message, pending.call);
+        result = this.piTools.toMcpResult(message, pending.call);
         if (isDebugEnabled()) {
           const source = JSON.stringify(message.content);
           const converted = JSON.stringify(result.content);
@@ -267,12 +280,22 @@ export class CapabilityGateway {
           });
           debugArtifact("tool-result-conversion", { call: pending.call, source: message, converted: result });
         }
-        pending.resolve(result);
       } catch (error) {
-        pending.resolve(toolError(error instanceof Error ? error.message : String(error)));
+        result = toolError(error instanceof Error ? error.message : String(error));
       }
-      resolved++;
+      return { message, pending, result };
+    });
+
+    const last = converted.at(-1);
+    if (last && contextUpdate !== undefined) {
+      last.result.content.push({ type: "text", text: contextUpdate });
     }
+
+    for (const { message, pending, result } of converted) {
+      this.pending.delete(message.toolCallId);
+      pending.resolve(result);
+    }
+    const resolved = converted.length;
     debugLog("mcp", "Pi tool results matched", { resolved, remaining: this.pending.size });
     return resolved;
   }
@@ -308,6 +331,11 @@ export class CapabilityGateway {
       calls: this.queuedCalls.splice(0),
       complete: () => this.scheduleDispatch(),
     };
+
+    for (const call of batch.calls) {
+      const pending = this.pending.get(call.id);
+      if (pending) pending.dispatched = true;
+    }
 
     try {
       this.onToolCalls(batch);

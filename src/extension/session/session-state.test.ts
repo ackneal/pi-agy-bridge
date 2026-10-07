@@ -132,7 +132,7 @@ describe("RuntimeSessionSync", () => {
     assert.deepEqual(sync.decide(dead, { ...input, conversationId: "other" }), { action: "rebuild" });
   });
 
-  it("rebuilds pending mixed continuations without advancing synchronized history", async () => {
+  it("reuses pending mixed continuations when history is compatible", async () => {
     const history = [
       { role: "user", content: "question" },
       { role: "assistant", content: "tool call", stopReason: "toolUse" },
@@ -145,12 +145,12 @@ describe("RuntimeSessionSync", () => {
     const sessionId = context.bind(manager);
     const runtimeRef = await new RuntimeSessionStore(context).set(sessionId, { conversationId: "agy-conversation" }, history);
     const cases = [
-      { name: "pending user", pending: true, appended: [toolResult, user], action: "rebuild" },
-      { name: "pending system", pending: true, appended: [toolResult, system], action: "rebuild" },
+      { name: "pending user", pending: true, appended: [toolResult, user], action: "continue" },
+      { name: "pending system", pending: true, appended: [toolResult, system], action: "continue" },
       { name: "pending pure tool result", pending: true, appended: [toolResult], action: "continue" },
       { name: "no pending user", pending: false, appended: [toolResult, user], action: "continue" },
-      { name: "persisted fallback pending mixed", pending: true, appended: [toolResult, user], action: "rebuild", fallback: true },
-      { name: "unrecorded pending mixed", pending: true, appended: [toolResult, user], action: "rebuild", unrecorded: true },
+      { name: "persisted fallback pending mixed", pending: true, appended: [toolResult, user], action: "resume", fallback: true },
+      { name: "unrecorded pending mixed", pending: true, appended: [toolResult, user], action: "continue", unrecorded: true },
       { name: "unrecorded pure tool result", pending: true, appended: [toolResult], action: "continue", unrecorded: true, toolOnly: true },
       { name: "rewritten prefix", pending: true, appended: [], action: "rebuild", rewritten: true },
       { name: "shortened prefix", pending: true, appended: [], action: "rebuild", shortened: true },
@@ -171,8 +171,8 @@ describe("RuntimeSessionSync", () => {
         syncKey: row.fallback ? "other-key" : input.syncKey,
         canonicalHistory,
         ...(row.fallback ? { runtimeRef } : {}),
-      }), { action: row.action }, row.name);
-      assert.equal(sync.getSyncedMessageCount(live), before, row.name);
+      }), row.fallback ? { action: row.action, conversationId: runtimeRef.conversationId } : { action: row.action }, row.name);
+      assert.equal(sync.getSyncedMessageCount(live), row.fallback ? history.length : before, row.name);
     }
   });
 

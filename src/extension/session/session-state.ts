@@ -142,14 +142,6 @@ export class RuntimeSessionSync {
     // Validate even newly appended messages before continuing an existing runtime.
     input.canonicalHistory.forEach(serializeHistoryMessage);
 
-    // Without recorded history, treat every message as unsynchronized to avoid losing input.
-    const syncedMessageCount = this.getSyncedMessageCount(session) ?? 0;
-    if (session.activeMcpServer?.hasPendingCalls && input.canonicalHistory.slice(syncedMessageCount).some(
-      (message) => !isRecord(message) || message.role !== "toolResult"
-    )) {
-      return { action: "rebuild" };
-    }
-
     if (this.matchesLiveSession(session, input)) {
       if (session.activeProcess?.isRunning) return { action: "continue" };
       if (session.conversationId) {
