@@ -386,6 +386,21 @@ export function streamAgyProvider(
       const proc = runtime.proc;
       mcpServer = runtime.mcpServer;
 
+      mcpServer.setTransportFailureHandler((error) => {
+        if (liveSession.activeMcpServer !== runtime.mcpServer || liveSession.activeProcess !== proc) return;
+
+        cleanup();
+        adapter.handleTermination("error", error.message);
+        // This hook stays owned by the runtime across completed toolUse turns.
+        void bridge.runtimeSessionStore.delete(liveSession.piSessionId).catch((failure) => {
+          debugLog("session", "Could not invalidate failed MCP runtime reference:", failure);
+        });
+        void liveSession.dispose().catch((failure) => {
+          debugLog("session", "Could not dispose failed MCP runtime:", failure);
+        });
+      });
+      if (adapter.isCompleted()) return;
+
       unsubscribe = proc.onEvent((event) => {
         adapter.handleEvent(event);
         completeTurn();
@@ -414,13 +429,13 @@ export function streamAgyProvider(
       const contextUpdate = hasPendingCalls && contextUpdates.length > 0
         ? formatContextUpdate(contextUpdates, "pending_tool_continuation")
         : undefined;
-      const deliveredToolResults = hasPendingCalls
+      const enqueuedToolResults = hasPendingCalls
         ? mcpServer.resolveToolResults(toolResults, contextUpdate)
         : 0;
-      if (hasPendingCalls && deliveredToolResults !== toolResults.length) {
-        throw new Error("Some appended Pi tool results were not delivered to Antigravity CLI; history was not marked synchronized");
+      if (hasPendingCalls && enqueuedToolResults !== toolResults.length) {
+        throw new Error("Some appended Pi tool results were not enqueued for the MCP broker; history was not marked synchronized");
       }
-      if (deliveredToolResults > 0) {
+      if (enqueuedToolResults > 0) {
         bridge.runtimeSessionSync.record(liveSession, context.messages);
         if (liveSession.conversationId) {
           await bridge.runtimeSessionStore.set(liveSession.piSessionId, {

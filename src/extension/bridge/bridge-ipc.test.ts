@@ -417,3 +417,46 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+for (const phase of ["destroyed", "disconnect", "callback", "serialization", "idle"] as const) {
+  it(`signals owed result transport failure: ${phase}`, async (t) => {
+    const bridge = new AgyMcpServer([]);
+    t.after(() => bridge.close());
+    const socket = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      write(_data: string, callback?: (error?: Error) => void) {
+        if (callback) queueMicrotask(() => callback(new Error("async write failed")));
+        return true;
+      },
+      destroy() { this.destroyed = true; },
+      end() {},
+    });
+    const failures: Error[] = [];
+    bridge.setTransportFailureHandler((error) => failures.push(error));
+    const internals = bridge as unknown as {
+      handleConnection(socket: Socket): void;
+      gateway: { call(): Promise<unknown> };
+    };
+    let resolve!: (result: unknown) => void;
+    internals.gateway.call = () => new Promise((done) => { resolve = done; });
+    internals.handleConnection(socket as unknown as Socket);
+    socket.emit("data", Buffer.from(`${JSON.stringify({ type: "hello", sessionId: bridge.sessionId })}\n`));
+    if (phase !== "idle") {
+      socket.emit("data", Buffer.from('{"type":"call","id":"one","name":"tool"}\n'));
+      if (phase === "destroyed" || phase === "disconnect") socket.destroy();
+      if (phase === "disconnect") {
+        socket.emit("close");
+        assert.equal(failures.length, 1);
+      }
+      resolve(phase === "serialization" ? { content: BigInt(1) } : { content: [] });
+      await new Promise((done) => setImmediate(done));
+      assert.equal(failures.length, 1);
+      const replayed: Error[] = [];
+      bridge.setTransportFailureHandler((error) => replayed.push(error));
+      assert.deepEqual(replayed, failures);
+    } else {
+      socket.emit("close");
+      assert.equal(failures.length, 0);
+    }
+  });
+}

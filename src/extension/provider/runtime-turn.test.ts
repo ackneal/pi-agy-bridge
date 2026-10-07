@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { AgyRuntime } from "../runtime/process.ts";
@@ -167,7 +167,7 @@ for (const { decision, incremental, payload } of cases) {
   });
 }
 
-for (const scenario of ["pending tool results", "mixed pending messages", "missing result", "unmatched result", "conversion error", "abort", "payload abort"] as const) {
+for (const scenario of ["pending tool results", "mixed pending messages", "missing result", "unmatched result", "conversion error", "transport failure", "abort", "payload abort"] as const) {
   test(`streamAgyProvider mocked continue handles ${scenario}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-continue-"));
     const pi = {
@@ -198,13 +198,19 @@ for (const scenario of ["pending tool results", "mixed pending messages", "missi
       assert.ok(listener, "provider must subscribe before sending");
       controller.abort();
     });
-    t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", () => ["pending tool results", "mixed pending messages", "missing result", "unmatched result", "conversion error"].includes(scenario));
+    t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", () => ["pending tool results", "mixed pending messages", "missing result", "unmatched result", "conversion error", "transport failure"].includes(scenario));
     const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", (_results: Context["messages"], _appendix?: string) => {
       assert.ok(listener, "provider must subscribe before resolving tool results");
       if (scenario === "conversion error") throw new Error("result conversion failed");
       if (["abort", "payload abort", "missing result", "unmatched result"].includes(scenario)) return 0;
       const captured = listener;
-      setImmediate(() => captured({ event: "result", status: "success" }));
+      setImmediate(() => {
+        if (scenario === "transport failure") {
+          (mcp as unknown as { failTransport(error: Error): void }).failTransport(new Error("MCP write failed"));
+        } else {
+          captured({ event: "result", status: "success" });
+        }
+      });
       return 1;
     });
     t.mock.method(bridge.runtimeSessionSync, "decide", () => ({ action: "continue" }) as RuntimeSessionDecision);
@@ -217,7 +223,7 @@ for (const scenario of ["pending tool results", "mixed pending messages", "missi
     const mcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(proc, "old-sync-key", mcp, "old-conversation");
     const context: Context = {
-      messages: ["pending tool results", "mixed pending messages", "unmatched result", "conversion error"].includes(scenario)
+      messages: ["pending tool results", "mixed pending messages", "unmatched result", "conversion error", "transport failure"].includes(scenario)
         ? [{ role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 2 }]
         : [{ role: "user", content: "latest request", timestamp: 2 }],
       tools: [],
@@ -280,14 +286,14 @@ for (const scenario of ["pending tool results", "mixed pending messages", "missi
       assert.equal(send.mock.callCount(), scenario === "abort" ? 1 : 0);
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "error");
-      const failed = ["missing result", "unmatched result", "conversion error"].includes(scenario);
+      const failed = ["missing result", "unmatched result", "conversion error", "transport failure"].includes(scenario);
       assert.equal(terminal.reason, failed ? "error" : "aborted");
       if (failed) {
-        assert.match(terminal.error.errorMessage ?? "", /no matching result|not delivered|conversion failed/);
+        assert.match(terminal.error.errorMessage ?? "", /no matching result|not enqueued|conversion failed|MCP write failed/);
         assert.equal(invalidate.mock.callCount(), 1);
         assert.deepEqual(invalidate.mock.calls[0]!.arguments, [session.piSessionId]);
-        assert.equal(persist.mock.callCount(), 0);
-        assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 0);
+        assert.equal(persist.mock.callCount(), scenario === "transport failure" ? 1 : 0);
+        assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), scenario === "transport failure" ? 1 : 0);
       }
       assert.equal(session.activeProcess, null);
       assert.equal(close.mock.callCount(), 1);
@@ -445,9 +451,10 @@ test("queued tool batch opens only after old mixed results are delivered and per
   const start = t.mock.method(AgyRuntime.prototype, "start", async () => { throw new Error("unexpected start"); });
   const rebuild = t.mock.method(BridgeIPC.prototype, "start", async () => { throw new Error("unexpected rebuild"); });
   t.mock.method(bridge.runtimeSessionSync, "decide", () => ({ action: "continue" }) as RuntimeSessionDecision);
-  t.mock.method(bridge.runtimeSessionStore, "get", async () => undefined);
   bridge.start();
-  const session = bridge.liveSessions.getOrCreate("queued-turn");
+  const manager = SessionManager.inMemory(directory);
+  const sessionId = bridge.piContextAdapter.bind(manager);
+  const session = bridge.liveSessions.getOrCreate(sessionId);
   const tools = [{ name: "test-tool", description: "test", parameters: { type: "object", properties: {} } }];
   t.mock.method(bridge, "getTools", () => tools);
   const gateway = new CapabilityGateway(tools);
@@ -461,9 +468,13 @@ test("queued tool batch opens only after old mixed results are delivered and per
     order.push("resolve");
     return gateway.resolveToolResults(messages, appendix);
   });
-  const persist = t.mock.method(bridge.runtimeSessionStore, "set", async () => {
+  const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
+  const setReference = bridge.runtimeSessionStore.set.bind(bridge.runtimeSessionStore);
+  const persist = t.mock.method(bridge.runtimeSessionStore, "set", async (...args: Parameters<typeof setReference>) => {
     order.push("persist");
+    const ref = await setReference(...args);
     await new Promise<void>((resolve) => setImmediate(resolve));
+    return ref;
   });
   const proc = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
   session.setSession(proc, "old-sync-key", new BridgeIPC([], session.id, session.resources), "old-conversation");
@@ -490,7 +501,7 @@ test("queued tool batch opens only after old mixed results are delivered and per
     contextWindow: 8192, maxTokens: 1024,
   } as Model<any>;
   const events: AssistantMessageEvent[] = [];
-  for await (const event of streamAgyProvider(model, context, { sessionId: "queued-turn" }, config, bridge)) events.push(event);
+  for await (const event of streamAgyProvider(model, context, { sessionId }, config, bridge)) events.push(event);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(order, ["resolve", "persist", "install", "persist"]);
   const delivered = await oldResult;
@@ -512,5 +523,28 @@ test("queued tool batch opens only after old mixed results are delivered and per
   assert.equal(start.mock.callCount(), 0);
   assert.equal(rebuild.mock.callCount(), 0);
   assert.equal(gateway.resolveToolResults([{ role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "next answer" }], isError: false, timestamp: 3 }]), 1);
+  // The completed toolUse adapter must not release runtime failure ownership.
+  assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, "old-conversation");
+  const ownedBridge = session.activeMcpServer!;
+  const failureHandler = (ownedBridge as unknown as {
+    transportFailureHandler: (error: Error) => void;
+  }).transportFailureHandler;
+  assert.equal(typeof failureHandler, "function");
+  failureHandler(new Error("write callback failed during pending gap"));
+  assert.equal(session.activeProcess, null);
+  assert.equal(session.activeMcpServer, null);
+  assert.equal(invalidate.mock.callCount(), 1);
+  assert.deepEqual(invalidate.mock.calls[0]!.arguments, [session.piSessionId]);
+  assert.equal(await bridge.runtimeSessionStore.get(sessionId), undefined);
+
+  const replacement = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+  const replacementBridge = new BridgeIPC([], session.id, session.resources);
+  session.setSession(replacement, "replacement", replacementBridge, "replacement-conversation");
+  await setReference(sessionId, { conversationId: "replacement-conversation" }, context.messages);
+  failureHandler(new Error("late old callback"));
+  assert.equal(session.activeProcess, replacement);
+  assert.equal(session.activeMcpServer, replacementBridge);
+  assert.equal(invalidate.mock.callCount(), 1);
+  assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, "replacement-conversation");
   assert.ok(JSON.stringify(await nextResult).includes("next answer"));
 });
