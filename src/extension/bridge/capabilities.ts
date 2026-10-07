@@ -254,6 +254,7 @@ export class CapabilityGateway {
       ids.add(message.toolCallId);
       const pending = this.pending.get(message.toolCallId);
       if (!pending) throw new Error(`Unknown tool result ID: ${message.toolCallId}`);
+      if (!pending.dispatched) throw new Error(`Tool result arrived before dispatch: ${message.toolCallId}`);
       if (message.toolName !== pending.call.name) {
         throw new Error(`Tool name mismatch for result: ${message.toolCallId}`);
       }

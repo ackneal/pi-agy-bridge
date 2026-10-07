@@ -178,6 +178,44 @@ describe("CapabilityGateway", () => {
     });
   }
 
+  for (const withDispatched of [false, true]) {
+    it(`rejects undispatched results atomically with dispatched=${withDispatched}`, async (t) => {
+      const relay = new CapabilityGateway([tool]);
+      t.after(() => relay.cancelPendingCalls("cleanup"));
+      const ids: string[] = [];
+      const original = PiToolAdapter.prototype.createCall;
+      t.mock.method(PiToolAdapter.prototype, "createCall", function (this: PiToolAdapter, ...args: Parameters<PiToolAdapter["createCall"]>) {
+        const call = original.apply(this, args);
+        if (call) ids.push(call.id);
+        return call;
+      });
+      const dispatched: string[] = [];
+      relay.setToolCallHandler((batch) => dispatched.push(...batch.calls.map((call) => call.id)));
+      const promises: Promise<unknown>[] = [];
+      if (withDispatched) {
+        promises.push(relay.call("echo", {}));
+        await setImmediate();
+      }
+      relay.setToolCallHandler(null);
+      promises.push(relay.call("echo", {}));
+      let settled = 0;
+      for (const promise of promises) void promise.then(() => { settled++; });
+      const results = ids.map((id) => toolResult(id, false, [{ type: "text", text: "answer" }]));
+
+      assert.throws(() => relay.resolveToolResults(results, "context"), /before dispatch/);
+      await setImmediate();
+      assert.equal(settled, 0);
+      assert.equal(relay.hasPendingCalls, true);
+      assert.deepEqual(dispatched, withDispatched ? [ids[0]] : []);
+
+      relay.setToolCallHandler((batch) => dispatched.push(...batch.calls.map((call) => call.id)));
+      assert.deepEqual(dispatched, ids);
+      assert.equal(relay.resolveToolResults(results, "context"), ids.length);
+      await Promise.all(promises);
+      assert.equal(relay.hasPendingCalls, false);
+    });
+  }
+
   it("returns a structured MCP error when call conversion rejects an unknown terminal", async () => {
     const relay = new CapabilityGateway([ptyTool], new SessionResources());
     const result = await relay.call("pty", { command: "write", ptyId: "terminal-1" });
