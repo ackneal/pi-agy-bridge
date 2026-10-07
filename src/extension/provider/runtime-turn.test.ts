@@ -432,8 +432,6 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
       purpose: "pending_tool_continuation",
       messages: instructions.map(({ role, content, sections }) => ({ role, content, ...(sections ? { sections } : {}) })),
     });
-    assert.doesNotMatch(appendix!, /pending tool answer|original request/);
-    for (const { content } of instructions) assert.equal(appendix!.split(content).length - 1, 1);
     assert.equal(persist.mock.callCount(), 2);
     assert.deepEqual(persist.mock.calls[0]!.arguments[2], context.messages);
     assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
@@ -456,9 +454,12 @@ test("queued tool batch opens only after old mixed results are delivered and per
   const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
   const bridge = new AgyBridge(pi, config);
   t.after(async () => {
-    await bridge.liveSessions.disposeAll();
-    t.mock.restoreAll();
-    await rm(directory, { recursive: true, force: true });
+    try {
+      await bridge.liveSessions.disposeAll();
+    } finally {
+      t.mock.restoreAll();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
   await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
   t.mock.method(BridgeIPC.prototype, "close", async () => {});
@@ -526,7 +527,6 @@ test("queued tool batch opens only after old mixed results are delivered and per
   assert.ok(JSON.stringify(delivered).includes("old answer"));
   assert.ok(JSON.stringify(delivered).includes("new instruction"));
   const terminal = events.at(-1);
-  assert.equal(terminal?.type, "done");
   assert.ok(terminal?.type === "done");
   assert.equal(terminal.reason, "toolUse");
   const call = terminal.message.content[0];

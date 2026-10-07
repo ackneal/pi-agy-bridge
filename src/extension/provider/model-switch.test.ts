@@ -11,14 +11,191 @@ import { calculateSyncKey } from "../session/session.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
 import { AgyBridge, streamAgyProvider } from "./provider.ts";
 
-const scenarios = [
-  "Gemini to Claude", "live reference only", "foreign roundtrip", "foreign assistant without responseId", "branch checkpoint",
-  "pending model switch", "resume rejects", "resume wait rejects", "resume mismatched init", "resume abort",
-  "fallback fails", "active send fails",
-] as const;
+type ModelSwitchCase = {
+  name: string;
+  arrange: {
+    persisted: boolean;
+    conversationId: string;
+    foreignHistory: boolean;
+    pending: boolean;
+    selectedModel: "gemini" | "claude";
+    startup: "success" | "reject" | "waitReject" | "mismatch" | "abort" | "fallbackReject";
+    sendFails: boolean;
+  };
+  expected: {
+    terminal: "error" | "aborted";
+    starts: number;
+    sends: number;
+    waits: number;
+    store: "retained" | "deleted";
+  } | {
+    terminal: "done";
+    starts: number;
+    sends: number;
+    waits: number;
+    model: "gemini" | "claude";
+    runtimeConversation: string | undefined;
+    responseId: string;
+    preservesTerminal: boolean;
+    continuation: { kind: "pending" } | { kind: "prompt"; reconstructed: boolean; fallback: boolean };
+  };
+};
 
-for (const scenario of scenarios) {
-  test(`provider model switching: ${scenario}`, async (t) => {
+const cases: ModelSwitchCase[] = [
+  {
+    name: "Gemini to Claude",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 1, sends: 1, waits: 1,
+      model: "claude", runtimeConversation: "same-conversation",
+      responseId: "same-conversation", preservesTerminal: true,
+      continuation: { kind: "prompt", reconstructed: false, fallback: false },
+    },
+  },
+  {
+    name: "live reference only",
+    arrange: {
+      persisted: false, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 1, sends: 1, waits: 1,
+      model: "claude", runtimeConversation: "same-conversation",
+      responseId: "same-conversation", preservesTerminal: true,
+      continuation: { kind: "prompt", reconstructed: false, fallback: false },
+    },
+  },
+  {
+    name: "foreign roundtrip",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "gemini", startup: "success", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 0, sends: 1, waits: 0,
+      model: "gemini", runtimeConversation: undefined,
+      responseId: "same-conversation", preservesTerminal: true,
+      continuation: { kind: "prompt", reconstructed: false, fallback: false },
+    },
+  },
+  {
+    name: "foreign assistant without responseId",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: true,
+      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 1, sends: 1, waits: 1,
+      model: "claude", runtimeConversation: undefined,
+      responseId: "fresh-conversation", preservesTerminal: false,
+      continuation: { kind: "prompt", reconstructed: true, fallback: false },
+    },
+  },
+  {
+    name: "branch checkpoint",
+    arrange: {
+      persisted: true, conversationId: "branch-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 1, sends: 1, waits: 1,
+      model: "claude", runtimeConversation: "branch-conversation",
+      responseId: "branch-conversation", preservesTerminal: false,
+      continuation: { kind: "prompt", reconstructed: false, fallback: false },
+    },
+  },
+  {
+    name: "pending model switch",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: true, selectedModel: "claude", startup: "success", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 0, sends: 0, waits: 0,
+      model: "gemini", runtimeConversation: undefined,
+      responseId: "same-conversation", preservesTerminal: true,
+      continuation: { kind: "pending" },
+    },
+  },
+  {
+    name: "resume rejects",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "reject", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 2, sends: 1, waits: 1,
+      model: "claude", runtimeConversation: undefined,
+      responseId: "fresh-conversation", preservesTerminal: false,
+      continuation: { kind: "prompt", reconstructed: true, fallback: true },
+    },
+  },
+  {
+    name: "resume wait rejects",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "waitReject", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 2, sends: 1, waits: 2,
+      model: "claude", runtimeConversation: undefined,
+      responseId: "fresh-conversation", preservesTerminal: false,
+      continuation: { kind: "prompt", reconstructed: true, fallback: true },
+    },
+  },
+  {
+    name: "resume mismatched init",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "mismatch", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 2, sends: 1, waits: 1,
+      model: "claude", runtimeConversation: undefined,
+      responseId: "fresh-conversation", preservesTerminal: false,
+      continuation: { kind: "prompt", reconstructed: true, fallback: true },
+    },
+  },
+  {
+    name: "resume abort",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "abort", sendFails: false,
+    },
+    expected: {
+      terminal: "aborted", starts: 1, sends: 0, waits: 0,
+      store: "retained",
+    },
+  },
+  {
+    name: "fallback fails",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "fallbackReject", sendFails: false,
+    },
+    expected: {
+      terminal: "error", starts: 2, sends: 0, waits: 0,
+      store: "deleted",
+    },
+  },
+  {
+    name: "active send fails",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "success", sendFails: true,
+    },
+    expected: {
+      terminal: "error", starts: 1, sends: 1, waits: 1,
+      store: "deleted",
+    },
+  },
+];
+
+for (const { name, arrange, expected } of cases) {
+  test(`provider model switching: ${name}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-model-switch-"));
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
@@ -26,10 +203,12 @@ for (const scenario of scenarios) {
     } as unknown as ExtensionAPI;
     const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
     const bridge = new AgyBridge(pi, config);
+
     t.after(async () => {
       try { await bridge.liveSessions.disposeAll(); }
       finally { t.mock.restoreAll(); await rm(directory, { recursive: true, force: true }); }
     });
+
     await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
     const manager = SessionManager.inMemory(directory);
     const sessionId = bridge.piContextAdapter.bind(manager);
@@ -39,7 +218,7 @@ for (const scenario of scenarios) {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 1024,
     } as Model<any>);
     const gemini = model("gemini");
-    const claude = model("claude");
+    const selected = model(arrange.selectedModel);
     const assistant: AssistantMessage = {
       role: "assistant", content: [{ type: "text", text: "previous answer" }], api: "agy", provider: "agy",
       model: gemini.id, responseId: "same-conversation", stopReason: "stop", timestamp: 2,
@@ -53,17 +232,16 @@ for (const scenario of scenarios) {
     session.turnIndex = 1;
     const terminalHandle = session.resources.terminals.bind("pi-terminal");
     bridge.runtimeSessionSync.record(session, prefix);
-    const expectedConversation = scenario === "branch checkpoint" ? "branch-conversation" : "same-conversation";
-    if (scenario === "branch checkpoint") assistant.responseId = expectedConversation;
-    if (scenario !== "live reference only") await bridge.runtimeSessionStore.set(sessionId, { conversationId: expectedConversation }, prefix);
-    if (scenario === "foreign assistant without responseId") {
+    assistant.responseId = arrange.conversationId;
+    if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { conversationId: arrange.conversationId }, prefix);
+    if (arrange.foreignHistory) {
       const { responseId: _responseId, ...foreignAssistant } = assistant;
       prefix.push({ role: "user", content: "foreign question", timestamp: 3 }, {
         ...foreignAssistant, provider: "foreign", api: "foreign", model: "foreign",
         content: [{ type: "text", text: "foreign answer" }], timestamp: 4,
       });
     }
-    let pending = scenario === "pending model switch";
+    let pending = arrange.pending;
     if (pending) {
       assistant.stopReason = "toolUse";
       assistant.content = [{ type: "toolCall", id: "pending-call", name: "test-tool", arguments: {} }];
@@ -87,16 +265,16 @@ for (const scenario of scenarios) {
     const start = t.mock.method(AgyRuntime.prototype, "start", async function (this: AgyRuntime) {
       attempts++;
       lifecycle.push(`start:${this.options.conversationId ?? "fresh"}`);
-      if (attempts === 1 && ["resume rejects", "resume abort", "fallback fails"].includes(scenario)) {
-        if (scenario === "resume abort") controller.abort(new Error("startup aborted"));
+      if (attempts === 1 && ["reject", "abort", "fallbackReject"].includes(arrange.startup)) {
+        if (arrange.startup === "abort") controller.abort(new Error("startup aborted"));
         throw new Error("resume rejected");
       }
-      if (attempts === 2 && scenario === "fallback fails") throw new Error("fresh rejected");
-      return { event: "init", conversation_id: scenario === "resume mismatched init" || !this.options.conversationId
+      if (attempts === 2 && arrange.startup === "fallbackReject") throw new Error("fresh rejected");
+      return { event: "init", conversation_id: arrange.startup === "mismatch" || !this.options.conversationId
         ? "fresh-conversation" : this.options.conversationId } as Awaited<ReturnType<AgyRuntime["start"]>>;
     });
     const wait = t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {
-      if (attempts === 1 && scenario === "resume wait rejects") throw new Error("connection rejected");
+      if (attempts === 1 && arrange.startup === "waitReject") throw new Error("connection rejected");
     });
     t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: (event: AgyEvent) => void) {
       listeners.set(this, listener);
@@ -109,7 +287,7 @@ for (const scenario of scenarios) {
       listener({ event: "result", status: "success", conversation_id: proc === oldProc ? "same-conversation" : session.conversationId! });
     };
     const send = t.mock.method(AgyRuntime.prototype, "send", async function (this: AgyRuntime, _input: AgyInput) {
-      if (scenario === "active send fails") throw new Error("active turn failed");
+      if (arrange.sendFails) throw new Error("active turn failed");
       finish(this);
     });
     const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", (results: Context["messages"]) => {
@@ -125,57 +303,59 @@ for (const scenario of scenarios) {
       return events.at(-1);
     };
 
-    const terminal = await run(scenario === "foreign roundtrip" ? gemini : claude);
-    if (["resume abort", "fallback fails", "active send fails"].includes(scenario)) {
+    const terminal = await run(selected);
+
+    assert.equal(start.mock.callCount(), expected.starts);
+    assert.equal(send.mock.callCount(), expected.sends);
+    assert.equal(wait.mock.callCount(), expected.waits);
+    if (expected.terminal !== "done") {
       assert.ok(terminal?.type === "error");
-      assert.equal(terminal.reason, scenario === "resume abort" ? "aborted" : "error");
-      assert.equal(start.mock.callCount(), scenario === "fallback fails" ? 2 : 1);
-      assert.equal(send.mock.callCount(), scenario === "active send fails" ? 1 : 0);
+      assert.equal(terminal.reason, expected.terminal);
       assert.equal(session.activeProcess, null);
-      if (scenario !== "resume abort") assert.equal(await bridge.runtimeSessionStore.get(sessionId), undefined);
+      const stored = await bridge.runtimeSessionStore.get(sessionId);
+      assert.equal(stored?.conversationId, expected.store === "retained" ? arrange.conversationId : undefined);
+      assert.equal(listeners.size, 0);
       return;
     }
+
     assert.ok(terminal?.type === "done");
-    assert.equal(terminal.message.model, scenario === "pending model switch" || scenario === "foreign roundtrip" ? gemini.id : claude.id);
-    if (scenario === "pending model switch") {
-      assert.equal(start.mock.callCount(), 0);
-      assert.equal(send.mock.callCount(), 0);
+    assert.equal(terminal.message.model, expected.model);
+    assert.equal(terminal.message.responseId, expected.responseId);
+    assert.equal(session.activeProcess?.options.model, expected.model);
+    assert.equal(session.activeProcess?.options.conversationId, expected.runtimeConversation);
+    assert.equal(session.resources.terminals.resolve(terminalHandle), expected.preservesTerminal ? "pi-terminal" : undefined);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, expected.responseId);
+    assert.equal(listeners.size, 0);
+
+    if (expected.continuation.kind === "pending") {
       assert.equal(resolve.mock.callCount(), 1);
       assert.equal(session.activeProcess, oldProc);
-      assert.equal(terminal.message.responseId, "same-conversation");
+
       context.messages.push(terminal.message, { role: "user", content: "next request", timestamp: 6 });
-      const next = await run(claude);
+      const next = await run(selected);
+
       assert.ok(next?.type === "done");
-      assert.equal(next.message.model, claude.id);
+      assert.equal(next.message.model, selected.id);
       assert.equal(next.message.responseId, "same-conversation");
       assert.equal(start.mock.callCount(), 1);
       assert.equal(send.mock.callCount(), 1);
-      assert.equal(session.activeProcess?.options.model, claude.id);
+      assert.equal(session.activeProcess?.options.model, selected.id);
       assert.equal(session.activeProcess?.options.conversationId, "same-conversation");
       assert.equal(session.resources.terminals.resolve(terminalHandle), "pi-terminal");
       assert.equal(send.mock.calls[0]!.arguments[0].message.content, "next request");
+      assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, next.message.responseId);
+      assert.equal(listeners.size, 0);
       return;
     }
-    const fallback = ["resume rejects", "resume wait rejects", "resume mismatched init"].includes(scenario);
-    const foreign = scenario === "foreign assistant without responseId";
-    const roundtrip = scenario === "foreign roundtrip";
-    assert.equal(start.mock.callCount(), roundtrip ? 0 : fallback ? 2 : 1);
-    assert.equal(send.mock.callCount(), 1);
-    assert.equal(wait.mock.callCount(), roundtrip ? 0 : scenario === "resume wait rejects" ? 2 : 1);
-    assert.equal(session.activeProcess?.options.model, scenario === "foreign roundtrip" ? gemini.id : claude.id);
-    assert.equal(session.activeProcess?.options.conversationId, roundtrip || fallback || foreign ? undefined : expectedConversation);
-    assert.equal(session.resources.terminals.resolve(terminalHandle), fallback || foreign || scenario === "branch checkpoint" ? undefined : "pi-terminal");
-    assert.equal(terminal.message.responseId, fallback || foreign ? "fresh-conversation" : expectedConversation);
+
     const prompt = send.mock.calls[0]!.arguments[0].message.content;
-    if (fallback || foreign) {
+    if (expected.continuation.reconstructed) {
       const reconstructed = JSON.parse(prompt);
       assert.equal(reconstructed.purpose, "reconstructed_conversation");
       assert.equal(reconstructed.history.length, prefix.length);
       assert.equal(reconstructed.currentMessage.content, "new request");
-      if (foreign) assert.match(prompt, /foreign answer/);
+      if (arrange.foreignHistory) assert.match(prompt, /foreign answer/);
     } else assert.equal(prompt, "new request");
-    if (fallback) assert.deepEqual(lifecycle.slice(0, 6), ["close", "abort", "start:same-conversation", "close", "abort", "start:fresh"]);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, terminal.message.responseId);
-    assert.equal(listeners.size, 0);
+    if (expected.continuation.fallback) assert.deepEqual(lifecycle.slice(0, 6), ["close", "abort", "start:same-conversation", "close", "abort", "start:fresh"]);
   });
 }

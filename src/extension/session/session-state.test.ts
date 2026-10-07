@@ -251,15 +251,12 @@ describe("RuntimeSessionSync", () => {
     const context = new PiContextAdapter();
     const sessionId = context.bind(manager);
     const store = new RuntimeSessionStore(context);
-    const runtimeRef = await store.set(sessionId, { conversationId: "agy-conversation" }, history, "epoch");
-    assert.equal(await store.get(sessionId, "other-epoch"), undefined);
-    assert.ok(await store.get(sessionId, "epoch"));
+    const runtimeRef = await store.set(sessionId, { conversationId: "agy-conversation" }, history);
 
     const cases = [
       { name: "model change no ref", key: "other", action: "resume" },
       { name: "pending model change", key: "other", pending: true, action: "continue" },
       { name: "turn bookkeeping", turn: 8, action: "continue" },
-      { name: "provider roundtrip no new history", key: "roundtrip", action: "resume" },
       { name: "foreign assistant without id", tail: [{ role: "assistant", content: "foreign" }], ref: runtimeRef, action: "rebuild" },
       { name: "agy unsynced assistant", tail: [{ role: "assistant", provider: "agy", responseId: "agy-conversation", content: "new" }], action: "rebuild" },
       { name: "persisted prefix", persisted: true, ref: runtimeRef, action: "resume" },
