@@ -25,42 +25,75 @@ const { errorMessage: omittedError, ...assistantWithoutError } = assistant;
 interface Case {
   name: string;
   context: Context;
-  includes?: string[];
-  excludes?: string[];
+  isReused: boolean;
+  expected: unknown;
 }
 
+const formattedAssistant = {
+  role: "assistant",
+  content: [{ type: "toolCall", id: "call<&1", name: "read", namespace: "files&docs", arguments: { path: "a<b" } }],
+  stopReason: "error",
+  errorMessage: 'failed <read> & "retry"',
+};
+
 const cases: Case[] = [
-  ...[true, false].map((isError): Case => ({
-    name: `reconstructs tool IDs, namespace, assistant metadata and is_error=${isError}`,
-    context: { messages: [assistant, {
+  ...[true, false].flatMap((isReused) => [true, false].map((isError): Case => ({
+    name: `${isReused ? "increments" : "reconstructs"} tool IDs, namespace, assistant metadata and isError=${isError}`,
+    context: { messages: [{ role: "user", content: "read", timestamp: 1 }, assistant, {
       role: "toolResult", toolCallId: "call<&1", toolName: "read",
       content: [{ type: "text", text: "result & details" }], isError, timestamp: 3,
-    }, { role: "user", content: "continue", timestamp: 4 }] },
-    includes: [
-      '<message role="assistant" stop_reason="error" error_message="failed &lt;read&gt; &amp; &quot;retry&quot;">',
-      '<tool_call id="call&lt;&amp;1" name="read" namespace="files&amp;docs">',
-      '<arguments>{&quot;path&quot;:&quot;a&lt;b&quot;}</arguments>',
-      `<tool_result call_id="call&lt;&amp;1" tool_name="read" is_error="${isError}">`,
-      '<text>result &amp; details</text>',
-    ],
-  })),
-  {
-    name: "omits optional namespace and error metadata when absent",
+    }] },
+    isReused,
+    expected: isReused ? {
+      purpose: "incremental_conversation",
+      messages: [
+        { role: "user", content: "read" }, formattedAssistant,
+        { role: "toolResult", content: [{ type: "text", text: "result & details" }], toolCallId: "call<&1", toolName: "read", isError },
+      ],
+    } : {
+      purpose: "reconstructed_conversation",
+      history: [{ role: "user", content: "read" }, formattedAssistant],
+      currentMessage: { role: "toolResult", content: [{ type: "text", text: "result & details" }], toolCallId: "call<&1", toolName: "read", isError },
+    },
+  }))),
+  ...[true, false].map((isReused): Case => ({
+    name: `omits absent namespace and error metadata in ${isReused ? "incremental" : "rebuilt"} JSON`,
     context: { messages: [{ ...assistantWithoutError, stopReason: "toolUse",
       content: [{ type: "toolCall", id: "plain", name: "read", arguments: {} }],
     }, { role: "user", content: "continue", timestamp: 3 }] },
-    includes: ['<message role="assistant" stop_reason="toolUse">', '<tool_call id="plain" name="read">'],
-    excludes: ["namespace=", "error_message="],
-  },
+    isReused,
+    expected: isReused ? {
+      purpose: "incremental_conversation",
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: "plain", name: "read", arguments: {} }], stopReason: "toolUse" },
+        { role: "user", content: "continue" },
+      ],
+    } : {
+      purpose: "reconstructed_conversation",
+      history: [{ role: "assistant", content: [{ type: "toolCall", id: "plain", name: "read", arguments: {} }], stopReason: "toolUse" }],
+      currentMessage: { role: "user", content: "continue" },
+    },
+  })),
+  ...[true, false].map((isReused): Case => ({
+    name: `preserves non-null system sections in ${isReused ? "incremental" : "rebuilt"} JSON`,
+    context: { messages: [{ role: "system", content: "rules <&>", sections: { policy: "<policy> & safety", removed: null }, timestamp: 1 }] },
+    isReused,
+    expected: isReused ? {
+      purpose: "incremental_conversation",
+      messages: [{ role: "system", content: "rules <&>", sections: { policy: "<policy> & safety" } }],
+    } : {
+      purpose: "reconstructed_conversation", history: [],
+      currentMessage: { role: "system", content: "rules <&>", sections: { policy: "<policy> & safety" } },
+    },
+  })),
 ];
 
 describe("formatContextPrompt provider semantics", () => {
-  for (const { name, context, includes = [], excludes = [] } of cases) {
+  for (const { name, context, isReused, expected } of cases) {
     it(name, () => {
-      const prompt = formatContextPrompt(context, false);
+      const prompt = formatContextPrompt(context, isReused, 0);
 
-      for (const fragment of includes) assert.ok(prompt.includes(fragment), `Missing ${fragment} in ${prompt}`);
-      for (const fragment of excludes) assert.ok(!prompt.includes(fragment), `Unexpected ${fragment} in ${prompt}`);
+      assert.deepEqual(JSON.parse(prompt), expected);
     });
   }
 });

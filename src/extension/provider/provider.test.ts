@@ -337,8 +337,15 @@ for (const row of recoveryCases) {
     assert.equal(recoveredProcess.options.conversationId, undefined);
     assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-2");
     const prompt = send.mock.calls.at(-1)!.arguments[0].message.content;
-    assert.match(prompt, /purpose="reconstructed_conversation"/);
-    for (const text of ["original request", "retry request", quotaError]) assert.ok(prompt.includes(text));
+    assert.deepEqual(JSON.parse(prompt), {
+      purpose: "reconstructed_conversation",
+      systemInstructions: "Keep Pi history",
+      history: [
+        { role: "user", content: "original request" },
+        { role: "assistant", content: failed.content, stopReason: "error", errorMessage: quotaError },
+      ],
+      currentMessage: { role: "user", content: "retry request" },
+    });
 
     const continued = await runTurn(row.model, "continue request", [
       { event: "step_update", delta: "Continuing normally" }, { event: "result", status: "success" },

@@ -148,15 +148,17 @@ for (const { decision, incremental, payload } of cases) {
     if (payload === "replace") {
       assert.equal(prompt, "replacement prompt");
     } else if (incremental) {
-      assert.match(prompt, /purpose="incremental_conversation"/);
-      assert.match(prompt, /role="system"/);
-      assert.match(prompt, /new system instruction/);
-      assert.match(prompt, /latest &amp; request/);
-      assert.doesNotMatch(prompt, /earlier/);
+      assert.deepEqual(JSON.parse(prompt), {
+        purpose: "incremental_conversation",
+        messages: [
+          { role: "system", content: "new system instruction" },
+          { role: "user", content: "latest & request" },
+        ],
+      });
     } else if (decision.action !== "rebuild") {
       assert.equal(prompt, "latest & request");
     } else {
-      assert.equal(prompt, '<pi_context purpose="reconstructed_conversation">\n  <system_instructions>Rules &amp; constraints</system_instructions>\n  <history>\n    <message role="user">\n      <text>earlier &lt;question&gt;</text>\n    </message>\n  </history>\n  <current_message role="user">\n    <text>latest &amp; request</text>\n  </current_message>\n</pi_context>');
+      assert.equal(prompt, '{"purpose":"reconstructed_conversation","systemInstructions":"Rules & constraints","history":[{"role":"user","content":"earlier <question>"}],"currentMessage":{"role":"user","content":"latest & request"}}');
     }
     await bridge.liveSessions.disposeAll();
     assert.equal(close.mock.callCount(), 1);
@@ -374,7 +376,7 @@ for (const roles of [["user"], ["system"], ["user", "system"], ["system", "user"
     assert.equal(session.activeProcess?.options.conversationId, undefined);
     assert.equal(session.conversationId, "new-conversation");
     const prompt = send.mock.calls[0]!.arguments[0].message.content;
-    assert.match(prompt, /purpose="reconstructed_conversation"/);
+    assert.equal(JSON.parse(prompt).purpose, "reconstructed_conversation");
     for (const text of ["pending tool answer", ...instructions.map((message) => message.content)]) {
       assert.equal(prompt.split(text).length - 1, 1);
     }

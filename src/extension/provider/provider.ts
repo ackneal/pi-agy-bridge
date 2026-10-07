@@ -56,87 +56,92 @@ export function formatContextPrompt(context: Context, isReused: boolean, syncedM
         (typeof message.content === "string" || message.content.every((block) => block.type === "text"))) {
       return formatMessageText(message);
     }
-    return `<pi_context purpose="incremental_conversation">\n${messages.map((item) => indent(formatXmlMessage(item))).join("\n")}\n</pi_context>`;
+    return formatContextUpdate(messages, "incremental_conversation");
   }
 
-  const history = context.messages.slice(0, -1).map((message) => formatXmlMessage(message));
-  const sections = [
-    context.systemPrompt
-      ? `<system_instructions>${escapeXml(context.systemPrompt)}</system_instructions>`
-      : "",
-    history.length > 0
-      ? `<history>\n${history.map((message) => indent(message)).join("\n")}\n</history>`
-      : "<history />",
-    currentMessage ? formatXmlMessage(currentMessage, "current_message") : "",
-  ].filter(Boolean);
+  const latestRunStart = findLatestRunStart(context.messages);
+  const history = context.messages.slice(0, -1)
+    .map((message, index) => index < latestRunStart && message.role === "toolResult"
+      ? formatOmittedToolResult(message)
+      : formatJsonMessage(message));
+  const reconstructedContext: Record<string, unknown> = {
+    purpose: "reconstructed_conversation",
+    ...(context.systemPrompt ? { systemInstructions: context.systemPrompt } : {}),
+    history,
+    ...(currentMessage ? { currentMessage: formatJsonMessage(currentMessage) } : {}),
+  };
 
-  return `<pi_context purpose="reconstructed_conversation">\n${sections.map((section) => indent(section)).join("\n")}\n</pi_context>`;
+  return JSON.stringify(reconstructedContext);
 }
 
-function formatXmlMessage(message: Message, tagName: "message" | "current_message" = "message"): string {
+function formatContextUpdate(
+  messages: readonly Message[],
+  purpose: "incremental_conversation" | "pending_tool_continuation",
+): string {
+  return JSON.stringify({ purpose, messages: messages.map(formatJsonMessage) });
+}
+
+function findLatestRunStart(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role === "assistant" && message.stopReason !== "toolUse") return index + 1;
+  }
+  return 0;
+}
+
+function formatOmittedToolResult(message: Extract<Message, { role: "toolResult" }>): Record<string, unknown> {
+  return {
+    role: message.role,
+    toolCallId: message.toolCallId,
+    toolName: message.toolName,
+    isError: message.isError,
+    contentOmitted: true,
+  };
+}
+
+function formatJsonMessage(message: Message): Record<string, unknown> {
+  const formatted: Record<string, unknown> = {
+    role: message.role,
+    content: formatJsonContent(message),
+  };
   if (message.role === "toolResult") {
-    const attributes = [
-      ...(tagName === "current_message" ? ['role="toolResult"'] : []),
-      `call_id="${escapeXml(message.toolCallId)}"`,
-      `tool_name="${escapeXml(message.toolName)}"`,
-      `is_error="${message.isError}"`,
-    ].join(" ");
-    return formatXmlElement(tagName === "current_message" ? tagName : "tool_result", attributes, formatXmlContent(message));
+    formatted.toolCallId = message.toolCallId;
+    formatted.toolName = message.toolName;
+    formatted.isError = message.isError;
   }
-
-  const attributes = [`role="${message.role}"`];
   if (message.role === "assistant") {
-    attributes.push(`stop_reason="${escapeXml(message.stopReason)}"`);
-    if (message.errorMessage !== undefined) attributes.push(`error_message="${escapeXml(message.errorMessage)}"`);
+    formatted.stopReason = message.stopReason;
+    if (message.errorMessage !== undefined) formatted.errorMessage = message.errorMessage;
   }
-  return formatXmlElement(tagName, attributes.join(" "), formatXmlContent(message));
+  if (message.role === "system" && message.sections) {
+    const sections = Object.fromEntries(
+      Object.entries(message.sections).filter(([, value]) => value !== null)
+    );
+    if (Object.keys(sections).length > 0) formatted.sections = sections;
+  }
+  return formatted;
 }
 
-function formatXmlContent(message: Message): string[] {
-  const content = typeof message.content === "string"
-    ? [`<text>${escapeXml(message.content)}</text>`]
-    : message.content.flatMap((block) => {
-        if (block.type === "text") return [`<text>${escapeXml(block.text)}</text>`];
-        if (block.type === "image") {
-          return [`<image mime_type="${escapeXml(block.mimeType)}" encoding="base64">${escapeXml(block.data)}</image>`];
-        }
-        if (block.type === "toolCall") {
-          const attributes = `id="${escapeXml(block.id)}" name="${escapeXml(block.name)}"` +
-            (block.namespace !== undefined ? ` namespace="${escapeXml(block.namespace)}"` : "");
-          const args = `<arguments>${escapeXml(JSON.stringify(block.arguments))}</arguments>`;
-          return [formatXmlElement("tool_call", attributes, [args])];
-        }
-        return [];
-      });
+function formatJsonContent(message: Message): unknown {
+  if (typeof message.content === "string") return message.content;
 
-  if (message.role === "system" && message.sections) {
-    for (const [name, value] of Object.entries(message.sections)) {
-      if (value !== null) {
-        content.push(`<section name="${escapeXml(name)}">${escapeXml(value)}</section>`);
-      }
+  const content: unknown[] = [];
+  for (const block of message.content) {
+    if (block.type === "text") {
+      content.push({ type: "text", text: block.text });
+    } else if (block.type === "image") {
+      content.push({ type: "image", mimeType: block.mimeType, data: block.data });
+    } else if (block.type === "toolCall") {
+      content.push({
+        type: "toolCall",
+        id: block.id,
+        name: block.name,
+        ...(block.namespace !== undefined ? { namespace: block.namespace } : {}),
+        arguments: block.arguments,
+      });
     }
   }
-
   return content;
-}
-
-function formatXmlElement(tagName: string, attributes: string, content: string[]): string {
-  const openingTag = attributes ? `<${tagName} ${attributes}>` : `<${tagName}>`;
-  if (content.length === 0) return `${openingTag}</${tagName}>`;
-  return `${openingTag}\n${content.map((item) => indent(item)).join("\n")}\n</${tagName}>`;
-}
-
-function indent(value: string): string {
-  return value.split("\n").map((line) => `  ${line}`).join("\n");
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
 }
 
 export function resolveModelAndEffort(

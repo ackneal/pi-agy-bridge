@@ -67,7 +67,9 @@ Pi also manages custom tools and skills. Antigravity CLI's own executable tools 
 
 Sequential turns reuse the same Antigravity CLI conversation. The bridge saves a conversation reference with the Pi session to resume it after a restart when the history still matches.
 
-After compaction, branching, or other history changes, the bridge rebuilds the context in a new conversation using Pi's current instructions, retained messages, and tool results. The Pi session itself is unchanged.
+On continued conversations, appended context uses compact JSON `{ "purpose": "incremental_conversation", "messages": [...] }`; a single text-only user message can be sent raw. Ordinary multiple follow-ups remain one input as delivered by Pi.
+
+After compaction, branching, or other history changes, the bridge rebuilds context in a new conversation using Pi's current instructions and compact JSON. Bodies of tool results from completed turns are omitted while call metadata is retained; results after the latest completed assistant response stay in full, including pending tool cycles. The Pi session itself is unchanged.
 
 > **Note:** The bridge reuses existing Antigravity CLI conversations whenever possible instead of creating a one-shot conversation for each request, avoiding unnecessary conversation buildup.
 
