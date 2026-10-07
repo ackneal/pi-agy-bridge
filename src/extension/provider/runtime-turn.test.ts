@@ -305,8 +305,22 @@ for (const scenario of ["pending tool results", "mixed pending messages", "missi
   });
 }
 
-for (const roles of [["user"], ["system"], ["user", "system"], ["system", "user", "system"]] as const) {
-  test(`pending tool results continue through MCP with appended ${roles.join(" then ")}`, async (t) => {
+const pendingContextCases: {
+  name: string;
+  roles: ("user" | "system")[];
+  sections?: Record<string, string | null>;
+  isError?: boolean;
+}[] = [
+  ...([["user"], ["system"], ["user", "system"], ["system", "user", "system"]] as const)
+    .map((roles) => ({ name: roles.join(" then "), roles: [...roles] })),
+  ...[false, true].map((isError) => ({
+    name: `section removal with tool isError=${isError}`,
+    roles: ["system" as const], sections: { policy: null }, isError,
+  })),
+];
+
+for (const { name, roles, sections, isError = false } of pendingContextCases) {
+  test(`pending tool results continue through MCP with appended ${name}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-mixed-pending-"));
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
@@ -341,10 +355,13 @@ for (const roles of [["user"], ["system"], ["user", "system"], ["system", "user"
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
         stopReason: "toolUse", timestamp: 2 },
     ];
-    const instructions = roles.map((role, index) => ({ role, content: `additional instruction ${index}`, timestamp: 4 + index }));
+    const instructions = roles.map((role, index) => ({
+      role, content: `additional instruction ${index}`, timestamp: 4 + index,
+      ...(role === "system" && sections ? { sections } : {}),
+    }));
     const context: Context = { systemPrompt: "Rules", tools: [], messages: [
       ...prefix,
-      { role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "pending tool answer" }], isError: false, timestamp: 3 },
+      { role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "pending tool answer" }], isError, timestamp: 3 },
       ...instructions,
     ] };
     session.setSession(oldProc, calculateSyncKey("Rules", [], "test-model", "", "pi-bridge"), oldMcp, "old-conversation");
@@ -413,7 +430,7 @@ for (const roles of [["user"], ["system"], ["user", "system"], ["system", "user"
     assert.equal(typeof appendix, "string");
     assert.deepEqual(JSON.parse(appendix!), {
       purpose: "pending_tool_continuation",
-      messages: instructions.map(({ role, content }) => ({ role, content })),
+      messages: instructions.map(({ role, content, sections }) => ({ role, content, ...(sections ? { sections } : {}) })),
     });
     assert.doesNotMatch(appendix!, /pending tool answer|original request/);
     for (const { content } of instructions) assert.equal(appendix!.split(content).length - 1, 1);

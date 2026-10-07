@@ -115,10 +115,7 @@ function formatJsonMessage(message: Message): Record<string, unknown> {
     if (message.errorMessage !== undefined) formatted.errorMessage = message.errorMessage;
   }
   if (message.role === "system" && message.sections) {
-    const sections = Object.fromEntries(
-      Object.entries(message.sections).filter(([, value]) => value !== null)
-    );
-    if (Object.keys(sections).length > 0) formatted.sections = sections;
+    if (Object.keys(message.sections).length > 0) formatted.sections = message.sections;
   }
   return formatted;
 }

@@ -74,16 +74,48 @@ const cases: Case[] = [
       currentMessage: { role: "user", content: "continue" },
     },
   })),
-  ...[true, false].map((isReused): Case => ({
-    name: `preserves non-null system sections in ${isReused ? "incremental" : "rebuilt"} JSON`,
-    context: { messages: [{ role: "system", content: "rules <&>", sections: { policy: "<policy> & safety", removed: null }, timestamp: 1 }] },
+  ...[true, false].flatMap((isReused) => [
+    { name: "mixed section updates", sections: { policy: "<policy> & safety", removed: null },
+      expectedSections: { policy: "<policy> & safety", removed: null } },
+    { name: "removal-only sections", sections: { removed: null }, expectedSections: { removed: null } },
+    { name: "empty sections", sections: {}, expectedSections: undefined },
+  ].map(({ name, sections, expectedSections }): Case => ({
+    name: `${expectedSections ? "preserves" : "omits"} ${name} in ${isReused ? "incremental" : "rebuilt"} JSON`,
+    context: { messages: [{ role: "system", content: "rules <&>", sections, timestamp: 1 }] },
     isReused,
     expected: isReused ? {
       purpose: "incremental_conversation",
-      messages: [{ role: "system", content: "rules <&>", sections: { policy: "<policy> & safety" } }],
+      messages: [{ role: "system", content: "rules <&>", ...(expectedSections ? { sections: expectedSections } : {}) }],
     } : {
       purpose: "reconstructed_conversation", history: [],
-      currentMessage: { role: "system", content: "rules <&>", sections: { policy: "<policy> & safety" } },
+      currentMessage: { role: "system", content: "rules <&>", ...(expectedSections ? { sections: expectedSections } : {}) },
+    },
+  }))),
+  ...[true, false].map((isReused): Case => ({
+    name: `preserves section replacement and removal order in ${isReused ? "incremental" : "rebuilt"} JSON`,
+    context: { messages: [
+      { role: "system", content: "", sections: { policy: "old policy", retained: "keep" }, timestamp: 1 },
+      { role: "system", content: "", sections: { policy: "new policy" }, timestamp: 2 },
+      { role: "system", content: "", sections: { policy: null }, timestamp: 3 },
+      { role: "user", content: "continue", timestamp: 4 },
+    ] },
+    isReused,
+    expected: isReused ? {
+      purpose: "incremental_conversation",
+      messages: [
+        { role: "system", content: "", sections: { policy: "old policy", retained: "keep" } },
+        { role: "system", content: "", sections: { policy: "new policy" } },
+        { role: "system", content: "", sections: { policy: null } },
+        { role: "user", content: "continue" },
+      ],
+    } : {
+      purpose: "reconstructed_conversation",
+      history: [
+        { role: "system", content: "", sections: { policy: "old policy", retained: "keep" } },
+        { role: "system", content: "", sections: { policy: "new policy" } },
+        { role: "system", content: "", sections: { policy: null } },
+      ],
+      currentMessage: { role: "user", content: "continue" },
     },
   })),
 ];
