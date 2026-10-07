@@ -25,7 +25,6 @@ export interface AgyEventAdapterOptions {
 
 export class PiEventAdapter {
   public readonly stream: AssistantMessageEventStream;
-  private readonly model: string;
   private readonly provider: string;
   private readonly allowedToolNames: ReadonlySet<string> | undefined;
   private readonly bridgeToolCallsExternally: boolean;
@@ -41,7 +40,6 @@ export class PiEventAdapter {
   private partial: AssistantMessage;
 
   constructor(options: AgyEventAdapterOptions) {
-    this.model = options.model;
     this.provider = options.provider ?? "agy";
     this.allowedToolNames = options.allowedToolNames;
     this.bridgeToolCallsExternally = options.bridgeToolCallsExternally ?? false;
@@ -53,7 +51,7 @@ export class PiEventAdapter {
       content: [],
       api: "agy" as any,
       provider: this.provider,
-      model: this.model,
+      model: options.model,
       usage: {
         input: 0,
         output: 0,
@@ -71,6 +69,14 @@ export class PiEventAdapter {
       stopReason: "stop",
       timestamp: Date.now(),
     };
+  }
+
+  public setModel(model: string): void {
+    if (this.started) {
+      throw new Error("Cannot change model after the stream has started");
+    }
+
+    this.partial.model = model;
   }
 
   public isCompleted(): boolean {

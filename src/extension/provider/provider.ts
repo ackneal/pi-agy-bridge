@@ -193,7 +193,7 @@ async function prepareRuntime(
   config: AgyBridgeConfig | undefined,
   bridge: AgyBridge,
   liveSession: LiveSession
-): Promise<{ proc: AgyRuntime; mcpServer: BridgeIPC; reconstructContext: boolean }> {
+): Promise<{ proc: AgyRuntime; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
   options?.signal?.throwIfAborted();
   const { baseModel, effort } = resolveModelAndEffort(model.id, options, model.thinkingLevelMap);
   const agentName = config?.agentName ?? "pi-bridge";
@@ -233,7 +233,20 @@ async function prepareRuntime(
     if (!liveSession.activeMcpServer) {
       throw new Error("Antigravity CLI process or Pi MCP bridge was not initialized");
     }
-    return { proc: liveSession.activeProcess, mcpServer: liveSession.activeMcpServer, reconstructContext: false };
+    const proc = liveSession.activeProcess;
+    const modelMatches = proc.options.model === baseModel && proc.options.effort === effort;
+    if (liveSession.syncKey !== syncKey) {
+      debugLog("session", "Deferring runtime settings change until the pending AGY turn finishes", {
+        activeModel: proc.options.model,
+        requestedModel: baseModel,
+      });
+    }
+    return {
+      proc,
+      mcpServer: liveSession.activeMcpServer,
+      reconstructContext: false,
+      modelId: modelMatches ? model.id : latestAssistant?.model ?? proc.options.model,
+    };
   }
 
   debugLog("register", `Starting fresh agy process (turn ${turnIndex}, canReuse: ${decision.action === "continue"})`);
@@ -242,52 +255,77 @@ async function prepareRuntime(
     conversationId: liveSession.conversationId,
     hasPendingCalls: liveSession.activeMcpServer?.hasPendingCalls ?? false,
   });
-  await liveSession.dispose();
+  await liveSession.dispose({
+    preserveResources: decision.action === "resume" && decision.conversationId === liveSession.conversationId,
+  });
   await validateAgyVersion(config?.agyPath, config?.minVersion);
   options?.signal?.throwIfAborted();
 
-  const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
-  let proc: AgyRuntime | null = null;
-  const abortStartup = () => {
-    void mcpServer.close().catch((error) => debugLog("session", "Error closing cancelled MCP startup:", error));
-    void proc?.abort().catch((error) => debugLog("session", "Error aborting cancelled Antigravity CLI startup:", error));
-  };
-  options?.signal?.addEventListener("abort", abortStartup, { once: true });
-  try {
-    options?.signal?.throwIfAborted();
-    await mcpServer.start();
-    options?.signal?.throwIfAborted();
-    await bridge.ensureAgyPluginInstalled(pluginDir);
-    options?.signal?.throwIfAborted();
-    proc = new AgyRuntime({
-      agyPath: config?.agyPath,
-      agentName,
-      model: baseModel,
-      conversationId: decision.action === "resume" ? decision.conversationId : undefined,
-      effort,
-      environment: mcpServer.processEnvironment,
-    });
-    const initEvent = await proc.start();
-    debugLog("register", "Antigravity CLI init conversation id:", initEvent.conversation_id);
-    await mcpServer.waitForConnection();
-    options?.signal?.throwIfAborted();
-    liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id);
-    liveSession.turnIndex = turnIndex;
-    return { proc, mcpServer, reconstructContext: decision.action === "rebuild" };
-  } catch (error) {
-    // Ownership transfers to liveSession only after startup succeeds.
-    await mcpServer.close().catch((cleanupError) => {
-      debugLog("session", "Error closing unowned MCP bridge:", cleanupError);
-    });
-    if (proc) {
-      await proc.abort().catch((cleanupError) => {
-        debugLog("session", "Error aborting unowned Antigravity CLI process:", cleanupError);
+  const startRuntime = async (conversationId?: string) => {
+    const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
+    let proc: AgyRuntime | null = null;
+    const abortStartup = () => {
+      void mcpServer.close().catch((error) => debugLog("session", "Error closing cancelled MCP startup:", error));
+      void proc?.abort().catch((error) => debugLog("session", "Error aborting cancelled Antigravity CLI startup:", error));
+    };
+    options?.signal?.addEventListener("abort", abortStartup, { once: true });
+    try {
+      options?.signal?.throwIfAborted();
+      await mcpServer.start();
+      options?.signal?.throwIfAborted();
+      await bridge.ensureAgyPluginInstalled(pluginDir);
+      options?.signal?.throwIfAborted();
+      proc = new AgyRuntime({
+        agyPath: config?.agyPath,
+        agentName,
+        model: baseModel,
+        conversationId,
+        effort,
+        environment: mcpServer.processEnvironment,
       });
+      const initEvent = await proc.start();
+      debugLog("register", "Antigravity CLI init conversation id:", initEvent.conversation_id);
+      if (conversationId && initEvent.conversation_id !== conversationId) {
+        throw new Error("Antigravity CLI did not restore the requested conversation");
+      }
+      await mcpServer.waitForConnection();
+      options?.signal?.throwIfAborted();
+      liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id);
+      liveSession.turnIndex = turnIndex;
+      return { proc, mcpServer, modelId: model.id };
+    } catch (error) {
+      // Ownership transfers to liveSession only after startup succeeds.
+      await mcpServer.close().catch((cleanupError) => {
+        debugLog("session", "Error closing unowned MCP bridge:", cleanupError);
+      });
+      if (proc) {
+        await proc.abort().catch((cleanupError) => {
+          debugLog("session", "Error aborting unowned Antigravity CLI process:", cleanupError);
+        });
+      }
+      throw error;
+    } finally {
+      options?.signal?.removeEventListener("abort", abortStartup);
     }
-    throw error;
-  } finally {
-    options?.signal?.removeEventListener("abort", abortStartup);
+  };
+
+  if (decision.action === "resume") {
+    try {
+      return { ...await startRuntime(decision.conversationId), reconstructContext: false };
+    } catch (error) {
+      options?.signal?.throwIfAborted();
+      debugLog("session", "Conversation resume failed before input delivery; rebuilding once", {
+        conversationId: decision.conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await bridge.runtimeSessionStore.delete(liveSession.piSessionId).catch((failure) => {
+        debugLog("session", "Could not invalidate rejected conversation reference:", failure);
+      });
+      liveSession.resources.disposeAll();
+    }
   }
+
+  return { ...await startRuntime(), reconstructContext: true };
 }
 
 export function streamAgyProvider(
@@ -385,6 +423,7 @@ export function streamAgyProvider(
       const runtime = await prepareRuntime(model, context, tools, options, config, bridge, liveSession);
       const proc = runtime.proc;
       mcpServer = runtime.mcpServer;
+      adapter.setModel(runtime.modelId);
 
       mcpServer.setTransportFailureHandler((error) => {
         if (liveSession.activeMcpServer !== runtime.mcpServer || liveSession.activeProcess !== proc) return;

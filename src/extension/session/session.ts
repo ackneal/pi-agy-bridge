@@ -132,7 +132,7 @@ export class LiveSession {
     this.turnIndex++;
   }
 
-  public async dispose(): Promise<void> {
+  public async dispose(options?: { preserveResources?: boolean }): Promise<void> {
     const proc = this.activeProcess;
     const mcpServer = this.activeMcpServer;
 
@@ -142,7 +142,7 @@ export class LiveSession {
     this.turnIndex = 0;
     this.conversationId = undefined;
     this.clearAbortSignal();
-    this.resources.disposeAll();
+    if (!options?.preserveResources) this.resources.disposeAll();
 
     if (mcpServer) {
       try {

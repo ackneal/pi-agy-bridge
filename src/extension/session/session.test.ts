@@ -62,27 +62,37 @@ describe("LiveSession", () => {
     assert.equal(session.conversationId, undefined);
   });
 
-  it("disposes MCP and process resources and clears live state", async () => {
-    const session = new LiveSession("pi-session-a");
-    const lifecycle: string[] = [];
-    const mockProc = {
-      isRunning: true,
-      abort: async () => lifecycle.push("process"),
-    } as unknown as AgyProcess;
-    const mockMcpServer = {
-      close: async () => lifecycle.push("mcp"),
-    } as unknown as AgyMcpServer;
+  for (const row of [
+    { name: "full disposal clears terminal handles", options: undefined, terminalId: undefined },
+    { name: "runtime replacement preserves terminal handles", options: { preserveResources: true }, terminalId: "pi-terminal" },
+  ]) {
+    it(row.name, async () => {
+      const session = new LiveSession("pi-session-a");
+      const lifecycle: string[] = [];
+      const mockProc = {
+        isRunning: true,
+        abort: async () => lifecycle.push("process"),
+      } as unknown as AgyProcess;
+      const mockMcpServer = {
+        close: async () => lifecycle.push("mcp"),
+      } as unknown as AgyMcpServer;
 
-    session.setSession(mockProc, "key-123", mockMcpServer, "agy-conversation");
-    await session.dispose();
+      session.setSession(mockProc, "key-123", mockMcpServer, "agy-conversation");
+      const handle = session.resources.terminals.bind("pi-terminal");
+      await session.dispose(row.options);
 
-    assert.deepEqual(lifecycle, ["mcp", "process"]);
-    assert.equal(session.activeProcess, null);
-    assert.equal(session.activeMcpServer, null);
-    assert.equal(session.syncKey, "");
-    assert.equal(session.turnIndex, 0);
-    assert.equal(session.conversationId, undefined);
-  });
+      assert.deepEqual(lifecycle, ["mcp", "process"]);
+      assert.equal(session.activeProcess, null);
+      assert.equal(session.activeMcpServer, null);
+      assert.equal(session.syncKey, "");
+      assert.equal(session.turnIndex, 0);
+      assert.equal(session.conversationId, undefined);
+      assert.equal(session.resources.terminals.resolve(handle), row.terminalId);
+
+      await session.dispose();
+      assert.equal(session.resources.terminals.resolve(handle), undefined);
+    });
+  }
 });
 
 describe("PiContextAdapter", () => {

@@ -67,6 +67,10 @@ Pi also manages custom tools and skills. Antigravity CLI's own executable tools 
 
 Sequential turns reuse the same Antigravity CLI conversation. The bridge saves a conversation reference with the Pi session to resume it after a restart when the history still matches.
 
+Changing an Antigravity model or effort restarts the CLI with the same conversation reference; it does not by itself rebuild history. While MCP results are pending, runtime changes are deferred until the current Antigravity turn finishes, and responses retain the active model's identity. Terminal handles survive a successful runtime replacement. Switching away from Antigravity and back without a new assistant turn also retains the conversation; any assistant turn outside the bridge's synchronized history triggers reconstruction, even without a response ID.
+
+If the CLI cannot restore a conversation during startup, the bridge cleans up the rejected runtime and attempts one fresh reconstruction before sending input. Cancellation and failures after input delivery do not trigger this startup retry.
+
 On continued conversations, appended context uses compact JSON `{ "purpose": "incremental_conversation", "messages": [...] }`; a single text-only user message can be sent raw. Ordinary multiple follow-ups remain one input as delivered by Pi.
 
 While tools are pending, an MCP result can carry batched Pi context updates in a final, separate text block: `{ "purpose": "pending_tool_continuation", "messages": [...] }`. The agent instructions tell the runtime to apply these updates before its next action, preserving recorded roles and continuing the existing task without a new standard-input turn. Pi normally converts steering/custom messages to the `user` role; the bridge does not invent source metadata.

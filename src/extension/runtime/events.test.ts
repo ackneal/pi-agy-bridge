@@ -13,6 +13,66 @@ async function collectStreamEvents(adapter: AgyEventAdapter): Promise<AssistantM
 }
 
 describe("AgyEventAdapter", () => {
+  const modelCases = [
+    { phase: "before stream", terminal: "done", allowed: true },
+    { phase: "before stream", terminal: "error", allowed: true },
+    { phase: "after init", terminal: "done", allowed: false },
+    { phase: "after init", terminal: "error", allowed: false },
+    { phase: "after text", terminal: "done", allowed: false },
+    { phase: "after text", terminal: "error", allowed: false },
+    { phase: "after completion", terminal: "done", allowed: false },
+    { phase: "after completion", terminal: "error", allowed: false },
+  ] as const;
+
+  for (const expected of modelCases) {
+    it(`setModel ${expected.phase} ${expected.allowed ? "updates" : "preserves"} metadata through ${expected.terminal}`, async (t) => {
+      const adapter = new AgyEventAdapter({ model: "original-model" });
+      const finish = () => adapter.handleEvent({
+        event: "result",
+        status: expected.terminal === "done" ? "success" : "error",
+      });
+      if (expected.phase === "after init") {
+        adapter.handleEvent({ event: "init" });
+      }
+      if (expected.phase === "after text" || expected.phase === "after completion") {
+        adapter.handleEvent({ event: "step_update", delta: "Hello" });
+      }
+      if (expected.phase === "after completion") {
+        finish();
+      }
+      const before = adapter.message;
+      const push = t.mock.method(adapter.stream, "push");
+      t.after(() => push.mock.restore());
+
+      if (expected.allowed) {
+        adapter.setModel("selected-model");
+      } else {
+        assert.throws(() => adapter.setModel("selected-model"), /Cannot change model after the stream has started/);
+      }
+
+      assert.equal(push.mock.callCount(), 0);
+      const model = expected.allowed ? "selected-model" : "original-model";
+      assert.deepEqual(adapter.message, { ...before, model });
+      push.mock.restore();
+
+      if (expected.phase === "before stream" || expected.phase === "after init") {
+        adapter.handleEvent({ event: "step_update", delta: "Hello" });
+      }
+      if (expected.phase !== "after completion") {
+        finish();
+      }
+      const events = await collectStreamEvents(adapter);
+      assert.deepEqual(events.map((event) => event.type), [
+        "start", "text_start", "text_delta", "text_end", expected.terminal,
+      ]);
+      for (const event of events) {
+        const message = event.type === "done" ? event.message : event.type === "error" ? event.error : event.partial;
+        assert.equal(message.model, model);
+      }
+      assert.equal(adapter.message.model, model);
+    });
+  }
+
   it("maps init event to responseId on the start event", async () => {
     const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
     const events = adapter.stream[Symbol.asyncIterator]();

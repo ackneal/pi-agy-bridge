@@ -142,15 +142,26 @@ export class RuntimeSessionSync {
     // Validate even newly appended messages before continuing an existing runtime.
     input.canonicalHistory.forEach(serializeHistoryMessage);
 
-    if (this.matchesLiveSession(session, input)) {
-      if (session.activeProcess?.isRunning) return { action: "continue" };
+    // A dead process cannot receive results for its outstanding MCP calls.
+    const deadPendingRuntime = session.activeMcpServer?.hasPendingCalls && !session.activeProcess?.isRunning;
+    const syncedCount = this.getSyncedMessageCount(session);
+
+    if (!deadPendingRuntime && this.matchesLiveSession(session, input)) {
+      if (session.activeProcess?.isRunning &&
+        (session.syncKey === input.syncKey || session.activeMcpServer?.hasPendingCalls)) {
+        return { action: "continue" };
+      }
       if (session.conversationId) {
         return { action: "resume", conversationId: session.conversationId };
       }
     }
 
     const ref = input.runtimeRef;
-    if (ref && this.matchesPersistedSession(ref, input)) {
+    // An older checkpoint cannot roll back a conversation whose newer live
+    // history is already known. A different branch conversation may still resume.
+    if (ref && (!deadPendingRuntime || ref.conversationId !== session.conversationId) &&
+      (syncedCount === undefined || ref.conversationId !== session.conversationId) &&
+      this.matchesPersistedSession(ref, input)) {
       this.record(session, input.canonicalHistory.slice(0, ref.historyLength));
       return { action: "resume", conversationId: ref.conversationId };
     }
@@ -184,11 +195,10 @@ export class RuntimeSessionSync {
   }
 
   private matchesLiveSession(session: LiveSession, input: RuntimeSessionSyncInput): boolean {
-    if (session.syncKey !== input.syncKey || session.turnIndex !== input.turnIndex) return false;
-    if (!this.matchesConversationId(session.conversationId, input.conversationId)) return false;
+    if (!session.conversationId || !this.matchesConversationId(session.conversationId, input.conversationId)) return false;
 
     const previousHistory = this.canonicalHistories.get(session);
-    if (!previousHistory) return true;
+    if (!previousHistory) return !this.hasUnsyncedAssistant(input.canonicalHistory, 0);
     if (input.canonicalHistory.length < previousHistory.length) {
       debugLog("session", "Live history shortened", {
         expectedLength: previousHistory.length,
@@ -196,6 +206,8 @@ export class RuntimeSessionSync {
       });
       return false;
     }
+
+    if (this.hasUnsyncedAssistant(input.canonicalHistory, previousHistory.length)) return false;
 
     const mismatchIndex = previousHistory.findIndex((entry, index) =>
       entry !== serializeHistoryMessage(input.canonicalHistory[index])
@@ -223,8 +235,13 @@ export class RuntimeSessionSync {
   ): boolean {
     return (
       this.matchesConversationId(ref.conversationId, input.conversationId) &&
-      historyMatches(ref, input.canonicalHistory)
+      historyMatches(ref, input.canonicalHistory) &&
+      !this.hasUnsyncedAssistant(input.canonicalHistory, ref.historyLength!)
     );
+  }
+
+  private hasUnsyncedAssistant(history: readonly unknown[], syncedCount: number): boolean {
+    return history.slice(syncedCount).some((message) => isRecord(message) && message.role === "assistant");
   }
 
   private matchesConversationId(
