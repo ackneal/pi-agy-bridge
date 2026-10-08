@@ -548,6 +548,8 @@ const pendingGapCases: Array<{ name: string; event?: AgyEvent; source?: AgyEvent
   { name: "native model error", event: { event: "result", status: "error", error: quotaError }, source: "agy" },
   { name: "synthetic runtime error", event: { event: "result", status: "error", error: "process exited in tool gap" }, source: "runtime" },
   { name: "blocked native tool", event: { event: "step_update", tool_call: { id: "native-call", name: "run_command", arguments: {} } }, source: "agy" },
+  { name: "malformed native tool name object", event: JSON.parse('{"event":"step_update","tool_call":{"id":"native-call","name":{"toString":null},"arguments":{}}}'), source: "agy" },
+  { name: "malformed native tool name array", event: JSON.parse('{"event":"step_update","tool_call":{"id":"native-call","name":[{"toString":null}],"arguments":{}}}'), source: "agy" },
   { name: "user abort" },
   { name: "matching Pi results", continues: true },
 ];

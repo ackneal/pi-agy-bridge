@@ -29,6 +29,14 @@ const blockedToolCases: {
   { name: "flat zero name", event: { event: "step_update", type: "tool", name: 0 }, blocked: "0" },
   { name: "flat zero tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: 0, name: "read" }, blocked: "0" },
   { name: "numeric tool name", event: { event: "step_update", type: "tool", name: 42 }, blocked: "42" },
+  ...[
+    { name: "object tool name", value: {} },
+    { name: "array tool name", value: ["read"] },
+    { name: "object tool name with invalid toString", value: { toString: null } },
+    { name: "array tool name with invalid toString", value: [{ toString: null }] },
+  ].map(({ name, value }) => ({
+    name, event: { event: "step_update", type: "tool", tool_name: value, name: "read" }, blocked: "<invalid>",
+  })),
   { name: "missing nested tool name", event: { event: "step_update", tool_call: { id: "native" } }, blocked: "<unnamed>" },
   { name: "nested null name with allowed flat fallback", event: { event: "step_update", type: "tool", tool_call: { id: "native", name: null }, tool_name: "read" }, blocked: "null" },
   { name: "enveloped null name with allowed flat fallback", event: { event: "step_update", step_update: { type: "tool", tool_call: { id: "native", name: null }, name: "read" } }, blocked: "null" },

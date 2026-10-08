@@ -317,6 +317,7 @@ export class PiEventAdapter {
 
   private getBlockedAgyToolName(name: unknown): string | undefined {
     if (name === undefined) return "<unnamed>";
+    if (name !== null && typeof name === "object") return "<invalid>";
     if (typeof name !== "string") return String(name);
     if (name.length === 0) return name;
     if (AGY_INTERNAL_TOOL_NAMES.has(name) || this.isAllowedAgyTool(name)) return undefined;
