@@ -169,7 +169,7 @@ export class AgyTurn {
 
     await store.set(session.piSessionId, {
       conversationId: session.conversationId,
-      ...(this.runtime!.mcpServer.hasPendingCalls ? { hasPendingCalls: true } : {}),
+      ...(this.runtime!.mcpServer.hasPendingCalls ? { hasPendingToolCalls: true } : {}),
     }, messages, loginEpoch);
   }
 

@@ -213,18 +213,18 @@ async function prepareRuntime(
   const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
   const rawPluginDir = config?.pluginDir ?? config?.agentDir;
   const pluginDir = rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR;
-  const runtimeRef = await bridge.runtimeSessionStore.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH);
+  const checkpoint = await bridge.runtimeSessionStore.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH);
   checkPreparation();
   const decision = bridge.runtimeSessionSync.decide(liveSession, {
     syncKey,
     ...(expectedConversationId ? { conversationId: expectedConversationId } : {}),
-    canonicalHistory: context.messages,
-    ...(runtimeRef ? { runtimeRef } : {}),
+    messages: context.messages,
+    ...(checkpoint ? { checkpoint } : {}),
   });
 
   debugLog("register", "Antigravity CLI runtime decision", {
     action: decision.action,
-    historyLength: context.messages.length,
+    messageCount: context.messages.length,
     syncedMessageCount: bridge.runtimeSessionSync.getSyncedMessageCount(liveSession),
     processRunning: liveSession.activeProcess?.isRunning ?? false,
     sessionConversationId: liveSession.conversationId,

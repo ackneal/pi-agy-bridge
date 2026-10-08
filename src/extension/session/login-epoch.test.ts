@@ -5,13 +5,13 @@ import { LiveSession, PiContextAdapter } from "./session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
 
 for (const scenario of [
-  { name: "legacy reference with legacy credential", stored: undefined, current: undefined, accepted: true },
+  { name: "checkpoint and credential without login epochs", stored: undefined, current: undefined, accepted: true },
   { name: "matching login epoch", stored: "login-a", current: "login-a", accepted: true },
   { name: "previous login epoch", stored: "login-a", current: "login-b", accepted: false },
-  { name: "legacy reference after login", stored: undefined, current: "login-b", accepted: false },
-  { name: "epoch reference without matching credential", stored: "login-a", current: undefined, accepted: false },
+  { name: "checkpoint without epoch after login", stored: undefined, current: "login-b", accepted: false },
+  { name: "checkpoint epoch without matching credential", stored: "login-a", current: undefined, accepted: false },
 ]) {
-  test(`runtime reference: ${scenario.name}`, async () => {
+  test(`conversation checkpoint: ${scenario.name}`, async () => {
     const manager = SessionManager.inMemory("/workspace");
     const adapter = new PiContextAdapter();
     const id = adapter.bind(manager);
@@ -22,14 +22,14 @@ for (const scenario of [
 
     assert.equal(restored?.conversationId, scenario.accepted ? "conversation-a" : undefined);
     const decision = new RuntimeSessionSync().decide(new LiveSession(id), {
-      syncKey: "model-and-tools", canonicalHistory: [],
-      conversationId: "conversation-a", ...(restored ? { runtimeRef: restored } : {}),
+      syncKey: "model-and-tools", messages: [],
+      conversationId: "conversation-a", ...(restored ? { checkpoint: restored } : {}),
     });
     assert.equal(decision.action, scenario.accepted ? "resume" : "rebuild");
   });
 }
 
-test("reopening an unattached old session cannot resume its pre-login reference", async () => {
+test("reopening an unattached old session cannot resume its pre-login checkpoint", async () => {
   let current = "session-a";
   let serial = 0;
   const branches = new Map<string, Array<{ type: "custom"; id: string; customType: string; data: unknown }>>([

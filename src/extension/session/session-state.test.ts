@@ -5,8 +5,8 @@ import path from "node:path";
 import test, { describe, it } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { LiveSession, PiContextAdapter } from "./session.ts";
-import { historyMatches, RuntimeSessionStore, RuntimeSessionSync, type AgyRuntimeSessionRef } from "./session-state.ts";
-import { HISTORY_FORMAT } from "./history.ts";
+import { messagesMatch, RuntimeSessionStore, RuntimeSessionSync, type AgyConversationCheckpoint } from "./session-state.ts";
+import { MESSAGE_FORMAT } from "./history.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import type { AgyProcess } from "../runtime/process.ts";
 import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
@@ -14,12 +14,12 @@ import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
 describe("RuntimeSessionStore", () => {
   const pendingMetadataCases = [
     { name: "omitted", metadata: {} },
-    { name: "pending", metadata: { hasPendingCalls: true } },
-    { name: "drained", metadata: { hasPendingCalls: false } },
+    { name: "pending", metadata: { hasPendingToolCalls: true } },
+    { name: "drained", metadata: { hasPendingToolCalls: false } },
   ];
 
   for (const { name, metadata } of pendingMetadataCases) {
-    it(`roundtrips exact history and pending metadata after reopening: ${name}`, async () => {
+    it(`roundtrips exact messages and pending metadata after reopening: ${name}`, async () => {
       const sessionDir = await mkdtemp(path.join(os.tmpdir(), "agy-session-store-"));
       try {
         const manager = SessionManager.create("/workspace", sessionDir);
@@ -32,17 +32,17 @@ describe("RuntimeSessionStore", () => {
           { role: "assistant", responseId: "agy-conversation", content: "answer" },
         ];
         const written = await store.set(sessionId, { conversationId: "agy-conversation", ...metadata }, history);
-        const expectedPending = typeof metadata.hasPendingCalls === "boolean" ? { hasPendingCalls: metadata.hasPendingCalls } : {};
+        const expectedPending = typeof metadata.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: metadata.hasPendingToolCalls } : {};
         assert.deepEqual(written, {
-          conversationId: "agy-conversation", syncedEntryId: written.syncedEntryId,
-          historyHash: written.historyHash, historyLength: history.length, historyFormat: HISTORY_FORMAT,
+          conversationId: "agy-conversation",
+          fingerprint: written.fingerprint, messageCount: history.length, messageFormat: MESSAGE_FORMAT,
           ...expectedPending,
         });
         const entry = manager.getBranch().at(-1);
         assert.ok(entry?.type === "custom");
         assert.deepEqual(entry.data, {
-          conversationId: "agy-conversation", historyHash: written.historyHash,
-          historyLength: history.length, historyFormat: HISTORY_FORMAT, ...expectedPending,
+          conversationId: "agy-conversation", fingerprint: written.fingerprint,
+          messageCount: history.length, messageFormat: MESSAGE_FORMAT, ...expectedPending,
         });
         assert.equal(manager.buildSessionContext().messages.length, 0);
 
@@ -66,7 +66,7 @@ describe("RuntimeSessionStore", () => {
     });
   }
 
-  it("only returns the active branch reference and supports tombstone deletion", async () => {
+  it("only returns the active branch checkpoint and supports tombstone deletion", async () => {
     const manager = SessionManager.inMemory("/workspace");
     const context = new PiContextAdapter();
     const sessionId = context.bind(manager);
@@ -89,7 +89,7 @@ describe("RuntimeSessionStore", () => {
   });
 });
 
-test("metadata changes preserve live pending tool results and versioned persisted history", async (t) => {
+test("metadata changes preserve live pending tool results and versioned persisted messages", async (t) => {
   const gateway = new CapabilityGateway([{ name: "read", description: "Read", parameters: { type: "object" } }]);
   t.after(() => gateway.cancelPendingCalls("Test cleanup"));
   let dispatch: ((call: unknown) => void) | undefined;
@@ -105,7 +105,7 @@ test("metadata changes preserve live pending tool results and versioned persiste
   live.setSession({ isRunning: true } as AgyProcess, "sync-key", undefined, "agy-conversation");
   const sync = new RuntimeSessionSync();
   sync.record(live, [user], assistant);
-  assert.deepEqual(sync.decide(live, { syncKey: "sync-key", canonicalHistory: [user, replay, toolResult] }), { action: "continue" });
+  assert.deepEqual(sync.decide(live, { syncKey: "sync-key", messages: [user, replay, toolResult] }), { action: "continue" });
   assert.equal(gateway.resolveToolResults([toolResult]), 1);
   assert.deepEqual(await result, { content: toolResult.content, isError: false });
   assert.equal(gateway.hasPendingCalls, false);
@@ -114,10 +114,8 @@ test("metadata changes preserve live pending tool results and versioned persiste
   const context = new PiContextAdapter();
   const sessionId = context.bind(manager);
   const ref = await new RuntimeSessionStore(context).set(sessionId, { conversationId: "agy-conversation" }, [user, assistant]);
-  assert.equal(historyMatches(ref, [user, replay, toolResult]), true);
-  const { historyFormat: _format, ...legacyRef } = ref;
-  assert.equal(historyMatches(legacyRef, [user, replay]), false);
-  assert.equal(historyMatches(ref, [user, { ...replay, content: [] }]), false);
+  assert.equal(messagesMatch(ref, [user, replay, toolResult]), true);
+  assert.equal(messagesMatch(ref, [user, { ...replay, content: [] }]), false);
 });
 
 describe("RuntimeSessionSync", () => {
@@ -129,7 +127,7 @@ describe("RuntimeSessionSync", () => {
 
   const input = {
     syncKey: "sync-key", conversationId: "agy-conversation",
-    canonicalHistory: [{ role: "user", content: "question" }],
+    messages: [{ role: "user", content: "question" }],
   };
 
   const pendingHistory = [
@@ -154,25 +152,23 @@ describe("RuntimeSessionSync", () => {
 
   const checkpointCases: {
     name: string;
-    checkpoint: readonly unknown[];
-    hasPendingCalls?: boolean;
+    messages: readonly unknown[];
+    hasPendingToolCalls?: boolean;
     appended?: readonly unknown[];
     live?: boolean;
     keyChange?: boolean;
     action: "resume" | "rebuild" | "continue";
   }[] = [
-    { name: "completed native error", checkpoint: errorHistory, action: "resume" },
-    { name: "explicitly completed native error", checkpoint: errorHistory, hasPendingCalls: false, action: "resume" },
-    { name: "pending toolUse checkpoint", checkpoint: pendingHistory, hasPendingCalls: true, action: "rebuild" },
-    { name: "legacy toolUse checkpoint", checkpoint: pendingHistory, action: "rebuild" },
-    { name: "legacy saved prefix still pending despite appended results", checkpoint: pendingHistory, appended: results, action: "rebuild" },
-    { name: "explicit pending after some results", checkpoint: [...pendingHistory, results[0]!], hasPendingCalls: true, action: "rebuild" },
-    { name: "explicit pending overrides drained-looking history", checkpoint: drainedHistory, hasPendingCalls: true, action: "rebuild" },
-    { name: "legacy drained result checkpoint", checkpoint: drainedHistory, action: "resume" },
-    { name: "explicitly drained result checkpoint", checkpoint: drainedHistory, hasPendingCalls: false, action: "resume" },
-    { name: "explicitly accepted result prefix", checkpoint: [...pendingHistory, results[0]!], hasPendingCalls: false, action: "resume" },
-    { name: "live broker with pending ref", checkpoint: pendingHistory, hasPendingCalls: true, appended: results, live: true, action: "continue" },
-    { name: "live broker with pending ref and changed key", checkpoint: pendingHistory, hasPendingCalls: true, appended: results, live: true, keyChange: true, action: "continue" },
+    { name: "completed native error", messages: errorHistory, action: "resume" },
+    { name: "explicitly completed native error", messages: errorHistory, hasPendingToolCalls: false, action: "resume" },
+    { name: "pending toolUse checkpoint", messages: pendingHistory, hasPendingToolCalls: true, action: "rebuild" },
+    { name: "explicit pending after some results", messages: [...pendingHistory, results[0]!], hasPendingToolCalls: true, action: "rebuild" },
+    { name: "explicit pending overrides drained-looking history", messages: drainedHistory, hasPendingToolCalls: true, action: "rebuild" },
+    { name: "drained checkpoint with omitted pending flag", messages: drainedHistory, action: "resume" },
+    { name: "explicitly drained result checkpoint", messages: drainedHistory, hasPendingToolCalls: false, action: "resume" },
+    { name: "explicitly accepted result prefix", messages: [...pendingHistory, results[0]!], hasPendingToolCalls: false, action: "resume" },
+    { name: "live broker with pending checkpoint", messages: pendingHistory, hasPendingToolCalls: true, appended: results, live: true, action: "continue" },
+    { name: "live broker with pending checkpoint and changed key", messages: pendingHistory, hasPendingToolCalls: true, appended: results, live: true, keyChange: true, action: "continue" },
   ];
 
   for (const row of checkpointCases) {
@@ -181,36 +177,36 @@ describe("RuntimeSessionSync", () => {
       const context = new PiContextAdapter();
       const sessionId = context.bind(manager);
       const store = new RuntimeSessionStore(context);
-      const ref: AgyRuntimeSessionRef = {
+      const ref: AgyConversationCheckpoint = {
         conversationId: "agy-conversation",
-        ...(row.hasPendingCalls !== undefined ? { hasPendingCalls: row.hasPendingCalls } : {}),
+        ...(row.hasPendingToolCalls !== undefined ? { hasPendingToolCalls: row.hasPendingToolCalls } : {}),
       };
-      const written = await store.set(sessionId, ref, row.checkpoint);
-      const runtimeRef = await store.get(sessionId);
-      assert.deepEqual(runtimeRef, written);
+      const written = await store.set(sessionId, ref, row.messages);
+      const checkpoint = await store.get(sessionId);
+      assert.deepEqual(checkpoint, written);
 
       const sync = new RuntimeSessionSync();
       const session = row.live ? createSession(true) : new LiveSession(sessionId);
       if (row.live) {
         session.activeMcpServer = { hasPendingCalls: true } as BridgeIPC;
-        sync.record(session, row.checkpoint);
+        sync.record(session, row.messages);
       }
-      const canonicalHistory = [...row.checkpoint, ...(row.appended ?? [])];
-      assert.equal(historyMatches(runtimeRef!, canonicalHistory), true);
+      const messages = [...row.messages, ...(row.appended ?? [])];
+      assert.equal(messagesMatch(checkpoint!, messages), true);
 
       const decision = sync.decide(session, {
-        ...input, syncKey: row.keyChange ? "other-key" : input.syncKey, canonicalHistory, runtimeRef,
+        ...input, syncKey: row.keyChange ? "other-key" : input.syncKey, messages, checkpoint,
       });
 
       assert.deepEqual(decision, row.action === "resume"
         ? { action: "resume", conversationId: ref.conversationId }
         : { action: row.action });
-      assert.equal(sync.getSyncedMessageCount(session), row.action === "rebuild" ? undefined : row.checkpoint.length);
+      assert.equal(sync.getSyncedMessageCount(session), row.action === "rebuild" ? undefined : row.messages.length);
     });
   }
 
-  for (const metadata of [{}, { hasPendingCalls: true }, { hasPendingCalls: false }]) {
-    it(`preserves semantic hashes with pending metadata ${JSON.stringify(metadata)}`, async () => {
+  for (const metadata of [{}, { hasPendingToolCalls: true }, { hasPendingToolCalls: false }]) {
+    it(`preserves semantic fingerprints with pending metadata ${JSON.stringify(metadata)}`, async () => {
       const manager = SessionManager.inMemory("/workspace");
       const context = new PiContextAdapter();
       const sessionId = context.bind(manager);
@@ -220,22 +216,22 @@ describe("RuntimeSessionSync", () => {
       const written = await store.set(sessionId, { conversationId: "agy-conversation", ...metadata }, replay);
       const restored = await store.get(sessionId);
 
-      assert.equal(restored?.historyHash, "73ff574ccd10772c91f4a26307ecd687a77db8250e24c170c386f5236448ad00");
-      assert.equal(written.historyHash, restored?.historyHash);
-      assert.equal(historyMatches(restored!, pendingHistory), true);
-      assert.equal(historyMatches(restored!, [...pendingHistory, ...results]), true);
-      assert.equal(historyMatches(restored!, [pendingHistory[0]!, { ...pendingHistory[1]!, stopReason: "error" }]), false);
+      assert.equal(restored?.fingerprint, "73ff574ccd10772c91f4a26307ecd687a77db8250e24c170c386f5236448ad00");
+      assert.equal(written.fingerprint, restored?.fingerprint);
+      assert.equal(messagesMatch(restored!, pendingHistory), true);
+      assert.equal(messagesMatch(restored!, [...pendingHistory, ...results]), true);
+      assert.equal(messagesMatch(restored!, [pendingHistory[0]!, { ...pendingHistory[1]!, stopReason: "error" }]), false);
     });
   }
 
   const answer = { role: "assistant", responseId: "agy-conversation", content: "answer" };
-  const recordedHistory = [...input.canonicalHistory, answer];
+  const recordedHistory = [...input.messages, answer];
   for (const row of [
-    { name: "live compatible continuation", running: true, recorded: true, current: { ...input, canonicalHistory: [...recordedHistory, { role: "user", content: "next" }] }, action: "continue" },
-    { name: "live rewritten prefix", running: true, recorded: true, current: { ...input, canonicalHistory: [{ role: "user", content: "branch" }, answer] }, action: "rebuild" },
+    { name: "live compatible continuation", running: true, recorded: true, current: { ...input, messages: [...recordedHistory, { role: "user", content: "next" }] }, action: "continue" },
+    { name: "live rewritten prefix", running: true, recorded: true, current: { ...input, messages: [{ role: "user", content: "branch" }, answer] }, action: "rebuild" },
     { name: "live shortened prefix", running: true, recorded: true, current: input, action: "rebuild" },
-    { name: "live changed key with compatible history", running: true, recorded: true, current: { ...input, syncKey: "other-model", canonicalHistory: recordedHistory }, action: "resume" },
-    { name: "live changed conversation", running: true, recorded: true, current: { ...input, conversationId: "other-conversation", canonicalHistory: recordedHistory }, action: "rebuild" },
+    { name: "live changed key with compatible history", running: true, recorded: true, current: { ...input, syncKey: "other-model", messages: recordedHistory }, action: "resume" },
+    { name: "live changed conversation", running: true, recorded: true, current: { ...input, conversationId: "other-conversation", messages: recordedHistory }, action: "rebuild" },
     { name: "dead compatible conversation", running: false, recorded: false, current: input, action: "resume" },
     { name: "dead different conversation", running: false, recorded: false, current: { ...input, conversationId: "other" }, action: "rebuild" },
   ]) {
@@ -244,7 +240,7 @@ describe("RuntimeSessionSync", () => {
       const live = createSession(row.running);
       const process = live.activeProcess;
       assert.equal(sync.getSyncedMessageCount(live), undefined);
-      if (row.recorded) sync.record(live, input.canonicalHistory, answer);
+      if (row.recorded) sync.record(live, input.messages, answer);
       const syncedCount = row.recorded ? recordedHistory.length : undefined;
       assert.equal(sync.getSyncedMessageCount(live), syncedCount);
 
@@ -271,14 +267,14 @@ describe("RuntimeSessionSync", () => {
     const manager = SessionManager.inMemory("/workspace");
     const context = new PiContextAdapter();
     const sessionId = context.bind(manager);
-    const runtimeRef = await new RuntimeSessionStore(context).set(sessionId, { conversationId: "agy-conversation" }, history);
+    const checkpoint = await new RuntimeSessionStore(context).set(sessionId, { conversationId: "agy-conversation" }, history);
     const cases = [
       { name: "pending user", pending: true, appended: [toolResult, user], action: "continue" },
       { name: "pending system", pending: true, appended: [toolResult, system], action: "continue" },
       { name: "pending pure tool result", pending: true, appended: [toolResult], action: "continue" },
       { name: "no pending user", pending: false, appended: [toolResult, user], action: "continue" },
       { name: "pending key change", pending: true, appended: [toolResult, user], action: "continue", keyChange: true },
-      { name: "model key change without ref", pending: false, appended: [toolResult, user], action: "resume", keyChange: true },
+      { name: "model key change without checkpoint", pending: false, appended: [toolResult, user], action: "resume", keyChange: true },
       { name: "unrecorded pending mixed", pending: true, appended: [toolResult, user], action: "rebuild", unrecorded: true },
       { name: "unrecorded pure tool result", pending: true, appended: [toolResult], action: "continue", unrecorded: true, toolOnly: true },
       { name: "rewritten prefix", pending: true, appended: [], action: "rebuild", rewritten: true },
@@ -291,15 +287,15 @@ describe("RuntimeSessionSync", () => {
       live.activeMcpServer = { hasPendingCalls: row.pending } as BridgeIPC;
       if (!row.unrecorded) sync.record(live, history);
       const before = sync.getSyncedMessageCount(live);
-      const canonicalHistory = row.shortened ? history.slice(0, 1)
+      const messages = row.shortened ? history.slice(0, 1)
         : row.rewritten ? [{ role: "user", content: "rewritten" }, history[1]!]
         : [...(row.toolOnly ? [] : history), ...row.appended];
 
       assert.deepEqual(sync.decide(live, {
         ...input,
         syncKey: row.keyChange ? "other-key" : input.syncKey,
-        canonicalHistory,
-      }), row.action === "resume" ? { action: row.action, conversationId: runtimeRef.conversationId } : { action: row.action }, row.name);
+        messages,
+      }), row.action === "resume" ? { action: row.action, conversationId: checkpoint.conversationId } : { action: row.action }, row.name);
       assert.equal(sync.getSyncedMessageCount(live), before, row.name);
     }
   });
@@ -307,14 +303,14 @@ describe("RuntimeSessionSync", () => {
   it("reuses a live process when Pi omits the conversation id for the latest turn", () => {
     const sync = new RuntimeSessionSync();
     const live = createSession(true);
-    sync.record(live, input.canonicalHistory, { role: "assistant", content: "answer" });
+    sync.record(live, input.messages, { role: "assistant", content: "answer" });
     const { conversationId: _omitted, ...withoutConversationId } = input;
 
     assert.deepEqual(
       sync.decide(live, {
         ...withoutConversationId,
-        canonicalHistory: [
-          ...input.canonicalHistory,
+        messages: [
+          ...input.messages,
           { role: "assistant", content: "answer" },
           { role: "user", content: "next" },
         ],
@@ -324,12 +320,12 @@ describe("RuntimeSessionSync", () => {
   });
 
   it("does not resume an older checkpoint over divergent live history or dead pending calls", async () => {
-    const history = [input.canonicalHistory[0]!, { role: "assistant", content: "tool call", stopReason: "toolUse" }];
+    const history = [input.messages[0]!, { role: "assistant", content: "tool call", stopReason: "toolUse" }];
     const result = { role: "toolResult", toolCallId: "call", toolName: "read", content: "result" };
     const manager = SessionManager.inMemory("/workspace");
     const context = new PiContextAdapter();
     const id = context.bind(manager);
-    const runtimeRef = await new RuntimeSessionStore(context).set(id, { conversationId: "agy-conversation" }, history);
+    const checkpoint = await new RuntimeSessionStore(context).set(id, { conversationId: "agy-conversation" }, history);
     const cases = [
       { name: "shortened live history", isRunning: true, current: history },
       { name: "rewritten live result", isRunning: true, current: [...history, { ...result, content: "rewritten" }] },
@@ -343,7 +339,7 @@ describe("RuntimeSessionSync", () => {
       sync.record(live, [...history, result]);
 
       assert.deepEqual(sync.decide(live, {
-        ...input, canonicalHistory: row.current, runtimeRef,
+        ...input, messages: row.current, checkpoint,
       }), { action: "rebuild" }, row.name);
     }
   });
@@ -352,8 +348,8 @@ describe("RuntimeSessionSync", () => {
     const manager = SessionManager.inMemory("/workspace");
     const context = new PiContextAdapter();
     const id = context.bind(manager);
-    const history = [input.canonicalHistory[0]!, { role: "assistant", content: "branch answer" }];
-    const runtimeRef = await new RuntimeSessionStore(context).set(id, { conversationId: "branch-conversation" }, history);
+    const history = [input.messages[0]!, { role: "assistant", content: "branch answer" }];
+    const checkpoint = await new RuntimeSessionStore(context).set(id, { conversationId: "branch-conversation" }, history);
     const cases = [
       { name: "shorter live conversation", running: true, pending: false },
       { name: "dead pending previous conversation", running: false, pending: true },
@@ -363,34 +359,34 @@ describe("RuntimeSessionSync", () => {
       const sync = new RuntimeSessionSync();
       const live = createSession(row.running);
       live.activeMcpServer = { hasPendingCalls: row.pending } as BridgeIPC;
-      sync.record(live, input.canonicalHistory);
+      sync.record(live, input.messages);
 
       assert.deepEqual(sync.decide(live, {
-        ...input, conversationId: "branch-conversation", runtimeRef,
-        canonicalHistory: [...history, { role: "user", content: "next" }],
+        ...input, conversationId: "branch-conversation", checkpoint,
+        messages: [...history, { role: "user", content: "next" }],
       }), { action: "resume", conversationId: "branch-conversation" }, row.name);
       assert.equal(sync.getSyncedMessageCount(live), history.length, row.name);
     }
   });
 
   it("separates conversation compatibility from runtime selection", async () => {
-    const history = [input.canonicalHistory[0]!, { role: "assistant", content: "answer", provider: "agy" }];
+    const history = [input.messages[0]!, { role: "assistant", content: "answer", provider: "agy" }];
     const manager = SessionManager.inMemory("/workspace");
     const context = new PiContextAdapter();
     const sessionId = context.bind(manager);
     const store = new RuntimeSessionStore(context);
-    const runtimeRef = await store.set(sessionId, { conversationId: "agy-conversation" }, history);
+    const checkpoint = await store.set(sessionId, { conversationId: "agy-conversation" }, history);
 
     const cases = [
-      { name: "model change no ref", key: "other", action: "resume" },
+      { name: "model change without checkpoint", key: "other", action: "resume" },
       { name: "pending model change", key: "other", pending: true, action: "continue" },
-      { name: "foreign assistant without id", tail: [{ role: "assistant", content: "foreign" }], ref: runtimeRef, action: "rebuild" },
+      { name: "foreign assistant without id", tail: [{ role: "assistant", content: "foreign" }], ref: checkpoint, action: "rebuild" },
       { name: "agy unsynced assistant", tail: [{ role: "assistant", provider: "agy", responseId: "agy-conversation", content: "new" }], action: "rebuild" },
-      { name: "persisted prefix", persisted: true, ref: runtimeRef, action: "resume" },
-      { name: "persisted new assistant", persisted: true, ref: runtimeRef, tail: [{ role: "assistant", content: "new" }], action: "rebuild" },
-      { name: "persisted wrong id", persisted: true, ref: runtimeRef, id: "other", action: "rebuild" },
-      { name: "persisted old format", persisted: true, ref: { ...runtimeRef, historyFormat: "old" }, action: "rebuild" },
-      { name: "persisted wrong hash", persisted: true, ref: { ...runtimeRef, historyHash: "wrong" }, action: "rebuild" },
+      { name: "persisted prefix", persisted: true, ref: checkpoint, action: "resume" },
+      { name: "persisted new assistant", persisted: true, ref: checkpoint, tail: [{ role: "assistant", content: "new" }], action: "rebuild" },
+      { name: "persisted wrong id", persisted: true, ref: checkpoint, id: "other", action: "rebuild" },
+      { name: "persisted unsupported message format", persisted: true, ref: { ...checkpoint, messageFormat: "unsupported" }, action: "rebuild" },
+      { name: "persisted fingerprint mismatch", persisted: true, ref: { ...checkpoint, fingerprint: "wrong" }, action: "rebuild" },
       { name: "missing snapshot assistant", unrecorded: true, action: "rebuild" },
       { name: "missing snapshot user", unrecorded: true, userOnly: true, action: "continue" },
     ];
@@ -403,8 +399,8 @@ describe("RuntimeSessionSync", () => {
       assert.deepEqual(sync.decide(live, {
         syncKey: row.key ?? input.syncKey,
         ...(row.id ? { conversationId: row.id } : {}),
-        canonicalHistory: [...(row.userOnly ? input.canonicalHistory : history), ...(row.tail ?? [])],
-        ...(row.ref ? { runtimeRef: row.ref } : {}),
+        messages: [...(row.userOnly ? input.messages : history), ...(row.tail ?? [])],
+        ...(row.ref ? { checkpoint: row.ref } : {}),
       }), row.action === "resume" ? { action: "resume", conversationId: "agy-conversation" } : { action: row.action }, row.name);
       if (row.persisted && row.action === "resume") assert.equal(sync.getSyncedMessageCount(live), history.length);
     }

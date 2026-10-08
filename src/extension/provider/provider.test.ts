@@ -8,7 +8,7 @@ import { AgyRuntime, type AgyEventSource } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { PiEventAdapter } from "../runtime/events.ts";
-import { historyMatches } from "../session/session-state.ts";
+import { messagesMatch } from "../session/session-state.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
 import { AgyBridge, registerAgyProvider, resolveModelAndEffort, streamAgyProvider } from "./provider.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -349,8 +349,8 @@ for (const failure of modelErrors) {
       assert.deepEqual(failed.content, failure.text ? [{ type: "text", text: failure.text }] : []);
       const failedRef = await bridge.runtimeSessionStore.get(sessionId, epoch);
       assert.equal(failedRef?.conversationId, "conversation-1");
-      assert.equal(failedRef?.historyLength, 2);
-      assert.ok(failedRef && historyMatches(failedRef, manager.buildSessionContext().messages), "persist the failed assistant, not just the request");
+      assert.equal(failedRef?.messageCount, 2);
+      assert.ok(failedRef && messagesMatch(failedRef, manager.buildSessionContext().messages), "persist the failed assistant, not just the request");
       assert.equal(session.activeProcess, processes[0]);
       assert.ok(session.activeMcpServer);
       assert.equal(listeners.size, 0);
@@ -374,7 +374,7 @@ for (const failure of modelErrors) {
       assert.equal(recoveredProcess.options.conversationId, "conversation-1");
       const recoveredRef = await bridge.runtimeSessionStore.get(sessionId, epoch);
       assert.equal(recoveredRef?.conversationId, "conversation-1");
-      assert.ok(recoveredRef && historyMatches(recoveredRef, manager.buildSessionContext().messages));
+      assert.ok(recoveredRef && messagesMatch(recoveredRef, manager.buildSessionContext().messages));
       assert.equal(send.mock.callCount(), 2, "only the explicit retry adds input");
       assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
       assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "retry request");
@@ -408,7 +408,7 @@ for (const failure of [modelErrors[0]!, modelErrors[1]!]) {
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), undefined);
     const saved = await bridge.runtimeSessionStore.get(sessionId, epoch);
     assert.equal(saved?.conversationId, "conversation-1");
-    assert.ok(saved && historyMatches(saved, manager.buildSessionContext().messages));
+    assert.ok(saved && messagesMatch(saved, manager.buildSessionContext().messages));
 
     const recovered = await runTurn("other-model", "new request", [{ event: "result", status: "success" }]);
 
@@ -612,7 +612,7 @@ for (const row of pendingGapCases) {
     assert.equal(toolSettled, false, "Pi has not returned any results yet");
     const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
     assert.equal(checkpoint, 2);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.historyLength, checkpoint);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.messageCount, checkpoint);
 
     if (row.continues) {
       const safetyListener = listeners.get(oldProcess);
@@ -641,7 +641,7 @@ for (const row of pendingGapCases) {
       assert.equal(close.mock.callCount(), 0);
       assert.equal(abort.mock.callCount(), 0, "the preceding toolUse signal no longer owns the runtime");
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 5);
-      assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.historyLength, 5);
+      assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.messageCount, 5);
       return;
     }
 
@@ -770,7 +770,7 @@ for (const { terminal, aborted } of [
     assert.equal(completed.stopReason, terminal === "quota" ? "error" : "stop");
     assert.equal(completed.errorMessage, terminal === "quota" ? quotaError : undefined);
     assert.equal(session.activeProcess, processes[0]);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.historyLength, 2);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.messageCount, 2);
     const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
 
     if (aborted) controller.abort();
@@ -828,7 +828,7 @@ for (const phase of ["before execution", "during runtime startup", "after histor
     assert.equal(send.mock.callCount(), phase === "after history lookup" ? 1 : 0, "abort must not deliver another input");
     assert.equal(invalidate.mock.callCount(), 0);
     assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, epoch), reference);
-    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), phase === "before execution" ? undefined : reference?.historyLength,
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), phase === "before execution" ? undefined : reference?.messageCount,
       "startup may restore the saved checkpoint but must not append the aborted turn");
     assert.equal(session.activeProcess, null);
     assert.equal(session.activeMcpServer, null);
@@ -946,7 +946,7 @@ for (const { source, payloadSource } of [
       assert.equal(session.activeProcess, processes[0]);
       assert.ok(session.activeMcpServer);
       assert.equal(reference?.conversationId, "conversation-1");
-      assert.ok(reference && historyMatches(reference, manager.buildSessionContext().messages));
+      assert.ok(reference && messagesMatch(reference, manager.buildSessionContext().messages));
       assert.equal(close.mock.callCount(), 0);
       assert.equal(abort.mock.callCount(), 0);
     } else {

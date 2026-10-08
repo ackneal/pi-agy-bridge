@@ -247,7 +247,7 @@ for (const row of invalidBatchCases) {
       })),
     };
     bridge.runtimeSessionSync.record(session, []);
-    await bridge.runtimeSessionStore.set(sessionId, { conversationId: "old-conversation", hasPendingCalls: true }, []);
+    await bridge.runtimeSessionStore.set(sessionId, { conversationId: "old-conversation", hasPendingToolCalls: true }, []);
     const record = t.mock.method(bridge.runtimeSessionSync, "record", bridge.runtimeSessionSync.record.bind(bridge.runtimeSessionSync));
     const persist = t.mock.method(bridge.runtimeSessionStore, "set", bridge.runtimeSessionStore.set.bind(bridge.runtimeSessionStore));
     const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
@@ -432,7 +432,7 @@ for (const row of continueCases) {
       assert.equal(events.some((event) => event.type === "error"), false);
       assert.equal(invalidate.mock.callCount(), 0);
       assert.deepEqual(persist.mock.calls[0]!.arguments, [
-        session.piSessionId, { conversationId: "old-conversation", hasPendingCalls: true }, context.messages, "current-login",
+        session.piSessionId, { conversationId: "old-conversation", hasPendingToolCalls: true }, context.messages, "current-login",
       ]);
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "done");
@@ -573,7 +573,7 @@ for (const row of pendingTerminalCases) {
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), row.enqueued ? context.messages.length : 0);
     if (row.enqueued) {
       assert.deepEqual(record.mock.calls[0]!.arguments, [session, context.messages]);
-      assert.deepEqual(persist.mock.calls[0]!.arguments, [sessionId, { conversationId: "old-conversation", hasPendingCalls: true }, context.messages, epoch]);
+      assert.deepEqual(persist.mock.calls[0]!.arguments, [sessionId, { conversationId: "old-conversation", hasPendingToolCalls: true }, context.messages, epoch]);
     }
     assert.equal(invalidate.mock.callCount(), 1);
     assert.deepEqual(invalidate.mock.calls[0]!.arguments, [sessionId]);

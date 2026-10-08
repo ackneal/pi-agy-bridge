@@ -3,17 +3,16 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { LiveSession, PiContextAdapter } from "./session.ts";
 import { debugLog, isDebugEnabled } from "../shared/debug.ts";
 
-import { HISTORY_FORMAT, serializeHistoryMessage } from "./history.ts";
+import { MESSAGE_FORMAT, serializeMessage } from "./history.ts";
 
 const ENTRY_TYPE = "pi-agy-bridge.runtime-session";
 
-export interface AgyRuntimeSessionRef {
+export interface AgyConversationCheckpoint {
   conversationId: string;
-  syncedEntryId?: string;
-  historyHash?: string;
-  historyLength?: number;
-  historyFormat?: string;
-  hasPendingCalls?: boolean;
+  fingerprint?: string;
+  messageCount?: number;
+  messageFormat?: string;
+  hasPendingToolCalls?: boolean;
 }
 
 export class RuntimeSessionStore {
@@ -23,7 +22,7 @@ export class RuntimeSessionStore {
     this.piContext = piContext;
   }
 
-  public async get(piSessionId: string, loginEpoch?: string): Promise<AgyRuntimeSessionRef | undefined> {
+  public async get(piSessionId: string, loginEpoch?: string): Promise<AgyConversationCheckpoint | undefined> {
     const sessionManager = this.piContext.getSessionManager(piSessionId);
     if (!sessionManager) return undefined;
 
@@ -42,35 +41,34 @@ export class RuntimeSessionStore {
 
     return {
       conversationId: entry.data.conversationId,
-      syncedEntryId: entry.id,
-      ...(typeof entry.data.historyFormat === "string" ? { historyFormat: entry.data.historyFormat } : {}),
-      ...(typeof entry.data.historyHash === "string" ? { historyHash: entry.data.historyHash } : {}),
-      ...(typeof entry.data.historyLength === "number" ? { historyLength: entry.data.historyLength } : {}),
-      ...(typeof entry.data.hasPendingCalls === "boolean" ? { hasPendingCalls: entry.data.hasPendingCalls } : {}),
+      ...(typeof entry.data.messageFormat === "string" ? { messageFormat: entry.data.messageFormat } : {}),
+      ...(typeof entry.data.fingerprint === "string" ? { fingerprint: entry.data.fingerprint } : {}),
+      ...(typeof entry.data.messageCount === "number" ? { messageCount: entry.data.messageCount } : {}),
+      ...(typeof entry.data.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: entry.data.hasPendingToolCalls } : {}),
     };
   }
 
   public async set(
     piSessionId: string,
-    ref: AgyRuntimeSessionRef,
-    canonicalHistory: readonly unknown[],
+    checkpoint: AgyConversationCheckpoint,
+    messages: readonly unknown[],
     loginEpoch?: string
-  ): Promise<AgyRuntimeSessionRef> {
+  ): Promise<AgyConversationCheckpoint> {
     const sessionManager = this.requireSessionManager(piSessionId);
-    const historyHash = hashHistory(canonicalHistory);
-    const historyLength = canonicalHistory.length;
-    const pendingMetadata = typeof ref.hasPendingCalls === "boolean" ? { hasPendingCalls: ref.hasPendingCalls } : {};
-    const syncedEntryId = sessionManager.appendCustomEntry(ENTRY_TYPE, {
-      conversationId: ref.conversationId,
+    const fingerprint = fingerprintMessages(messages);
+    const messageCount = messages.length;
+    const pendingMetadata = typeof checkpoint.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: checkpoint.hasPendingToolCalls } : {};
+    sessionManager.appendCustomEntry(ENTRY_TYPE, {
+      conversationId: checkpoint.conversationId,
       ...(loginEpoch ? { loginEpoch } : {}),
-      historyHash,
-      historyLength,
-      historyFormat: HISTORY_FORMAT,
+      fingerprint,
+      messageCount,
+      messageFormat: MESSAGE_FORMAT,
       ...pendingMetadata,
     });
 
     return {
-      conversationId: ref.conversationId, syncedEntryId, historyHash, historyLength, historyFormat: HISTORY_FORMAT,
+      conversationId: checkpoint.conversationId, fingerprint, messageCount, messageFormat: MESSAGE_FORMAT,
       ...pendingMetadata,
     };
   }
@@ -86,27 +84,27 @@ export class RuntimeSessionStore {
   }
 }
 
-export function historyMatches(ref: AgyRuntimeSessionRef, history: readonly unknown[]): boolean {
-  if (ref.historyFormat !== HISTORY_FORMAT) {
-    debugLog("session", "Unsupported persisted history format", { format: ref.historyFormat, expected: HISTORY_FORMAT });
+export function messagesMatch(checkpoint: AgyConversationCheckpoint, messages: readonly unknown[]): boolean {
+  if (checkpoint.messageFormat !== MESSAGE_FORMAT) {
+    debugLog("session", "Unsupported persisted message format", { format: checkpoint.messageFormat, expected: MESSAGE_FORMAT });
     return false;
   }
-  if (ref.historyHash === undefined || ref.historyLength === undefined) return false;
-  if (history.length < ref.historyLength) return false;
-  const actualHash = hashHistory(history.slice(0, ref.historyLength));
-  if (actualHash !== ref.historyHash) {
-    debugLog("session", "Persisted history mismatch", {
-      expectedHash: ref.historyHash,
-      actualHash,
-      expectedLength: ref.historyLength,
-      actualLength: history.length,
+  if (checkpoint.fingerprint === undefined || checkpoint.messageCount === undefined) return false;
+  if (messages.length < checkpoint.messageCount) return false;
+  const actualFingerprint = fingerprintMessages(messages.slice(0, checkpoint.messageCount));
+  if (actualFingerprint !== checkpoint.fingerprint) {
+    debugLog("session", "Persisted messages mismatch", {
+      expectedFingerprint: checkpoint.fingerprint,
+      actualFingerprint,
+      expectedMessageCount: checkpoint.messageCount,
+      actualMessageCount: messages.length,
     });
   }
-  return actualHash === ref.historyHash;
+  return actualFingerprint === checkpoint.fingerprint;
 }
 
-function hashHistory(history: readonly unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(history.map(serializeHistoryMessage))).digest("hex");
+function fingerprintMessages(messages: readonly unknown[]): string {
+  return createHash("sha256").update(JSON.stringify(messages.map(serializeMessage))).digest("hex");
 }
 
 function isRuntimeSessionEntry(entry: SessionEntry): entry is Extract<SessionEntry, { type: "custom" }> {
@@ -137,16 +135,16 @@ export type RuntimeSessionDecision =
 export interface RuntimeSessionSyncInput {
   syncKey: string;
   conversationId?: string;
-  canonicalHistory: readonly unknown[];
-  runtimeRef?: AgyRuntimeSessionRef;
+  messages: readonly unknown[];
+  checkpoint?: AgyConversationCheckpoint;
 }
 
 export class RuntimeSessionSync {
-  private readonly canonicalHistories = new WeakMap<LiveSession, string[]>();
+  private readonly syncedMessages = new WeakMap<LiveSession, string[]>();
 
   public decide(session: LiveSession, input: RuntimeSessionSyncInput): RuntimeSessionDecision {
     // Validate even newly appended messages before continuing an existing runtime.
-    input.canonicalHistory.forEach(serializeHistoryMessage);
+    input.messages.forEach(serializeMessage);
 
     // A dead process cannot receive results for its outstanding MCP calls.
     const deadPendingRuntime = session.activeMcpServer?.hasPendingCalls && !session.activeProcess?.isRunning;
@@ -162,31 +160,31 @@ export class RuntimeSessionSync {
       }
     }
 
-    const ref = input.runtimeRef;
+    const checkpoint = input.checkpoint;
     // An older checkpoint cannot roll back a conversation whose newer live
-    // history is already known. A different branch conversation may still resume.
-    if (ref && (ref.conversationId !== session.conversationId || (!deadPendingRuntime && syncedCount === undefined)) &&
-      this.matchesPersistedSession(ref, input)) {
-      this.record(session, input.canonicalHistory.slice(0, ref.historyLength));
-      return { action: "resume", conversationId: ref.conversationId };
+    // messages are already known. A different branch conversation may still resume.
+    if (checkpoint && (checkpoint.conversationId !== session.conversationId || (!deadPendingRuntime && syncedCount === undefined)) &&
+      this.matchesPersistedSession(checkpoint, input)) {
+      this.record(session, input.messages.slice(0, checkpoint.messageCount));
+      return { action: "resume", conversationId: checkpoint.conversationId };
     }
 
     debugLog("session", "Rebuilding Antigravity CLI runtime instead of reusing", {
       syncKeyMatches: session.syncKey === input.syncKey,
-      historyLength: input.canonicalHistory.length,
+      messageCount: input.messages.length,
       syncedMessageCount: syncedCount,
       sessionConversationId: session.conversationId,
       inputConversationId: input.conversationId,
       processRunning: session.activeProcess?.isRunning ?? false,
-      hasRuntimeRef: ref !== undefined,
-      runtimeRefMatches: ref ? this.matchesPersistedSession(ref, input) : false,
+      hasCheckpoint: checkpoint !== undefined,
+      checkpointMatches: checkpoint ? this.matchesPersistedSession(checkpoint, input) : false,
     });
 
     return { action: "rebuild" };
   }
 
   public getSyncedMessageCount(session: LiveSession): number | undefined {
-    return this.canonicalHistories.get(session)?.length;
+    return this.syncedMessages.get(session)?.length;
   }
 
   public record(
@@ -194,36 +192,36 @@ export class RuntimeSessionSync {
     messages: readonly unknown[],
     assistantMessage?: unknown
   ): void {
-    const history = messages.map(serializeHistoryMessage);
-    if (assistantMessage !== undefined) history.push(serializeHistoryMessage(assistantMessage));
-    this.canonicalHistories.set(session, history);
+    const serializedMessages = messages.map(serializeMessage);
+    if (assistantMessage !== undefined) serializedMessages.push(serializeMessage(assistantMessage));
+    this.syncedMessages.set(session, serializedMessages);
   }
 
   private matchesLiveSession(session: LiveSession, input: RuntimeSessionSyncInput): boolean {
     if (!session.conversationId || !this.matchesConversationId(session.conversationId, input.conversationId)) return false;
 
-    const previousHistory = this.canonicalHistories.get(session);
-    if (!previousHistory) return !this.hasUnsyncedAssistant(input.canonicalHistory, 0);
-    if (input.canonicalHistory.length < previousHistory.length) {
-      debugLog("session", "Live history shortened", {
-        expectedLength: previousHistory.length,
-        actualLength: input.canonicalHistory.length,
+    const previousMessages = this.syncedMessages.get(session);
+    if (!previousMessages) return !this.hasUnsyncedAssistant(input.messages, 0);
+    if (input.messages.length < previousMessages.length) {
+      debugLog("session", "Live messages shortened", {
+        expectedMessageCount: previousMessages.length,
+        actualMessageCount: input.messages.length,
       });
       return false;
     }
 
-    if (this.hasUnsyncedAssistant(input.canonicalHistory, previousHistory.length)) return false;
+    if (this.hasUnsyncedAssistant(input.messages, previousMessages.length)) return false;
 
-    const mismatchIndex = previousHistory.findIndex((entry, index) =>
-      entry !== serializeHistoryMessage(input.canonicalHistory[index])
+    const mismatchIndex = previousMessages.findIndex((entry, index) =>
+      entry !== serializeMessage(input.messages[index])
     );
     if (mismatchIndex < 0) return true;
 
     if (isDebugEnabled()) {
-      const expected: unknown = JSON.parse(previousHistory[mismatchIndex]!);
-      const actual: unknown = JSON.parse(serializeHistoryMessage(input.canonicalHistory[mismatchIndex]));
+      const expected: unknown = JSON.parse(previousMessages[mismatchIndex]!);
+      const actual: unknown = JSON.parse(serializeMessage(input.messages[mismatchIndex]));
       const fields = changedFields(expected, actual);
-      debugLog("session", "Live history message mismatch", {
+      debugLog("session", "Live message mismatch", {
         index: mismatchIndex,
         expectedRole: isRecord(expected) ? expected.role : undefined,
         actualRole: isRecord(actual) ? actual.role : undefined,
@@ -235,25 +233,20 @@ export class RuntimeSessionSync {
   }
 
   private matchesPersistedSession(
-    ref: AgyRuntimeSessionRef,
+    checkpoint: AgyConversationCheckpoint,
     input: RuntimeSessionSyncInput
   ): boolean {
-    if (ref.hasPendingCalls === true) return false;
-
-    // Legacy checkpoints ending in toolUse may still belong to a now-lost broker.
-    const lastMessage = input.canonicalHistory[(ref.historyLength ?? 0) - 1];
-    if (ref.hasPendingCalls === undefined && isRecord(lastMessage) &&
-      lastMessage.role === "assistant" && lastMessage.stopReason === "toolUse") return false;
+    if (checkpoint.hasPendingToolCalls === true) return false;
 
     return (
-      this.matchesConversationId(ref.conversationId, input.conversationId) &&
-      historyMatches(ref, input.canonicalHistory) &&
-      !this.hasUnsyncedAssistant(input.canonicalHistory, ref.historyLength!)
+      this.matchesConversationId(checkpoint.conversationId, input.conversationId) &&
+      messagesMatch(checkpoint, input.messages) &&
+      !this.hasUnsyncedAssistant(input.messages, checkpoint.messageCount!)
     );
   }
 
-  private hasUnsyncedAssistant(history: readonly unknown[], syncedCount: number): boolean {
-    return history.slice(syncedCount).some((message) => isRecord(message) && message.role === "assistant");
+  private hasUnsyncedAssistant(messages: readonly unknown[], syncedCount: number): boolean {
+    return messages.slice(syncedCount).some((message) => isRecord(message) && message.role === "assistant");
   }
 
   private matchesConversationId(
