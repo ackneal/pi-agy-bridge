@@ -4,8 +4,11 @@ import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-age
 import type { Provider, Model, Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import { AgyRuntime } from "../runtime/process.ts";
+import { AgyRuntime, type AgyEventSource } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { CapabilityGateway } from "../bridge/capabilities.ts";
+import { PiEventAdapter } from "../runtime/events.ts";
+import { historyMatches } from "../session/session-state.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
 import { AgyBridge, registerAgyProvider, resolveModelAndEffort, streamAgyProvider } from "./provider.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -243,7 +246,7 @@ async function createRuntimeFixture(t: TestContext) {
   const config = { agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
   await writeFile(config.agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.2.14; else exit 1; fi\n', { mode: 0o755 });
   const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
-  const runtimeBridge = new AgyBridge(pi, config);
+  let runtimeBridge = new AgyBridge(pi, config);
   bridge = runtimeBridge;
   const manager = SessionManager.inMemory("/workspace");
   const sessionId = runtimeBridge.piContextAdapter.bind(manager);
@@ -259,30 +262,35 @@ async function createRuntimeFixture(t: TestContext) {
   const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
   const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
   const processes: AgyRuntime[] = [];
-  t.mock.method(AgyRuntime.prototype, "start", async function (this: AgyRuntime) {
+  const start = t.mock.method(AgyRuntime.prototype, "start", async function (this: AgyRuntime) {
     processes.push(this);
     return {
       event: "init", conversation_id: this.options.conversationId ?? `conversation-${processes.length}`,
     } as Awaited<ReturnType<AgyRuntime["start"]>>;
   });
-  const listeners = new Map<AgyRuntime, (event: AgyEvent) => void>();
-  t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: (event: AgyEvent) => void) {
+  const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
+  const capturedListeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
+  t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
+    assert.equal(listeners.has(this), false, "a runtime owns only one event subscription");
     listeners.set(this, listener);
+    capturedListeners.set(this, listener);
     return () => { listeners.delete(this); };
   });
   let response: readonly AgyEvent[] | Error = [];
+  let source: AgyEventSource = "agy";
   const send = t.mock.method(AgyRuntime.prototype, "send", async function (this: AgyRuntime, _input: AgyInput) {
     const listener = listeners.get(this);
     assert.ok(listener, "subscribe before sending a turn");
     if (response instanceof Error) throw response;
-    for (const event of response) listener(event);
+    for (const event of response) listener(event, event.event === "result" ? source : "agy");
   });
 
-  const runTurn = async (modelId: string, request: string, events: readonly AgyEvent[] | Error) => {
+  const runTurn = async (modelId: string, request: string, events: readonly AgyEvent[] | Error, eventSource: AgyEventSource = "agy", signal?: AbortSignal, options?: SimpleStreamOptions) => {
     response = events;
+    source = eventSource;
     manager.appendMessage({ role: "user", content: request, timestamp: Date.now() });
     const messages = manager.buildSessionContext().messages;
-    assert.ok(messages.every((message) => message.role === "user" || message.role === "assistant"));
+    assert.ok(messages.every((message) => message.role === "user" || message.role === "assistant" || message.role === "toolResult"));
     const context: Context = { systemPrompt: "Keep Pi history", tools: [], messages };
     const model = {
       id: modelId, name: modelId, api: "agy", provider: "agy", baseUrl: "agy", reasoning: false, input: ["text"],
@@ -290,98 +298,134 @@ async function createRuntimeFixture(t: TestContext) {
     } as Model<any>;
 
     const message = await streamAgyProvider(model, context, {
-      sessionId, env: { AGY_BRIDGE_LOGIN_EPOCH: epoch },
+      sessionId, env: { AGY_BRIDGE_LOGIN_EPOCH: epoch }, ...(signal ? { signal } : {}), ...options,
     }, config, runtimeBridge).result();
 
     manager.appendMessage(message);
     return message;
   };
 
-  return { bridge: runtimeBridge, manager, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn };
+  const restartBridge = async () => {
+    await runtimeBridge.liveSessions.disposeAll();
+    runtimeBridge = new AgyBridge(pi, config);
+    bridge = runtimeBridge;
+    assert.equal(runtimeBridge.piContextAdapter.bind(manager), sessionId);
+    return { bridge: runtimeBridge, session: runtimeBridge.liveSessions.getOrCreate(sessionId) };
+  };
+
+  return { bridge: runtimeBridge, manager, session, sessionId, epoch, processes, listeners, capturedListeners, close, abort, start, send, runTurn, restartBridge };
 }
 
 const quotaError = "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h27m34s.";
+const modelErrors: Array<{ name: string; events: AgyEvent[]; error: string; text: string }> = [
+  { name: "quota", events: [{ event: "result", status: "error", error: quotaError }], error: quotaError, text: "" },
+  { name: "arbitrary model error", events: [{ event: "result", status: "ERROR", error: { message: "Model could not answer" } }], error: "Model could not answer", text: "" },
+  { name: "partial assistant text", events: [{ event: "step_update", delta: "Partial answer" }, { event: "result", status: "error", error: "Model could not finish" }], error: "Model could not finish", text: "Partial answer" },
+  { name: "nested result", events: [{ event: "result", result: { status: "error", error: { message: quotaError } } }], error: quotaError, text: "" },
+];
 const recoveryCases = [
-  { name: "same-model retry", model: "quota-model", result: { event: "result", status: "success" } },
-  { name: "switched-model retry", model: "other-model", result: { event: "result", status: "success" } },
-  { name: "switched-model success carrying the previous quota error", model: "other-model", result: { event: "result", status: "SUCCESS", error: quotaError } },
+  { name: "same-model retry", model: "quota-model", result: { event: "result", status: "success" }, processes: 1 },
+  { name: "switched-model retry", model: "other-model", result: { event: "result", status: "success" }, processes: 2 },
+  { name: "switched-model explicit success carrying stale quota", model: "other-model", result: { event: "result", status: "SUCCESS", error: quotaError }, processes: 2 },
 ];
 
-for (const row of recoveryCases) {
-  test(`provider rebuilds failed runtime and preserves history and continuity: ${row.name}`, async (t) => {
-    const fixture = await createRuntimeFixture(t);
-    const { bridge, manager, session, sessionId, epoch, processes, listeners, send, runTurn } = fixture;
+for (const failure of modelErrors) {
+  for (const row of recoveryCases) {
+    test(`provider retains conversation after ${failure.name}: ${row.name}`, async (t) => {
+      const { bridge, manager, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+      const failed = await runTurn("quota-model", "original request", failure.events);
 
-    const failed = await runTurn("quota-model", "original request", [{ event: "result", status: "error", error: quotaError }]);
+      assert.equal(failed.stopReason, "error");
+      assert.equal(failed.errorMessage, failure.error);
+      assert.deepEqual(failed.content, failure.text ? [{ type: "text", text: failure.text }] : []);
+      const failedRef = await bridge.runtimeSessionStore.get(sessionId, epoch);
+      assert.equal(failedRef?.conversationId, "conversation-1");
+      assert.equal(failedRef?.historyLength, 2);
+      assert.ok(failedRef && historyMatches(failedRef, manager.buildSessionContext().messages), "persist the failed assistant, not just the request");
+      assert.equal(session.activeProcess, processes[0]);
+      assert.ok(session.activeMcpServer);
+      assert.equal(listeners.size, 0);
+      assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
+      assert.equal(session.turnIndex, 1);
+      assert.equal(close.mock.callCount(), 0);
+      assert.equal(abort.mock.callCount(), 0);
 
+      const recovered = await runTurn(row.model, "retry request", [
+        { event: "step_update", delta: "Hello! How can I help you today?" }, row.result,
+      ]);
+
+      assert.equal(recovered.stopReason, "stop");
+      assert.equal(recovered.errorMessage, undefined);
+      assert.deepEqual(recovered.content, [{ type: "text", text: "Hello! How can I help you today?" }]);
+      const recoveredProcess = processes.at(-1);
+      assert.ok(recoveredProcess);
+      assert.equal(session.activeProcess, recoveredProcess);
+      assert.equal(processes.length, row.processes);
+      assert.equal(recoveredProcess.options.model, row.model);
+      assert.equal(recoveredProcess.options.conversationId, "conversation-1");
+      assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-1");
+      assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
+      assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "retry request");
+      assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 4);
+
+      const continued = await runTurn(row.model, "continue request", [
+        { event: "step_update", delta: "Continuing normally" }, { event: "result", status: "success" },
+      ]);
+
+      assert.equal(continued.stopReason, "stop");
+      assert.equal(continued.errorMessage, undefined);
+      assert.deepEqual(continued.content, [{ type: "text", text: "Continuing normally" }]);
+      assert.equal(session.activeProcess, recoveredProcess);
+      assert.equal(processes.length, row.processes);
+      assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
+      assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "continue request");
+      assert.deepEqual(manager.buildSessionContext().messages.filter((message) => message.role === "user").map((message) => message.content), [
+        "original request", "retry request", "continue request",
+      ]);
+    });
+  }
+}
+
+for (const failure of [modelErrors[0]!, modelErrors[1]!]) {
+  test(`provider cold restart resumes saved conversation after ${failure.name}`, async (t) => {
+    const { manager, sessionId, epoch, processes, send, runTurn, restartBridge } = await createRuntimeFixture(t);
+    const failed = await runTurn("quota-model", "original request", failure.events);
     assert.equal(failed.stopReason, "error");
-    assert.equal(failed.errorMessage, quotaError);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch), undefined);
-    assert.equal(session.activeProcess, null);
-    assert.equal(session.activeMcpServer, null);
-    assert.equal(listeners.size, 0);
-    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 0);
+    const { bridge, session } = await restartBridge();
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), undefined);
+    const saved = await bridge.runtimeSessionStore.get(sessionId, epoch);
+    assert.equal(saved?.conversationId, "conversation-1");
+    assert.ok(saved && historyMatches(saved, manager.buildSessionContext().messages));
 
-    const recovered = await runTurn(row.model, "retry request", [
-      { event: "step_update", delta: "Hello! How can I help you today?" }, row.result,
-    ]);
+    const recovered = await runTurn("other-model", "new request", [{ event: "result", status: "success" }]);
 
     assert.equal(recovered.stopReason, "stop");
-    assert.equal(recovered.errorMessage, undefined);
-    assert.deepEqual(recovered.content, [{ type: "text", text: "Hello! How can I help you today?" }]);
-    const recoveredProcess = processes.at(-1);
-    assert.ok(recoveredProcess);
-    assert.equal(session.activeProcess, recoveredProcess);
-    assert.notEqual(recoveredProcess, processes[0]);
-    assert.equal(recoveredProcess.options.model, row.model);
-    assert.equal(recoveredProcess.options.conversationId, undefined);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-2");
-    const prompt = send.mock.calls.at(-1)!.arguments[0].message.content;
-    assert.deepEqual(JSON.parse(prompt), {
-      purpose: "reconstructed_conversation",
-      systemInstructions: "Keep Pi history",
-      history: [
-        { role: "user", content: "original request" },
-        { role: "assistant", content: failed.content, stopReason: "error", errorMessage: quotaError },
-      ],
-      currentMessage: { role: "user", content: "retry request" },
-    });
-
-    const continued = await runTurn(row.model, "continue request", [
-      { event: "step_update", delta: "Continuing normally" }, { event: "result", status: "success" },
-    ]);
-
-    assert.equal(continued.stopReason, "stop");
-    assert.equal(continued.errorMessage, undefined);
-    assert.deepEqual(continued.content, [{ type: "text", text: "Continuing normally" }]);
-    assert.equal(session.activeProcess, recoveredProcess);
     assert.equal(processes.length, 2);
-    assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
-    assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "continue request");
-    assert.deepEqual(manager.buildSessionContext().messages.filter((message) => message.role === "user").map((message) => message.content), [
-      "original request", "retry request", "continue request",
-    ]);
+    assert.equal(session.activeProcess, processes[1]);
+    assert.equal(processes[1]!.options.conversationId, "conversation-1");
+    assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "new request");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-1");
   });
 }
 
-const laterFailureCases: Array<{ name: string; response: AgyEvent[] | Error }> = [
-  { name: "an error result after text output", response: [{ event: "step_update", delta: "Partial answer" }, { event: "result", status: "ERROR", error: "genuine failure" }] },
-  { name: "a rejected send", response: new Error("genuine failure") },
+const laterFailureCases: Array<{ name: string; response: AgyEvent[] | Error; source: AgyEventSource; text: string }> = [
+  { name: "a synthetic runtime result after text output", response: [{ event: "step_update", delta: "Partial answer" }, { event: "result", status: "ERROR", error: "genuine failure" }], source: "runtime", text: "Partial answer" },
+  { name: "a rejected send", response: new Error("genuine failure"), source: "agy", text: "" },
 ];
 
 for (const row of laterFailureCases) {
   test(`provider reports and cleans up a genuine later failure: ${row.name}`, async (t) => {
-    const { bridge, session, sessionId, epoch, processes, listeners, close, abort, runTurn } = await createRuntimeFixture(t);
+    const { bridge, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
     await runTurn("test-model", "successful request", [{ event: "result", status: "success" }]);
     const syncedCount = bridge.runtimeSessionSync.getSyncedMessageCount(session);
     assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-1");
 
-    const failed = await runTurn("test-model", "failed request", row.response);
+    const failed = await runTurn("test-model", "failed request", row.response, row.source);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.equal(failed.stopReason, "error");
     assert.equal(failed.errorMessage, "genuine failure");
-    if (Array.isArray(row.response)) assert.deepEqual(failed.content, [{ type: "text", text: "Partial answer" }]);
+    assert.deepEqual(failed.content, row.text ? [{ type: "text", text: row.text }] : []);
     assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch), undefined);
     assert.equal(session.activeProcess, null);
     assert.equal(session.activeMcpServer, null);
@@ -389,6 +433,74 @@ for (const row of laterFailureCases) {
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), syncedCount);
     assert.equal(close.mock.callCount(), 1);
     assert.equal(abort.mock.calls[0]!.this, processes[0]);
+
+    const retry = await runTurn("test-model", "retry request", [{ event: "result", status: "success" }]);
+    assert.equal(retry.stopReason, "stop");
+    assert.equal(processes.length, 2);
+    assert.equal(processes[1]!.options.conversationId, undefined);
+    const reconstructed = JSON.parse(send.mock.calls.at(-1)!.arguments[0].message.content);
+    assert.equal(reconstructed.purpose, "reconstructed_conversation");
+    assert.deepEqual(reconstructed.history.filter((message: { role: string }) => message.role === "user"), [
+      { role: "user", content: "successful request" },
+      { role: "user", content: "failed request" },
+    ], "retry must include the original undelivered request");
+    assert.deepEqual(reconstructed.history.at(-1), {
+      role: "assistant", content: failed.content, stopReason: "error", errorMessage: "genuine failure",
+    });
+    assert.deepEqual(reconstructed.currentMessage, { role: "user", content: "retry request" });
+  });
+}
+
+for (const source of ["agy", "runtime"] as const) {
+  test(`late old ${source} callback cannot affect the replacement turn`, async (t) => {
+    const { bridge, session, sessionId, epoch, processes, listeners, capturedListeners, send, runTurn } = await createRuntimeFixture(t);
+    const setModel = t.mock.method(PiEventAdapter.prototype, "setModel");
+    let oldSending!: () => void;
+    let newSending!: () => void;
+    const oldSent = new Promise<void>((resolve) => { oldSending = resolve; });
+    const newSent = new Promise<void>((resolve) => { newSending = resolve; });
+    send.mock.mockImplementation(async function (this: AgyRuntime, _input: AgyInput) {
+      assert.ok(listeners.get(this));
+      if (this.options.model === "old-model") oldSending();
+      else newSending();
+    });
+    const oldTurn = runTurn("old-model", "old request", []);
+    await oldSent;
+    const oldAdapter = setModel.mock.calls[0]!.this as PiEventAdapter;
+    t.after(async () => {
+      oldAdapter.handleTermination("aborted", "test cleanup");
+      await oldTurn;
+    });
+    const oldListener = capturedListeners.get(processes[0]!);
+    assert.ok(oldListener);
+    const nextTurn = runTurn("new-model", "new request", []);
+    await newSent;
+    const replacement = session.activeProcess;
+    const replacementMcp = session.activeMcpServer;
+    assert.ok(replacement);
+    assert.notEqual(replacement, processes[0]);
+    const replacementListener = listeners.get(replacement);
+    assert.ok(replacementListener);
+    t.after(() => replacementListener({ event: "result", status: "success" }, "agy"));
+    const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
+
+    oldListener({ event: "step_update", delta: "stale text" }, "agy");
+    oldListener({ event: "result", status: "error", error: "late old failure" }, source);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(oldAdapter.isCompleted(), false, "old callback must be ignored before reaching its unfinished adapter");
+    assert.deepEqual(oldAdapter.message.content, []);
+    assert.equal(session.activeProcess, replacement);
+    assert.equal(session.activeMcpServer, replacementMcp);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-1");
+    replacementListener({ event: "step_update", delta: "replacement answer" }, "agy");
+    replacementListener({ event: "result", status: "success" }, "agy");
+    const completed = await nextTurn;
+    assert.equal(completed.stopReason, "stop");
+    assert.equal(completed.errorMessage, undefined);
+    assert.deepEqual(completed.content, [{ type: "text", text: "replacement answer" }]);
+    assert.equal(session.activeProcess, replacement);
   });
 }
 
@@ -410,7 +522,7 @@ for (const cleanupRejects of [false, true]) {
       if (this === processes[0] && cleanupRejects) throw new Error("process cleanup failed");
     });
 
-    await runTurn("test-model", "failed request", [{ event: "result", status: "error", error: quotaError }]);
+    await runTurn("test-model", "failed request", new Error("stdin write failed"));
     assert.equal(session.activeProcess, null);
     assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch), undefined);
     assert.equal(abort.mock.callCount(), 0, "old IPC cleanup is still pending");
@@ -429,5 +541,481 @@ for (const cleanupRejects of [false, true]) {
     assert.equal(abort.mock.calls[0]!.this, processes[0]);
     assert.equal(session.activeProcess, replacement);
     assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-2");
+  });
+}
+
+const pendingGapCases: Array<{ name: string; event?: AgyEvent; source?: AgyEventSource; continues?: boolean }> = [
+  { name: "native model error", event: { event: "result", status: "error", error: quotaError }, source: "agy" },
+  { name: "synthetic runtime error", event: { event: "result", status: "error", error: "process exited in tool gap" }, source: "runtime" },
+  { name: "blocked native tool", event: { event: "step_update", tool_call: { id: "native-call", name: "run_command", arguments: {} } }, source: "agy" },
+  { name: "user abort" },
+  { name: "matching Pi results", continues: true },
+];
+
+for (const row of pendingGapCases) {
+  test(row.continues ? "provider replaces the safety subscription when Pi returns results" : `provider invalidates the actual post-toolUse gap after ${row.name}`, { timeout: 5000 }, async (t) => {
+    const { bridge, manager, session, sessionId, epoch, processes, listeners, capturedListeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+    const controller = new AbortController();
+    const tools = [{ name: "test-tool", description: "test", parameters: { type: "object", properties: {} } }];
+    const gateway = new CapabilityGateway(tools);
+    t.after(() => gateway.cancelPendingCalls("test cleanup"));
+    t.mock.method(bridge, "getTools", () => tools);
+    let oldMcp: BridgeIPC | undefined;
+    t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) {
+      return this === oldMcp && gateway.hasPendingCalls;
+    });
+    t.mock.method(BridgeIPC.prototype, "setToolCallHandler", function (this: BridgeIPC, handler: Parameters<BridgeIPC["setToolCallHandler"]>[0]) {
+      if (!oldMcp && handler) oldMcp = this;
+      if (this === oldMcp) gateway.setToolCallHandler(handler);
+    });
+    close.mock.mockImplementation(async function (this: BridgeIPC) {
+      if (this === oldMcp) gateway.cancelPendingCalls("runtime disposed");
+    });
+    const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", (_results: Context["messages"], _appendix?: string): number => {
+      throw new Error("must rebuild, not resume the incomplete MCP turn");
+    });
+    let toolSettled = false;
+    send.mock.mockImplementation(async function (this: AgyRuntime, _input: AgyInput) {
+      if (this === processes[0]) {
+        void gateway.call("test-tool", { request: "original" }).then(() => { toolSettled = true; });
+        return;
+      }
+      const listener = listeners.get(this);
+      assert.ok(listener);
+      listener({ event: "step_update", delta: "rebuilt answer" }, "agy");
+      listener({ event: "result", status: "success" }, "agy");
+    });
+
+    const toolUse = await runTurn("test-model", "original request", [], "agy", controller.signal);
+    assert.equal(toolUse.stopReason, "toolUse");
+    const call = toolUse.content[0];
+    assert.ok(call?.type === "toolCall");
+    const oldProcess = processes[0]!;
+    assert.equal(session.activeProcess, oldProcess);
+    assert.equal(session.activeMcpServer, oldMcp);
+    assert.equal(oldMcp?.hasPendingCalls, true);
+    assert.equal(toolSettled, false, "Pi has not returned any results yet");
+    const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
+    assert.equal(checkpoint, 2);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.historyLength, checkpoint);
+
+    if (row.continues) {
+      const safetyListener = listeners.get(oldProcess);
+      assert.ok(safetyListener, "keep a safety subscription until Pi returns results");
+      manager.appendMessage({ role: "toolResult", toolCallId: call.id, toolName: call.name,
+        content: [{ type: "text", text: "Pi result" }], isError: false, timestamp: Date.now() });
+      resolve.mock.mockImplementation((results: Context["messages"], appendix?: string) => {
+        const accepted = gateway.resolveToolResults(results, appendix);
+        setImmediate(() => listeners.get(oldProcess)!({ event: "result", status: "success" }, "agy"));
+        return accepted;
+      });
+
+      const continued = await runTurn("test-model", "continue request", []);
+      controller.abort();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      assert.equal(continued.stopReason, "stop");
+      assert.notEqual(capturedListeners.get(oldProcess), safetyListener, "the next turn replaces, rather than stacks, the gap subscription");
+      assert.equal(listeners.size, 0);
+      assert.equal(resolve.mock.callCount(), 1);
+      assert.equal(send.mock.callCount(), 1, "pending results resume MCP without another stdin turn");
+      assert.equal(processes.length, 1);
+      assert.equal(session.activeProcess, oldProcess);
+      assert.equal(session.activeMcpServer, oldMcp);
+      assert.equal(oldMcp?.hasPendingCalls, false);
+      assert.equal(close.mock.callCount(), 0);
+      assert.equal(abort.mock.callCount(), 0, "the preceding toolUse signal no longer owns the runtime");
+      assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 5);
+      assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.historyLength, 5);
+      return;
+    }
+
+    if (row.event) listeners.get(oldProcess)?.(row.event, row.source!);
+    else controller.abort();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(session.activeProcess, null, "a completed toolUse stream still owns failure invalidation in the gap");
+    assert.equal(session.activeMcpServer, null);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch), undefined);
+    assert.equal(listeners.size, 0);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
+    assert.equal(toolUse.stopReason, "toolUse", "the already completed assistant is not rewritten");
+    assert.equal(close.mock.callCount(), 1);
+    assert.equal(abort.mock.calls[0]!.this, oldProcess);
+
+    manager.appendMessage({ role: "toolResult", toolCallId: call.id, toolName: call.name,
+      content: [{ type: "text", text: "late Pi result" }], isError: false, timestamp: Date.now() });
+    const retry = await runTurn("test-model", "retry request", []);
+
+    assert.equal(retry.stopReason, "stop");
+    assert.deepEqual(retry.content, [{ type: "text", text: "rebuilt answer" }]);
+    assert.equal(resolve.mock.callCount(), 0);
+    assert.equal(processes.length, 2);
+    assert.equal(processes[1]!.options.conversationId, undefined);
+    assert.equal(session.activeProcess, processes[1]);
+    const reconstructed = JSON.parse(send.mock.calls.at(-1)!.arguments[0].message.content);
+    assert.equal(reconstructed.purpose, "reconstructed_conversation");
+    assert.equal(reconstructed.history.at(-1).role, "toolResult");
+    assert.deepEqual(reconstructed.currentMessage, { role: "user", content: "retry request" });
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-2");
+    assert.equal(listeners.size, 0);
+  });
+}
+
+for (const terminal of ["success", "quota"] as const) {
+  for (const oldAborted of [false, true]) {
+    test(`delayed ${terminal} send rejection cannot dispose replacement with old signal aborted=${oldAborted}`, { timeout: 5000 }, async (t) => {
+      const { bridge, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+      const oldController = new AbortController();
+      const setModel = t.mock.method(PiEventAdapter.prototype, "setModel");
+      let rejectOld!: (error: Error) => void;
+      const oldSend = new Promise<void>((_resolve, reject) => { rejectOld = reject; });
+      t.after(() => rejectOld(new Error("test cleanup")));
+      let replacementSending!: () => void;
+      const replacementSent = new Promise<void>((resolve) => { replacementSending = resolve; });
+      send.mock.mockImplementation(async function (this: AgyRuntime, _input: AgyInput) {
+        const listener = listeners.get(this);
+        assert.ok(listener);
+        if (this.options.model === "old-model") {
+          listener(terminal === "quota"
+            ? { event: "result", status: "error", error: quotaError }
+            : { event: "result", status: "success" }, "agy");
+          await oldSend;
+        } else {
+          replacementSending();
+        }
+      });
+
+      const completedOld = await runTurn("old-model", "old request", [], "agy", oldController.signal);
+      assert.equal(completedOld.stopReason, terminal === "quota" ? "error" : "stop");
+      assert.equal(session.activeProcess, processes[0]);
+      const replacementTurn = runTurn("new-model", "replacement request", []);
+      t.after(async () => {
+        const adapter = setModel.mock.calls[1]?.this as PiEventAdapter | undefined;
+        adapter?.handleTermination("aborted", "test cleanup");
+        await replacementTurn;
+      });
+      await replacementSent;
+      const replacement = session.activeProcess;
+      const replacementMcp = session.activeMcpServer;
+      assert.ok(replacement);
+      assert.notEqual(replacement, processes[0]);
+      const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
+      const reference = await bridge.runtimeSessionStore.get(sessionId, epoch);
+      assert.equal(reference?.conversationId, "conversation-1");
+      assert.equal(close.mock.callCount(), 1);
+      assert.equal(abort.mock.callCount(), 1);
+
+      if (oldAborted) oldController.abort();
+      rejectOld(new Error("old stdin write rejected after terminal result"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      assert.equal(session.activeProcess, replacement);
+      assert.equal(session.activeMcpServer, replacementMcp);
+      assert.equal(close.mock.callCount(), 1);
+      assert.equal(abort.mock.callCount(), 1);
+      assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
+      assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, epoch), reference);
+      const listener = listeners.get(replacement);
+      assert.ok(listener, "stale catch must not unsubscribe the replacement");
+      listener({ event: "step_update", delta: "replacement survives" }, "agy");
+      listener({ event: "result", status: "success" }, "agy");
+      const completed = await replacementTurn;
+      assert.equal(completed.stopReason, "stop");
+      assert.equal(completed.errorMessage, undefined);
+      assert.deepEqual(completed.content, [{ type: "text", text: "replacement survives" }]);
+      assert.equal(session.activeProcess, replacement);
+      assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 4);
+    });
+  }
+}
+
+for (const { terminal, aborted } of [
+  { terminal: "success", aborted: false },
+  { terminal: "success", aborted: true },
+  { terminal: "quota", aborted: false },
+  { terminal: "quota", aborted: true },
+] as const) {
+  test(`delayed send rejection invalidates owned native ${terminal} with signal aborted=${aborted}`, { timeout: 5000 }, async (t) => {
+    const { bridge, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+    const controller = new AbortController();
+    let rejectSend!: (error: Error) => void;
+    const pendingSend = new Promise<void>((_resolve, reject) => { rejectSend = reject; });
+    t.after(() => rejectSend(new Error("test cleanup")));
+    send.mock.mockImplementation(async function (this: AgyRuntime, _input: AgyInput) {
+      const listener = listeners.get(this);
+      assert.ok(listener);
+      listener(terminal === "quota"
+        ? { event: "result", status: "error", error: quotaError }
+        : { event: "result", status: "success" }, "agy");
+      await pendingSend;
+    });
+
+    const completed = await runTurn("test-model", "original request", [], "agy", controller.signal);
+    assert.equal(completed.stopReason, terminal === "quota" ? "error" : "stop");
+    assert.equal(completed.errorMessage, terminal === "quota" ? quotaError : undefined);
+    assert.equal(session.activeProcess, processes[0]);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.historyLength, 2);
+    const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
+
+    if (aborted) controller.abort();
+    assert.equal(session.activeProcess, processes[0], "completed turn no longer owns cancellation");
+    rejectSend(new Error("stdin write failed after native result"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(session.activeProcess, null);
+    assert.equal(session.activeMcpServer, null);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch), undefined);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
+    assert.equal(listeners.size, 0);
+    assert.equal(close.mock.callCount(), 1);
+    assert.equal(abort.mock.calls[0]!.this, processes[0]);
+    assert.equal(completed.stopReason, terminal === "quota" ? "error" : "stop", "a recorded terminal result cannot hide a later transport failure");
+    send.mock.mockImplementation(async function (this: AgyRuntime, _input: AgyInput) {
+      listeners.get(this)!({ event: "result", status: "success" }, "agy");
+    });
+    const recovered = await runTurn("test-model", "retry request", []);
+    assert.equal(recovered.stopReason, "stop");
+    assert.equal(processes.length, 2);
+    assert.equal(processes[1]!.options.conversationId, undefined);
+    assert.equal(JSON.parse(send.mock.calls.at(-1)!.arguments[0].message.content).purpose, "reconstructed_conversation");
+  });
+}
+
+for (const phase of ["before execution", "during runtime startup", "after history lookup"] as const) {
+  test(`nonpending abort ${phase} preserves the saved conversation reference`, { timeout: 5000 }, async (t) => {
+    const { bridge, session, sessionId, epoch, listeners, send, runTurn } = await createRuntimeFixture(t);
+    const controller = new AbortController();
+    if (phase === "after history lookup") await runTurn("test-model", "seed request", [{ event: "result", status: "success" }]);
+    const reference = await bridge.runtimeSessionStore.get(sessionId, epoch);
+    assert.equal(reference?.conversationId, "conversation-1");
+    const start = t.mock.method(AgyRuntime.prototype, "start", async () => {
+      controller.abort();
+      controller.signal.throwIfAborted();
+      throw new Error("startup must stop after abort");
+    });
+    const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
+    if (phase === "before execution") controller.abort();
+    if (phase === "after history lookup") {
+      const getReference = bridge.runtimeSessionStore.get.bind(bridge.runtimeSessionStore);
+      t.mock.method(bridge.runtimeSessionStore, "get", async (...args: Parameters<typeof getReference>) => {
+        const saved = await getReference(...args);
+        queueMicrotask(() => controller.abort());
+        return saved;
+      });
+    }
+
+    const completed = await runTurn("test-model", "aborted request", [], "agy", controller.signal);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(completed.stopReason, "aborted");
+    assert.equal(start.mock.callCount(), phase === "during runtime startup" ? 1 : 0);
+    assert.equal(send.mock.callCount(), phase === "after history lookup" ? 1 : 0, "abort must not deliver another input");
+    assert.equal(invalidate.mock.callCount(), 0);
+    assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, epoch), reference);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), phase === "before execution" ? undefined : reference?.historyLength,
+      "startup may restore the saved checkpoint but must not append the aborted turn");
+    assert.equal(session.activeProcess, null);
+    assert.equal(session.activeMcpServer, null);
+    assert.equal(listeners.size, 0);
+  });
+}
+
+test("transport failure during deferred payload invalidates before delayed close and prevents delivery", { timeout: 5000 }, async (t) => {
+  let resumePayload!: () => void;
+  let releaseClose!: () => void;
+  const payloadPending = new Promise<void>((resolve) => { resumePayload = resolve; });
+  const closePending = new Promise<void>((resolve) => { releaseClose = resolve; });
+  t.after(() => { resumePayload(); releaseClose(); });
+  const { bridge, session, sessionId, epoch, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+  let payloadEntered!: () => void;
+  const payloadReady = new Promise<void>((resolve) => { payloadEntered = resolve; });
+  close.mock.mockImplementation(async () => { await closePending; });
+  const failedTurn = runTurn("test-model", "undelivered request", [], "agy", undefined, {
+    onPayload: async () => {
+      payloadEntered();
+      await payloadPending;
+      return { prompt: "must never be sent" };
+    },
+  });
+  await payloadReady;
+  const proc = session.activeProcess;
+  const mcp = session.activeMcpServer;
+  assert.ok(proc && mcp);
+  assert.equal(send.mock.callCount(), 0);
+
+  (mcp as unknown as { failTransport(error: Error): void }).failTransport(new Error("MCP disconnected during payload"));
+  const failed = await failedTurn;
+
+  assert.equal(failed.stopReason, "error");
+  assert.equal(failed.errorMessage, "MCP disconnected during payload");
+  assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch), undefined);
+  assert.equal(session.activeProcess, null);
+  assert.equal(session.activeMcpServer, null);
+  assert.equal(listeners.size, 0);
+  assert.equal(close.mock.callCount(), 1);
+  assert.equal(abort.mock.callCount(), 0, "IPC close has not finished");
+
+  resumePayload();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(send.mock.callCount(), 0, "resuming onPayload cannot deliver into an invalidated runtime");
+  assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch), undefined);
+  releaseClose();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(abort.mock.callCount(), 1);
+  assert.equal(abort.mock.calls[0]!.this, proc);
+});
+
+for (const row of [
+  { options: { reasoning: "max" }, error: "Unsupported Antigravity CLI reasoning effort: max. Supported values: low, medium, high." },
+  { options: { thinkingLevel: "off" }, error: "Unsupported Antigravity CLI reasoning effort: off. Supported values: low, medium, high." },
+]) {
+  test(`unsupported effort on healthy runtime preserves saved conversation and PTY bindings: ${JSON.stringify(row.options)}`, { timeout: 5000 }, async (t) => {
+    const { bridge, session, sessionId, epoch, listeners, close, abort, start, send, runTurn } = await createRuntimeFixture(t);
+    await runTurn("test-model", "seed request", [{ event: "result", status: "success" }]);
+    const reference = await bridge.runtimeSessionStore.get(sessionId, epoch);
+    const proc = session.activeProcess;
+    const mcp = session.activeMcpServer;
+    const handle = session.resources.terminals.bind("healthy-pi-pty");
+    const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
+    const syncKey = session.syncKey;
+    const turnIndex = session.turnIndex;
+    const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
+    const dispose = t.mock.method(session, "dispose", session.dispose.bind(session));
+    const eventBinding = t.mock.method(session, "setRuntimeEventHandler", session.setRuntimeEventHandler.bind(session));
+    const abortBinding = t.mock.method(session, "clearAbortSignal", session.clearAbortSignal.bind(session));
+
+    const failed = await runTurn("test-model", "invalid effort request", [], "agy", undefined, row.options as SimpleStreamOptions);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(failed.stopReason, "error");
+    assert.equal(failed.errorMessage, row.error);
+    assert.equal(invalidate.mock.callCount(), 0);
+    assert.equal(dispose.mock.callCount(), 0);
+    assert.equal(eventBinding.mock.callCount(), 0);
+    assert.equal(abortBinding.mock.callCount(), 0);
+    assert.equal(start.mock.callCount(), 1);
+    assert.equal(send.mock.callCount(), 1);
+    assert.equal(close.mock.callCount(), 0);
+    assert.equal(abort.mock.callCount(), 0);
+    assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, epoch), reference);
+    assert.equal(session.activeProcess, proc);
+    assert.equal(session.activeMcpServer, mcp);
+    assert.equal(session.conversationId, reference?.conversationId);
+    assert.equal(session.syncKey, syncKey);
+    assert.equal(session.turnIndex, turnIndex);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
+    assert.equal(session.resources.terminals.resolve(handle), "healthy-pi-pty");
+    assert.equal(session.resources.terminals.toHandle("healthy-pi-pty"), handle);
+    assert.equal(listeners.size, 0);
+  });
+}
+
+for (const { source, payloadSource } of [
+  { source: "agy", payloadSource: "agy" },
+  { source: "runtime", payloadSource: "agy" },
+  { source: "agy", payloadSource: "runtime" },
+  { source: "runtime", payloadSource: "runtime" },
+] as const) {
+  test(`callback ${source} controls identical quota result with payload source=${payloadSource}`, { timeout: 5000 }, async (t) => {
+    const { bridge, manager, session, sessionId, epoch, processes, listeners, close, abort, runTurn } = await createRuntimeFixture(t);
+    const raw = { event: "result", status: "error", error: quotaError, source: payloadSource } as const;
+
+    const failed = await runTurn("test-model", "quota request", [raw], source);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(failed.stopReason, "error");
+    assert.equal(failed.errorMessage, quotaError);
+    assert.equal(listeners.size, 0);
+    const reference = await bridge.runtimeSessionStore.get(sessionId, epoch);
+    if (source === "agy") {
+      assert.equal(session.activeProcess, processes[0]);
+      assert.ok(session.activeMcpServer);
+      assert.equal(reference?.conversationId, "conversation-1");
+      assert.ok(reference && historyMatches(reference, manager.buildSessionContext().messages));
+      assert.equal(close.mock.callCount(), 0);
+      assert.equal(abort.mock.callCount(), 0);
+    } else {
+      assert.equal(reference, undefined);
+      assert.equal(session.activeProcess, null);
+      assert.equal(session.activeMcpServer, null);
+      assert.equal(close.mock.callCount(), 1);
+      assert.equal(abort.mock.calls[0]!.this, processes[0]);
+    }
+  });
+}
+
+for (const outcome of ["failure", "cancellation", "delayed success"] as const) {
+  test(`overlapping preparation ${outcome} cannot clear or overwrite newer runtime`, { timeout: 5000 }, async (t) => {
+    let releaseOld!: () => void;
+    const oldStartup = new Promise<void>((resolve) => { releaseOld = resolve; });
+    t.after(() => releaseOld());
+    const { bridge, session, sessionId, epoch, processes, listeners, close, abort, start, send, runTurn } = await createRuntimeFixture(t);
+    const setModel = t.mock.method(PiEventAdapter.prototype, "setModel");
+    let oldStarting!: () => void;
+    let newSending!: () => void;
+    const oldStarted = new Promise<void>((resolve) => { oldStarting = resolve; });
+    const newSent = new Promise<void>((resolve) => { newSending = resolve; });
+    const controller = new AbortController();
+    start.mock.mockImplementation(async function (this: AgyRuntime) {
+      processes.push(this);
+      if (this.options.model === "old-model") {
+        oldStarting();
+        await oldStartup;
+        if (outcome === "failure") throw new Error("superseded startup failed");
+      }
+      return { event: "init", conversation_id: this.options.conversationId ?? "new-conversation" } as Awaited<ReturnType<AgyRuntime["start"]>>;
+    });
+    send.mock.mockImplementation(async function (this: AgyRuntime, _input: AgyInput) {
+      assert.ok(listeners.get(this));
+      if (this.options.model === "new-model") newSending();
+    });
+    const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
+    const oldTurn = runTurn("old-model", "old request", [], "agy", controller.signal);
+    await oldStarted;
+    const newTurn = runTurn("new-model", "new request", []);
+    t.after(async () => {
+      releaseOld();
+      for (const call of setModel.mock.calls) {
+        (call.this as PiEventAdapter).handleTermination("aborted", "test cleanup");
+      }
+      await Promise.allSettled([oldTurn, newTurn]);
+    });
+    await newSent;
+    const replacement = session.activeProcess;
+    const replacementMcp = session.activeMcpServer;
+    assert.equal(replacement, processes[1]);
+    assert.ok(replacement && replacementMcp);
+    const replacementListener = listeners.get(replacement);
+    assert.ok(replacementListener);
+    const handle = session.resources.terminals.bind("replacement-pi-pty");
+    const reference = await bridge.runtimeSessionStore.get(sessionId, epoch);
+    const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
+
+    if (outcome === "cancellation") controller.abort();
+    releaseOld();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(session.activeProcess, replacement, "a stale startup must not install over the current preparation");
+    assert.equal(session.activeMcpServer, replacementMcp);
+    assert.equal(listeners.get(replacement), replacementListener, "old catch must not unsubscribe the newer turn");
+    assert.equal(invalidate.mock.callCount(), 0);
+    assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, epoch), reference);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
+    assert.equal(session.resources.terminals.resolve(handle), "replacement-pi-pty");
+    assert.ok(close.mock.calls.every((call) => call.this !== replacementMcp));
+    assert.ok(abort.mock.calls.every((call) => call.this !== replacement));
+    assert.equal(processes.length, 2, "superseded resume failure cannot start a fallback runtime");
+    assert.equal(send.mock.callCount(), 1, "only the newer preparation may deliver input");
+    const superseded = await oldTurn;
+    assert.ok(superseded.stopReason === "error" || superseded.stopReason === "aborted");
+
+    replacementListener({ event: "step_update", delta: "new runtime survives" }, "agy");
+    replacementListener({ event: "result", status: "success" }, "agy");
+    const completed = await newTurn;
+    assert.equal(completed.stopReason, "stop");
+    assert.deepEqual(completed.content, [{ type: "text", text: "new runtime survives" }]);
+    assert.equal(session.activeProcess, replacement);
   });
 }

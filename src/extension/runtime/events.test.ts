@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe, it } from "node:test";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
-import type { AgyResultEvent } from "../shared/types.ts";
+import type { AgyEvent, AgyResultEvent } from "../shared/types.ts";
 import { AgyEventAdapter } from "./events.ts";
 
 async function collectStreamEvents(adapter: AgyEventAdapter): Promise<AssistantMessageEvent[]> {
@@ -10,6 +10,107 @@ async function collectStreamEvents(adapter: AgyEventAdapter): Promise<AssistantM
     events.push(ev);
   }
   return events;
+}
+
+const blockedToolCases: {
+  name: string;
+  event: AgyEvent;
+  blocked: string | undefined;
+  toolName?: string | undefined;
+  terminalType?: "error";
+  unrestricted?: boolean;
+  allowedToolNames?: string[];
+}[] = [
+  { name: "top-level call", event: { event: "step_update", tool_call: { id: "", name: "run_command", arguments: "{}" } }, blocked: "run_command" },
+  { name: "nested call", event: { event: "step_update", step_update: { tool_call: { id: "native", name: "run_command" } } }, blocked: "run_command" },
+  { name: "empty nested tool name", event: { event: "step_update", tool_call: { id: "native", name: "" } }, blocked: "" },
+  { name: "flat empty name", event: { event: "step_update", type: "tool", name: "" }, blocked: "" },
+  { name: "flat empty tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: "", name: "read" }, blocked: "" },
+  { name: "flat zero name", event: { event: "step_update", type: "tool", name: 0 }, blocked: "0" },
+  { name: "flat zero tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: 0, name: "read" }, blocked: "0" },
+  { name: "numeric tool name", event: { event: "step_update", type: "tool", name: 42 }, blocked: "42" },
+  { name: "missing nested tool name", event: { event: "step_update", tool_call: { id: "native" } }, blocked: "<unnamed>" },
+  { name: "nested null name with allowed flat fallback", event: { event: "step_update", type: "tool", tool_call: { id: "native", name: null }, tool_name: "read" }, blocked: "null" },
+  { name: "enveloped null name with allowed flat fallback", event: { event: "step_update", step_update: { type: "tool", tool_call: { id: "native", name: null }, name: "read" } }, blocked: "null" },
+  { name: "missing nested name with internal flat fallback", event: { event: "step_update", type: "tool", tool_call: { id: "native" }, name: "manage_task" }, blocked: "<unnamed>" },
+  { name: "flat null tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: null, name: "read" }, blocked: "null" },
+  { name: "flat undefined tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: undefined, name: "read" }, blocked: "<unnamed>" },
+  { name: "flat tool update", event: { event: "step_update", type: "tool", tool_name: "run_command" }, blocked: "run_command" },
+  { name: "legacy tool update", event: { event: "step_update", step_type: "tool", name: "run_command" }, blocked: "run_command" },
+  { name: "flat allowed call", event: { event: "step_update", update_type: "tool", tool_name: "read", name: "run_command", input: "{}" }, blocked: undefined, toolName: "read" },
+  { name: "top-level call overrides envelope", event: { event: "step_update", tool_call: { id: "allowed", name: "read" }, step_update: { tool_call: { id: "native", name: "run_command" } } }, blocked: undefined, toolName: "read" },
+  ...["read", "mcp__pi__read", "call_mcp_tool", "list_resources", "manage_task"].map((name) => ({
+    name: `allowed ${name}`, event: { event: "step_update", tool_call: { id: "", name, arguments: "{}" } }, blocked: undefined,
+    toolName: name === "read" || name === "mcp__pi__read" ? name : undefined,
+  })),
+  { name: "no allowlist allows valid names", event: { event: "step_update", type: "tool", name: "run_command" }, blocked: undefined, toolName: "run_command", unrestricted: true },
+  { name: "no allowlist rejects empty names", event: { event: "step_update", type: "tool", name: "" }, blocked: "", unrestricted: true },
+  { name: "no allowlist rejects zero names", event: { event: "step_update", type: "tool", name: 0 }, blocked: "0", unrestricted: true },
+  { name: "no allowlist rejects null names", event: { event: "step_update", tool_call: { id: "", name: null } }, blocked: "null", unrestricted: true },
+  { name: "explicit allowlist cannot permit empty names", event: { event: "step_update", type: "tool", name: "" }, blocked: "", allowedToolNames: [""] },
+  { name: "empty allowlist rejects valid names", event: { event: "step_update", type: "tool", name: "read" }, blocked: "read", allowedToolNames: [] },
+  { name: "unnamed flat tool update is not a call", event: { event: "step_update", type: "tool", tool_result: {} }, blocked: undefined },
+  { name: "text mentioning a tool", event: { event: "step_update", type: "agent_response", name: "run_command" }, blocked: undefined },
+  { name: "terminal error", event: { event: "result", status: "error", error: "run_command" }, blocked: undefined, terminalType: "error" },
+];
+
+for (const expected of blockedToolCases) {
+  const policyOptions = expected.unrestricted ? {} : { allowedToolNames: new Set(expected.allowedToolNames ?? ["read"]) };
+
+  for (const bridgeToolCallsExternally of [false, true]) {
+    test(`active tool policy (${bridgeToolCallsExternally ? "external" : "direct"}): ${expected.name}`, async () => {
+      const blockedNames: string[] = [];
+      const adapter = new AgyEventAdapter({
+        model: "test", ...policyOptions, bridgeToolCallsExternally,
+        onBlockedTool: (name) => blockedNames.push(name),
+      });
+
+      adapter.handleEvent(expected.event);
+
+      assert.deepEqual(blockedNames, expected.blocked === undefined ? [] : [expected.blocked]);
+      if (expected.blocked !== undefined) {
+        assert.equal(adapter.isCompleted(), true);
+        assert.equal(adapter.message.errorMessage, `The model attempted to call an unavailable tool: ${expected.blocked}`);
+      }
+      adapter.handleEvent({ event: "result", status: "success" });
+      const events = await collectStreamEvents(adapter);
+      const terminal = events.filter((event) => event.type === "done" || event.type === "error");
+      assert.equal(terminal.length, 1);
+      assert.equal(terminal[0]?.type, expected.blocked === undefined ? expected.terminalType ?? "done" : "error");
+      const names = !bridgeToolCallsExternally && expected.toolName ? [expected.toolName] : [];
+      assert.deepEqual(adapter.message.content.filter((block) => block.type === "toolCall").map((call) => call.name), names);
+      assert.equal(events.filter((event) => event.type === "toolcall_end").length, names.length);
+    });
+  }
+
+  test(`pure completed-stream tool policy: ${expected.name}`, async (t) => {
+    const blockedNames: string[] = [];
+    const adapter = new AgyEventAdapter({ model: "test", ...policyOptions, onBlockedTool: (name) => blockedNames.push(name) });
+    adapter.handleEvent({ event: "step_update", delta: "Completed history" });
+    adapter.handleEvent({ event: "result", status: "success" });
+    await collectStreamEvents(adapter);
+    const message = adapter.message;
+    const eventBefore = structuredClone(expected.event);
+    const push = t.mock.method(adapter.stream, "push");
+    const parse = t.mock.method(JSON, "parse");
+    const now = t.mock.method(Date, "now");
+    t.after(() => {
+      push.mock.restore();
+      parse.mock.restore();
+      now.mock.restore();
+    });
+
+    assert.equal(adapter.getBlockedToolName(expected.event), expected.blocked);
+    assert.equal(adapter.getBlockedToolName(expected.event), expected.blocked);
+
+    assert.equal(push.mock.callCount(), 0);
+    assert.equal(parse.mock.callCount(), 0);
+    assert.equal(now.mock.callCount(), 0);
+    assert.deepEqual(blockedNames, []);
+    assert.deepEqual(expected.event, eventBefore);
+    assert.deepEqual(adapter.message, message);
+    assert.equal(adapter.isCompleted(), true);
+  });
 }
 
 describe("AgyEventAdapter", () => {

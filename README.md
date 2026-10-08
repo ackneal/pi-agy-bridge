@@ -83,7 +83,9 @@ The bridge reports token usage from the latest model request, not the conversati
 
 Cancelling a request stops its Antigravity CLI process and closes the MCP connection. If the process does not initialize within 30 seconds, the bridge terminates it and reports an error to Pi.
 
-Input-stream failures and unexpected exits during an active request are also reported as errors, rather than leaving Pi waiting for a response.
+Errors returned by Antigravity CLI, such as quota limits, do not by themselves reset the conversation when no tool calls are pending and Pi history still matches. You can select another Antigravity model and retry; the bridge attempts to resume the same conversation. The bridge does not automatically resend the failed request.
+
+Input-stream failures, unexpected exits during an active request, invalid tool-result batches, MCP delivery failures, and blocked native tools invalidate the saved conversation reference. AGY terminal results or cancellation with pending tool calls also invalidate it. Checkpoints saved while tools are pending cannot be restored after a restart. The next request rebuilds context from Pi history.
 
 ## Troubleshooting
 

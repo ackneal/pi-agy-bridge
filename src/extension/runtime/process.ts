@@ -5,6 +5,8 @@ import { AgyProcessError, type AgyEvent, type AgyInitEvent, type AgyInput } from
 import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "./version.ts";
 
+export type AgyEventSource = "agy" | "runtime";
+
 export interface AgyProcessOptions {
   agyPath?: string | undefined;
   agentName: string;
@@ -21,7 +23,7 @@ export class AgyRuntime {
   public readonly options: AgyProcessOptions;
   private child: ChildProcess | null = null;
   private parser: AgyProtocolParser;
-  private listeners = new Set<(event: AgyEvent) => void>();
+  private listeners = new Set<(event: AgyEvent, source: AgyEventSource) => void>();
   private eventWaiters = new Set<() => void>();
   private eventStreamEnded = false;
   private stderrBuffer = "";
@@ -149,7 +151,7 @@ export class AgyRuntime {
         const awaitingInit = !settled;
         settled = true;
         if (!awaitingInit && !this.hasTurnResult) {
-          this.dispatchEvent({ event: "result", status: "error", error: { message: error.message } });
+          this.dispatchEvent({ event: "result", status: "error", error: { message: error.message } }, "runtime");
         }
 
         const cleanup = this.abort();
@@ -196,7 +198,7 @@ export class AgyRuntime {
           error: {
             message: `Antigravity CLI process terminated unexpectedly (exit code ${code ?? "null"}, signal ${signal ?? "none"})${detail}`,
           },
-        });
+        }, "runtime");
       };
 
       const onError = (err: Error) => {
@@ -224,7 +226,7 @@ export class AgyRuntime {
           error: {
             message: `Antigravity CLI process error: ${err.message}`,
           },
-        });
+        }, "runtime");
       };
 
       // close follows stdout end, so buffered results settle before termination.
@@ -304,7 +306,7 @@ export class AgyRuntime {
     }
   }
 
-  public onEvent(listener: (event: AgyEvent) => void): () => void {
+  public onEvent(listener: (event: AgyEvent, source: AgyEventSource) => void): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
@@ -366,13 +368,13 @@ export class AgyRuntime {
     this.eventWaiters.clear();
   }
 
-  private dispatchEvent(event: AgyEvent): void {
+  private dispatchEvent(event: AgyEvent, source: AgyEventSource = "agy"): void {
     if (event.event === "result") this.hasTurnResult = true;
     for (const wake of this.eventWaiters) wake();
 
     for (const listener of this.listeners) {
       try {
-        listener(event);
+        listener(event, source);
       } catch (err) {
         debugLog("process", "Error in event listener:", err);
       }

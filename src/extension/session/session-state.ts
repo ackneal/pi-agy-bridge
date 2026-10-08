@@ -13,6 +13,7 @@ export interface AgyRuntimeSessionRef {
   historyHash?: string;
   historyLength?: number;
   historyFormat?: string;
+  hasPendingCalls?: boolean;
 }
 
 export class RuntimeSessionStore {
@@ -45,6 +46,7 @@ export class RuntimeSessionStore {
       ...(typeof entry.data.historyFormat === "string" ? { historyFormat: entry.data.historyFormat } : {}),
       ...(typeof entry.data.historyHash === "string" ? { historyHash: entry.data.historyHash } : {}),
       ...(typeof entry.data.historyLength === "number" ? { historyLength: entry.data.historyLength } : {}),
+      ...(typeof entry.data.hasPendingCalls === "boolean" ? { hasPendingCalls: entry.data.hasPendingCalls } : {}),
     };
   }
 
@@ -57,15 +59,20 @@ export class RuntimeSessionStore {
     const sessionManager = this.requireSessionManager(piSessionId);
     const historyHash = hashHistory(canonicalHistory);
     const historyLength = canonicalHistory.length;
+    const pendingMetadata = typeof ref.hasPendingCalls === "boolean" ? { hasPendingCalls: ref.hasPendingCalls } : {};
     const syncedEntryId = sessionManager.appendCustomEntry(ENTRY_TYPE, {
       conversationId: ref.conversationId,
       ...(loginEpoch ? { loginEpoch } : {}),
       historyHash,
       historyLength,
       historyFormat: HISTORY_FORMAT,
+      ...pendingMetadata,
     });
 
-    return { conversationId: ref.conversationId, syncedEntryId, historyHash, historyLength, historyFormat: HISTORY_FORMAT };
+    return {
+      conversationId: ref.conversationId, syncedEntryId, historyHash, historyLength, historyFormat: HISTORY_FORMAT,
+      ...pendingMetadata,
+    };
   }
 
   public async delete(piSessionId: string): Promise<void> {
@@ -233,6 +240,13 @@ export class RuntimeSessionSync {
     ref: AgyRuntimeSessionRef,
     input: RuntimeSessionSyncInput
   ): boolean {
+    if (ref.hasPendingCalls === true) return false;
+
+    // Legacy checkpoints ending in toolUse may still belong to a now-lost broker.
+    const lastMessage = input.canonicalHistory[(ref.historyLength ?? 0) - 1];
+    if (ref.hasPendingCalls === undefined && isRecord(lastMessage) &&
+      lastMessage.role === "assistant" && lastMessage.stopReason === "toolUse") return false;
+
     return (
       this.matchesConversationId(ref.conversationId, input.conversationId) &&
       historyMatches(ref, input.canonicalHistory) &&

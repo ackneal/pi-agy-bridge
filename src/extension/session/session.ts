@@ -91,24 +91,54 @@ export class LiveSession {
   public turnIndex: number = 0;
   public conversationId: string | undefined;
   public readonly resources = new SessionResources();
+  private unsubscribeRuntimeEvents: (() => void) | null = null;
   private abortSignal: AbortSignal | null = null;
   private abortListener: (() => void) | null = null;
+  private preparationId: symbol | undefined;
 
   constructor(piSessionId: string) {
     this.piSessionId = piSessionId;
+  }
+
+  public beginPreparation(): symbol {
+    const preparationId = Symbol();
+    this.preparationId = preparationId;
+    return preparationId;
+  }
+
+  public ownsPreparation(token: symbol): boolean {
+    return this.preparationId === token;
+  }
+
+  public releasePreparation(token: symbol): void {
+    if (this.ownsPreparation(token)) this.preparationId = undefined;
   }
 
   public setSession(
     process: AgyRuntime,
     syncKey: string,
     mcpServer?: BridgeIPC,
-    conversationId?: string
-  ): void {
+    conversationId?: string,
+    preparationId?: symbol
+  ): boolean {
+    if (preparationId !== undefined && !this.ownsPreparation(preparationId)) return false;
+
     this.activeProcess = process;
     this.activeMcpServer = mcpServer ?? null;
     this.syncKey = syncKey;
     this.turnIndex = 0;
     this.conversationId = conversationId;
+    return true;
+  }
+
+  public setRuntimeEventHandler(handler: Parameters<AgyRuntime["onEvent"]>[0] | null): void {
+    const unsubscribe = this.unsubscribeRuntimeEvents;
+    this.unsubscribeRuntimeEvents = null;
+    unsubscribe?.();
+
+    if (handler && this.activeProcess) {
+      this.unsubscribeRuntimeEvents = this.activeProcess.onEvent(handler);
+    }
   }
 
   public setAbortSignal(signal: AbortSignal | undefined, onAbort: () => void): void {
@@ -132,7 +162,13 @@ export class LiveSession {
     this.turnIndex++;
   }
 
-  public async dispose(options?: { preserveResources?: boolean }): Promise<void> {
+  public async dispose(options?: { preserveResources?: boolean; preparationId?: symbol }): Promise<void> {
+    if (options?.preparationId !== undefined) {
+      if (!this.ownsPreparation(options.preparationId)) return;
+    } else {
+      this.preparationId = undefined;
+    }
+
     const proc = this.activeProcess;
     const mcpServer = this.activeMcpServer;
 
@@ -142,6 +178,7 @@ export class LiveSession {
     this.turnIndex = 0;
     this.conversationId = undefined;
     this.clearAbortSignal();
+    this.setRuntimeEventHandler(null);
     if (!options?.preserveResources) this.resources.disposeAll();
 
     if (mcpServer) {

@@ -14,7 +14,7 @@ import { getCurrentTools, isModelType, normalizeContext } from "@earendil-works/
 import { PiEventAdapter } from "../runtime/events.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
-import type { PiToolCallBatch } from "../bridge/capabilities.ts";
+import { AgyTurn } from "./turn.ts";
 import {
   LiveSessionRegistry,
   PiContextAdapter,
@@ -189,10 +189,19 @@ async function prepareRuntime(
   options: SimpleStreamOptions | undefined,
   config: AgyBridgeConfig | undefined,
   bridge: AgyBridge,
-  liveSession: LiveSession
+  liveSession: LiveSession,
+  selection: ReturnType<typeof resolveModelAndEffort>,
+  preparationId: symbol,
 ): Promise<{ proc: AgyRuntime; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
-  options?.signal?.throwIfAborted();
-  const { baseModel, effort } = resolveModelAndEffort(model.id, options, model.thinkingLevelMap);
+  const checkPreparation = () => {
+    options?.signal?.throwIfAborted();
+    if (!liveSession.ownsPreparation(preparationId)) {
+      throw new Error("Antigravity CLI runtime preparation was superseded");
+    }
+  };
+  checkPreparation();
+
+  const { baseModel, effort } = selection;
   const agentName = config?.agentName ?? "pi-bridge";
   const toolSyncValues = tools.map((tool) => JSON.stringify({
     name: tool.name,
@@ -206,7 +215,7 @@ async function prepareRuntime(
   const rawPluginDir = config?.pluginDir ?? config?.agentDir;
   const pluginDir = rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR;
   const runtimeRef = await bridge.runtimeSessionStore.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH);
-  options?.signal?.throwIfAborted();
+  checkPreparation();
   const decision = bridge.runtimeSessionSync.decide(liveSession, {
     syncKey,
     turnIndex,
@@ -254,9 +263,11 @@ async function prepareRuntime(
   });
   await liveSession.dispose({
     preserveResources: decision.action === "resume" && decision.conversationId === liveSession.conversationId,
+    preparationId,
   });
+  checkPreparation();
   await validateAgyVersion(config?.agyPath, config?.minVersion);
-  options?.signal?.throwIfAborted();
+  checkPreparation();
 
   const startRuntime = async (conversationId?: string) => {
     const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
@@ -267,11 +278,11 @@ async function prepareRuntime(
     };
     options?.signal?.addEventListener("abort", abortStartup, { once: true });
     try {
-      options?.signal?.throwIfAborted();
+      checkPreparation();
       await mcpServer.start();
-      options?.signal?.throwIfAborted();
+      checkPreparation();
       await bridge.ensureAgyPluginInstalled(pluginDir);
-      options?.signal?.throwIfAborted();
+      checkPreparation();
       proc = new AgyRuntime({
         agyPath: config?.agyPath,
         agentName,
@@ -281,13 +292,17 @@ async function prepareRuntime(
         environment: mcpServer.processEnvironment,
       });
       const initEvent = await proc.start();
+      checkPreparation();
       debugLog("register", "Antigravity CLI init conversation id:", initEvent.conversation_id);
       if (conversationId && initEvent.conversation_id !== conversationId) {
         throw new Error("Antigravity CLI did not restore the requested conversation");
       }
       await mcpServer.waitForConnection();
-      options?.signal?.throwIfAborted();
-      liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id);
+      checkPreparation();
+      if (!proc.isRunning) throw new Error("Antigravity CLI exited before input delivery");
+      if (!liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id, preparationId)) {
+        throw new Error("Antigravity CLI runtime preparation was superseded");
+      }
       liveSession.turnIndex = turnIndex;
       return { proc, mcpServer, modelId: model.id };
     } catch (error) {
@@ -310,7 +325,7 @@ async function prepareRuntime(
     try {
       return { ...await startRuntime(decision.conversationId), reconstructContext: false };
     } catch (error) {
-      options?.signal?.throwIfAborted();
+      checkPreparation();
       debugLog("session", "Conversation resume failed before input delivery; rebuilding once", {
         conversationId: decision.conversationId,
         error: error instanceof Error ? error.message : String(error),
@@ -318,6 +333,7 @@ async function prepareRuntime(
       await bridge.runtimeSessionStore.delete(liveSession.piSessionId).catch((failure) => {
         debugLog("session", "Could not invalidate rejected conversation reference:", failure);
       });
+      checkPreparation();
       liveSession.resources.disposeAll();
     }
   }
@@ -344,9 +360,6 @@ export function streamAgyProvider(
     provider: model.provider ?? "agy",
     allowedToolNames: bridgeToolNameSet,
     bridgeToolCallsExternally: true,
-    onBlockedTool: () => {
-      queueMicrotask(() => void liveSession.dispose());
-    },
   });
   const stream = adapter.stream;
 
@@ -361,98 +374,34 @@ export function streamAgyProvider(
     return stream;
   }
 
+  let selection: ReturnType<typeof resolveModelAndEffort>;
+  try {
+    selection = resolveModelAndEffort(model.id, options, model.thinkingLevelMap);
+  } catch (error) {
+    adapter.handleTermination("error", error instanceof Error ? error.message : String(error));
+    return stream;
+  }
+
   const liveSession = bridge.liveSessions.getOrCreate(piSessionId);
+  const preparationId = liveSession.beginPreparation();
+  const turn = new AgyTurn({
+    session: liveSession,
+    adapter,
+    context,
+    sync: bridge.runtimeSessionSync,
+    store: bridge.runtimeSessionStore,
+    preparationId,
+    signal: options?.signal,
+    loginEpoch: options?.env?.AGY_BRIDGE_LOGIN_EPOCH,
+  });
 
   (async () => {
-    let unsubscribe: (() => void) | null = null;
-    let turnCounted = false;
-    let mcpServer: BridgeIPC | null = null;
-
-    const cleanup = () => {
-      if (unsubscribe) {
-        unsubscribe();
-        unsubscribe = null;
-      }
-    };
-
-    const completeTurn = () => {
-      if (!adapter.isCompleted() || turnCounted) return;
-
-      turnCounted = true;
-      debugArtifact("assistant-message", { sessionId: liveSession.piSessionId, message: adapter.message });
-      if (adapter.message.stopReason === "error") {
-        mcpServer?.setToolCallHandler(null);
-        cleanup();
-
-        // Both methods invalidate state synchronously before their asynchronous cleanup.
-        // Do not let the next Pi turn resume a conversation that just failed.
-        void bridge.runtimeSessionStore.delete(liveSession.piSessionId).catch((error) => {
-          debugLog("session", "Could not invalidate failed AGY runtime reference:", error);
-        });
-        void liveSession.dispose().catch((error) => {
-          debugLog("session", "Could not dispose failed AGY runtime:", error);
-        });
-        return;
-      }
-
-      const responseId = adapter.message.responseId;
-      if (!liveSession.conversationId && typeof responseId === "string" && responseId.length > 0) {
-        liveSession.conversationId = responseId;
-      }
-      bridge.runtimeSessionSync.record(liveSession, context.messages, adapter.message);
-      liveSession.incrementTurn();
-      if (liveSession.conversationId) {
-        void bridge.runtimeSessionStore.set(liveSession.piSessionId, {
-          conversationId: liveSession.conversationId,
-        }, [...context.messages, adapter.message], options?.env?.AGY_BRIDGE_LOGIN_EPOCH).catch((error) => {
-          debugLog("session", "Could not persist Antigravity CLI runtime reference:", error);
-        });
-      }
-      mcpServer?.setToolCallHandler(null);
-      cleanup();
-
-      if (!mcpServer?.hasPendingCalls) {
-        liveSession.clearAbortSignal();
-      }
-    };
-
     try {
-      const runtime = await prepareRuntime(model, context, tools, options, config, bridge, liveSession);
-      const proc = runtime.proc;
-      mcpServer = runtime.mcpServer;
+      const runtime = await prepareRuntime(model, context, tools, options, config, bridge, liveSession, selection, preparationId);
+      const mcpServer = runtime.mcpServer;
       adapter.setModel(runtime.modelId);
-
-      mcpServer.setTransportFailureHandler((error) => {
-        if (liveSession.activeMcpServer !== runtime.mcpServer || liveSession.activeProcess !== proc) return;
-
-        cleanup();
-        adapter.handleTermination("error", error.message);
-        // This hook stays owned by the runtime across completed toolUse turns.
-        void bridge.runtimeSessionStore.delete(liveSession.piSessionId).catch((failure) => {
-          debugLog("session", "Could not invalidate failed MCP runtime reference:", failure);
-        });
-        void liveSession.dispose().catch((failure) => {
-          debugLog("session", "Could not dispose failed MCP runtime:", failure);
-        });
-      });
+      turn.attach(runtime);
       if (adapter.isCompleted()) return;
-
-      unsubscribe = proc.onEvent((event) => {
-        adapter.handleEvent(event);
-        completeTurn();
-      });
-
-      liveSession.setAbortSignal(options?.signal, () => {
-        cleanup();
-        adapter.handleTermination("aborted", "Request aborted by user");
-        void liveSession.dispose();
-      });
-
-      const handleToolCalls = (batch: PiToolCallBatch) => {
-        adapter.handleBridgeToolCalls(batch.calls);
-        completeTurn();
-        batch.complete();
-      };
 
       const syncedMessageCount = runtime.reconstructContext ? 0 :
         bridge.runtimeSessionSync.getSyncedMessageCount(liveSession) ?? Math.max(0, context.messages.length - 1);
@@ -472,15 +421,10 @@ export function streamAgyProvider(
         throw new Error("Some appended Pi tool results were not enqueued for the MCP broker; history was not marked synchronized");
       }
       if (enqueuedToolResults > 0) {
-        bridge.runtimeSessionSync.record(liveSession, context.messages);
-        if (liveSession.conversationId) {
-          await bridge.runtimeSessionStore.set(liveSession.piSessionId, {
-            conversationId: liveSession.conversationId,
-          }, context.messages, options?.env?.AGY_BRIDGE_LOGIN_EPOCH);
-        }
+        await turn.recordAcceptedContext();
         // Installing a handler can immediately dispatch calls queued during the
         // preceding Pi turn. Record its results before opening the next batch.
-        if (!adapter.isCompleted()) mcpServer.setToolCallHandler(handleToolCalls);
+        turn.openToolDispatch();
         return;
       }
 
@@ -488,7 +432,7 @@ export function streamAgyProvider(
         throw new Error("Antigravity CLI is waiting for Pi tool results, but no matching result was returned");
       }
 
-      mcpServer.setToolCallHandler(handleToolCalls);
+      turn.openToolDispatch();
 
       let prompt = formatContextPrompt(context, !runtime.reconstructContext, syncedMessageCount);
       if (options?.onPayload) {
@@ -503,25 +447,15 @@ export function streamAgyProvider(
         }
       }
 
-      options?.signal?.throwIfAborted();
-
       debugArtifact("agy-payload", {
         sessionId: piSessionId,
         conversationId: liveSession.conversationId,
         reconstructContext: runtime.reconstructContext,
         prompt,
       });
-      await proc.send({ event: "user", message: { content: prompt } });
-    } catch (err) {
-      cleanup();
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      debugLog("register", "Turn execution failed:", errorMsg);
-      adapter.handleTermination(options?.signal?.aborted ? "aborted" : "error", errorMsg);
-      if (adapter.message.stopReason === "error") {
-        completeTurn();
-      } else {
-        await liveSession.dispose();
-      }
+      await turn.send({ event: "user", message: { content: prompt } });
+    } catch (error) {
+      turn.fail(error);
     }
   })().catch((error) => {
     debugLog("session", "AGY turn cleanup failed:", error);

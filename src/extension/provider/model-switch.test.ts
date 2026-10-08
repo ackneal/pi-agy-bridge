@@ -8,7 +8,7 @@ import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-age
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
-import type { AgyEvent, AgyInput } from "../shared/types.ts";
+import type { AgyInput } from "../shared/types.ts";
 import { AgyBridge, streamAgyProvider } from "./provider.ts";
 
 type ModelSwitchCase = {
@@ -19,8 +19,10 @@ type ModelSwitchCase = {
     foreignHistory: boolean;
     pending: boolean;
     selectedModel: "gemini" | "claude";
-    startup: "success" | "reject" | "waitReject" | "mismatch" | "abort" | "fallbackReject";
+    startup: "success" | "reject" | "waitReject" | "dead" | "mismatch" | "abort" | "fallbackReject";
     sendFails: boolean;
+    priorError?: string;
+    omitPriorError?: boolean;
   };
   expected: {
     terminal: "error" | "aborted";
@@ -134,10 +136,51 @@ const cases: ModelSwitchCase[] = [
     },
   },
   {
+    name: "after-quota resume rejects and reconstructs failed history once",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "reject", sendFails: false,
+      priorError: "Individual quota reached. Resets in 3h27m34s.",
+    },
+    expected: {
+      terminal: "done", starts: 2, sends: 1, waits: 1,
+      model: "claude", runtimeConversation: undefined,
+      responseId: "fresh-conversation", preservesTerminal: false,
+      continuation: { kind: "prompt", reconstructed: true, fallback: true },
+    },
+  },
+  {
+    name: "Pi recovery projection removes the failed assistant",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+      priorError: "Rate limit exceeded", omitPriorError: true,
+    },
+    expected: {
+      terminal: "done", starts: 1, sends: 1, waits: 1,
+      model: "claude", runtimeConversation: undefined,
+      responseId: "fresh-conversation", preservesTerminal: false,
+      continuation: { kind: "prompt", reconstructed: true, fallback: false },
+    },
+  },
+  {
     name: "resume wait rejects",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
       pending: false, selectedModel: "claude", startup: "waitReject", sendFails: false,
+    },
+    expected: {
+      terminal: "done", starts: 2, sends: 1, waits: 2,
+      model: "claude", runtimeConversation: undefined,
+      responseId: "fresh-conversation", preservesTerminal: false,
+      continuation: { kind: "prompt", reconstructed: true, fallback: true },
+    },
+  },
+  {
+    name: "resume exits between init and MCP connection",
+    arrange: {
+      persisted: true, conversationId: "same-conversation", foreignHistory: false,
+      pending: false, selectedModel: "claude", startup: "dead", sendFails: false,
     },
     expected: {
       terminal: "done", starts: 2, sends: 1, waits: 2,
@@ -221,7 +264,8 @@ for (const { name, arrange, expected } of cases) {
     const selected = model(arrange.selectedModel);
     const assistant: AssistantMessage = {
       role: "assistant", content: [{ type: "text", text: "previous answer" }], api: "agy", provider: "agy",
-      model: gemini.id, responseId: "same-conversation", stopReason: "stop", timestamp: 2,
+      model: gemini.id, responseId: "same-conversation", stopReason: arrange.priorError ? "error" : "stop", timestamp: 2,
+      ...(arrange.priorError ? { errorMessage: arrange.priorError } : {}),
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     };
@@ -234,6 +278,7 @@ for (const { name, arrange, expected } of cases) {
     bridge.runtimeSessionSync.record(session, prefix);
     assistant.responseId = arrange.conversationId;
     if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { conversationId: arrange.conversationId }, prefix);
+    if (arrange.omitPriorError) prefix.splice(1, 1);
     if (arrange.foreignHistory) {
       const { responseId: _responseId, ...foreignAssistant } = assistant;
       prefix.push({ role: "user", content: "foreign question", timestamp: 3 }, {
@@ -252,16 +297,16 @@ for (const { name, arrange, expected } of cases) {
       ? { role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 5 }
       : { role: "user", content: "new request", timestamp: 5 }] };
     const controller = new AbortController();
-    const listeners = new Map<AgyRuntime, (event: AgyEvent) => void>();
+    const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
     const lifecycle: string[] = [];
-    t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
+    let attempts = 0;
+    t.mock.getter(AgyRuntime.prototype, "isRunning", () => arrange.startup !== "dead" || attempts !== 1);
     t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp && pending; });
     t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
     t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
     t.mock.method(BridgeIPC.prototype, "start", async () => {});
     t.mock.method(BridgeIPC.prototype, "close", async () => { lifecycle.push("close"); });
     t.mock.method(AgyRuntime.prototype, "abort", async () => { lifecycle.push("abort"); });
-    let attempts = 0;
     const start = t.mock.method(AgyRuntime.prototype, "start", async function (this: AgyRuntime) {
       attempts++;
       lifecycle.push(`start:${this.options.conversationId ?? "fresh"}`);
@@ -276,15 +321,15 @@ for (const { name, arrange, expected } of cases) {
     const wait = t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {
       if (attempts === 1 && arrange.startup === "waitReject") throw new Error("connection rejected");
     });
-    t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: (event: AgyEvent) => void) {
+    t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
       listeners.set(this, listener);
       return () => { listeners.delete(this); };
     });
     const finish = (proc: AgyRuntime) => {
       const listener = listeners.get(proc);
       assert.ok(listener, "subscribe before delivering runtime results");
-      listener({ event: "step_update", delta: "finished" });
-      listener({ event: "result", status: "success", conversation_id: proc === oldProc ? "same-conversation" : session.conversationId! });
+      listener({ event: "step_update", delta: "finished" }, "agy");
+      listener({ event: "result", status: "success", conversation_id: proc === oldProc ? "same-conversation" : session.conversationId! }, "agy");
     };
     const send = t.mock.method(AgyRuntime.prototype, "send", async function (this: AgyRuntime, _input: AgyInput) {
       if (arrange.sendFails) throw new Error("active turn failed");
@@ -355,6 +400,10 @@ for (const { name, arrange, expected } of cases) {
       assert.equal(reconstructed.history.length, prefix.length);
       assert.equal(reconstructed.currentMessage.content, "new request");
       if (arrange.foreignHistory) assert.match(prompt, /foreign answer/);
+      if (arrange.omitPriorError) assert.equal(prompt.includes(arrange.priorError!), false);
+      else if (arrange.priorError) assert.deepEqual(reconstructed.history[1], {
+        role: "assistant", content: assistant.content, stopReason: "error", errorMessage: arrange.priorError,
+      });
     } else assert.equal(prompt, "new request");
     if (expected.continuation.fallback) assert.deepEqual(lifecycle.slice(0, 6), ["close", "abort", "start:same-conversation", "close", "abort", "start:fresh"]);
   });

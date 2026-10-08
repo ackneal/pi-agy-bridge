@@ -87,6 +87,15 @@ export class PiEventAdapter {
     return this.snapshot();
   }
 
+  public getBlockedToolName(event: AgyEvent): string | undefined {
+    if (event.event !== "step_update") return undefined;
+
+    const update = event as AgyStepUpdateEvent;
+    const step = { ...update.step_update, ...update };
+    const tool = this.selectToolName(step);
+    return tool === null ? undefined : this.getBlockedAgyToolName(tool.name);
+  }
+
   public handleEvent(event: AgyEvent): void {
     if (this.completed) {
       debugLog("events", `Ignoring event after stream completed: ${event.event}`);
@@ -199,12 +208,17 @@ export class PiEventAdapter {
       this.appendTextDelta(deltaText);
     }
 
-    const toolCall = this.extractToolCall(step);
-    if (toolCall !== null) {
+    const tool = this.selectToolName(step);
+    if (tool !== null) {
+      const blockedTool = this.getBlockedAgyToolName(tool.name);
+      if (blockedTool !== undefined) {
+        this.blockTool(blockedTool);
+        return;
+      }
+
+      const toolCall = this.extractToolCall(step, tool.name as string);
       if (AGY_INTERNAL_TOOL_NAMES.has(toolCall.name)) {
         debugLog("events", `Allowing Antigravity CLI internal coordination tool: ${toolCall.name}`);
-      } else if (!this.isAllowedAgyTool(toolCall.name)) {
-        this.blockTool(toolCall.name);
       } else if (this.bridgeToolCallsExternally) {
         debugLog("events", `Waiting for MCP bridge to relay tool call: ${toolCall.name}`);
       } else {
@@ -289,7 +303,28 @@ export class PiEventAdapter {
     }
   }
 
-  private extractToolCall(step: AgyStepUpdateEvent): ToolCall | null {
+  private selectToolName(step: AgyStepUpdateEvent): { name: unknown } | null {
+    // A nested call owns its name, even when malformed; never use a flat fallback.
+    if (step.tool_call) return { name: step.tool_call.name };
+
+    const stepType = step.update_type ?? step.type ?? step.step_type;
+    if (stepType !== "tool") return null;
+    if ("tool_name" in step) return { name: step.tool_name };
+    if ("name" in step) return { name: step["name"] };
+
+    return null;
+  }
+
+  private getBlockedAgyToolName(name: unknown): string | undefined {
+    if (name === undefined) return "<unnamed>";
+    if (typeof name !== "string") return String(name);
+    if (name.length === 0) return name;
+    if (AGY_INTERNAL_TOOL_NAMES.has(name) || this.isAllowedAgyTool(name)) return undefined;
+
+    return name;
+  }
+
+  private extractToolCall(step: AgyStepUpdateEvent, name: string): ToolCall {
     if (step.tool_call) {
       const tc = step.tool_call;
       const args = typeof tc.arguments === "string"
@@ -299,27 +334,21 @@ export class PiEventAdapter {
       return {
         type: "toolCall",
         id: tc.id || `call_${Date.now()}_${++this.toolCallCount}`,
-        name: tc.name,
-        arguments: args as JsonObject,
-      };
-    }
-
-    const stepType = step.update_type ?? step.type ?? step.step_type;
-    if (stepType === "tool" && (step.tool_name || step["name"])) {
-      const name = (step.tool_name ?? step["name"]) as string;
-      const id = (step.call_id ?? (step as Record<string, unknown>)["id"] ?? `call_${Date.now()}_${++this.toolCallCount}`) as string;
-      const rawInput = step.tool_input ?? step["input"] ?? step["arguments"] ?? {};
-      const args = typeof rawInput === "string" ? this.safeParseJson(rawInput) : rawInput;
-
-      return {
-        type: "toolCall",
-        id,
         name,
         arguments: args as JsonObject,
       };
     }
 
-    return null;
+    const id = (step.call_id ?? step["id"] ?? `call_${Date.now()}_${++this.toolCallCount}`) as string;
+    const rawInput = step.tool_input ?? step["input"] ?? step["arguments"] ?? {};
+    const args = typeof rawInput === "string" ? this.safeParseJson(rawInput) : rawInput;
+
+    return {
+      type: "toolCall",
+      id,
+      name,
+      arguments: args as JsonObject,
+    };
   }
 
   private appendToolCall(toolCall: ToolCall): void {
