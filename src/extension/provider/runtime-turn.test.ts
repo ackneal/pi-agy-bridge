@@ -129,8 +129,11 @@ for (const { decision, incremental, payload } of cases) {
     assert.equal(send.mock.callCount(), 1);
     assert.equal(unsubscribe.mock.callCount(), 1);
     assert.equal(listeners.size, 0);
-    assert.equal(liveSession.turnIndex, 1);
+    const completed = events.at(-1);
+    assert.ok(completed?.type === "done");
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(liveSession), context.messages.length + 1);
     assert.equal(persist.mock.callCount(), 1);
+    assert.deepEqual(persist.mock.calls[0]!.arguments[2], [...context.messages, completed.message]);
     const starts = decision.action === "continue" ? 0 : 1;
     assert.equal(startProc.mock.callCount(), starts);
     assert.equal(startBridge.mock.callCount(), starts);
@@ -168,22 +171,139 @@ for (const { decision, incremental, payload } of cases) {
   });
 }
 
+const invalidBatchCases = [
+  {
+    name: "unknown result after a valid result",
+    results: (ids: string[]) => [ids[0]!, "unknown-call"],
+    error: (_ids: string[]) => "Unknown tool result ID: unknown-call",
+  },
+  {
+    name: "missing result from a dispatched batch",
+    results: (ids: string[]) => [ids[0]!],
+    error: (ids: string[]) => `Missing tool result ID: ${ids[1]}`,
+  },
+  {
+    name: "duplicate result in a malformed batch",
+    results: (ids: string[]) => [ids[0]!, ids[0]!],
+    error: (ids: string[]) => `Duplicate tool result ID: ${ids[0]}`,
+  },
+];
+
+for (const row of invalidBatchCases) {
+  test(`streamAgyProvider invalidates ${row.name} through real gateway validation`, { timeout: 5000 }, async (t) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "agy-invalid-batch-"));
+    const pi = {
+      on: () => {}, registerProvider: () => {}, registerCommand: () => {},
+      getActiveTools: () => [], getAllTools: () => [],
+    } as unknown as ExtensionAPI;
+    const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
+    const bridge = new AgyBridge(pi, config);
+    t.after(async () => {
+      try {
+        await bridge.liveSessions.disposeAll();
+      } finally {
+        t.mock.restoreAll();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+    await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
+    const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
+    const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
+    const send = t.mock.method(AgyRuntime.prototype, "send", async () => {});
+    let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
+    t.mock.method(AgyRuntime.prototype, "onEvent", (callback: Parameters<AgyRuntime["onEvent"]>[0]) => {
+      listener = callback;
+      return () => { listener = undefined; };
+    });
+    t.mock.method(bridge.runtimeSessionSync, "decide", () => ({ action: "continue" }) as RuntimeSessionDecision);
+    bridge.start();
+    const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(directory));
+    const session = bridge.liveSessions.getOrCreate(sessionId);
+    const proc = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+    session.setSession(proc, "old-sync-key", new BridgeIPC([], session.id, session.resources), "old-conversation");
+    const gateway = new CapabilityGateway([
+      { name: "test-tool", description: "test", parameters: { type: "object", properties: {} } },
+    ], session.resources);
+    t.after(() => gateway.cancelPendingCalls("test cleanup"));
+    const ids: string[] = [];
+    gateway.setToolCallHandler((batch) => {
+      ids.push(...batch.calls.map((call) => call.id));
+      batch.complete();
+    });
+    let delivered = 0;
+    const pendingResults = [gateway.call("test-tool", {}), gateway.call("test-tool", {})]
+      .map((result) => result.then((value) => { delivered++; return value; }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(ids.length, 2);
+    t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", () => gateway.hasPendingCalls);
+    const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", (messages: Context["messages"], appendix?: string) => {
+      assert.ok(listener, "subscribe before validating the batch");
+      return gateway.resolveToolResults(messages, appendix);
+    });
+    const context: Context = {
+      tools: [], messages: row.results(ids).map((toolCallId) => ({
+        role: "toolResult", toolCallId, toolName: "test-tool",
+        content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 2,
+      })),
+    };
+    bridge.runtimeSessionSync.record(session, []);
+    await bridge.runtimeSessionStore.set(sessionId, { conversationId: "old-conversation", hasPendingCalls: true }, []);
+    const record = t.mock.method(bridge.runtimeSessionSync, "record", bridge.runtimeSessionSync.record.bind(bridge.runtimeSessionSync));
+    const persist = t.mock.method(bridge.runtimeSessionStore, "set", bridge.runtimeSessionStore.set.bind(bridge.runtimeSessionStore));
+    const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
+    const model = {
+      id: "test-model", name: "Test", api: "agy", provider: "agy", baseUrl: "agy",
+      reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192, maxTokens: 1024,
+    } as Model<any>;
+
+    const events: AssistantMessageEvent[] = [];
+    for await (const event of streamAgyProvider(model, context, { sessionId }, config, bridge)) events.push(event);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const terminal = events.at(-1);
+    assert.ok(terminal?.type === "error");
+    assert.equal(terminal.reason, "error");
+    assert.equal(terminal.error.errorMessage, row.error(ids));
+    assert.equal(resolve.mock.callCount(), 1);
+    assert.deepEqual(resolve.mock.calls[0]!.arguments, [context.messages, undefined]);
+    assert.equal(delivered, 0, "validation must reject the entire batch before delivering even its valid result");
+    assert.equal(gateway.hasPendingCalls, true);
+    assert.equal(send.mock.callCount(), 0);
+    assert.equal(record.mock.callCount(), 0);
+    assert.equal(persist.mock.callCount(), 0);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 0);
+    assert.equal(invalidate.mock.callCount(), 1);
+    assert.deepEqual(invalidate.mock.calls[0]!.arguments, [sessionId]);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId), undefined);
+    assert.equal(session.activeProcess, null);
+    assert.equal(session.activeMcpServer, null);
+    assert.equal(listener, undefined);
+    assert.equal(close.mock.callCount(), 1);
+    assert.equal(abort.mock.callCount(), 1);
+
+    gateway.cancelPendingCalls("test cleanup");
+    assert.ok((await Promise.all(pendingResults)).every((result) => result.isError));
+    await bridge.liveSessions.disposeAll();
+    assert.equal(close.mock.callCount(), 1);
+    assert.equal(abort.mock.callCount(), 1);
+  });
+}
+
 const continueCases = [
-  { scenario: "pending tool results", pending: true, toolResults: true, success: true, reason: "stop", sends: 0, persists: 2, synced: 2 },
-  { scenario: "mixed pending messages", pending: true, toolResults: true, success: true, reason: "stop", sends: 0, persists: 2, synced: 3 },
-  { scenario: "missing result", pending: true, toolResults: false, success: false, reason: "error", sends: 0, persists: 0, synced: 0, error: "Antigravity CLI is waiting for Pi tool results, but no matching result was returned" },
-  { scenario: "unmatched result", pending: true, toolResults: true, success: false, reason: "error", sends: 0, persists: 0, synced: 0, error: "Some appended Pi tool results were not enqueued for the MCP broker; history was not marked synchronized" },
-  { scenario: "resolver exception with malformed fixture content", pending: true, toolResults: true, success: false, reason: "error", sends: 0, persists: 0, synced: 0, error: "resolver rejected malformed fixture content" },
-  { scenario: "resolver exception", pending: true, toolResults: true, success: false, reason: "error", sends: 0, persists: 0, synced: 0, error: "result resolver failed" },
-  { scenario: "MCP write failure followed by quota", pending: true, toolResults: true, success: false, reason: "error", sends: 0, persists: 1, synced: 1, error: "MCP write failed" },
-  { scenario: "transport failure", pending: true, toolResults: true, success: false, reason: "error", sends: 0, persists: 1, synced: 1, error: "MCP write failed" },
-  { scenario: "model error after enqueued results with tools pending", pending: true, toolResults: true, success: false, reason: "error", sends: 0, persists: 1, synced: 1, error: "model error with pending tools" },
-  { scenario: "runtime error after enqueued results with tools pending", pending: true, toolResults: true, success: false, reason: "error", sends: 0, persists: 1, synced: 1, error: "synthetic process failure" },
-  { scenario: "error while tools pending", pending: true, toolResults: false, success: false, reason: "error", sends: 0, persists: 0, synced: 0, error: "model error with pending tools" },
-  { scenario: "blocked native tool", pending: false, toolResults: false, success: false, reason: "error", sends: 1, persists: 0, synced: 0, error: "The model attempted to call an unavailable tool: run_command" },
-  { scenario: "runtime synthetic failure", pending: false, toolResults: false, success: false, reason: "error", sends: 1, persists: 0, synced: 0, error: "synthetic process failure" },
-  { scenario: "abort", pending: false, toolResults: false, success: false, reason: "aborted", sends: 1, persists: 0, synced: 0 },
-  { scenario: "payload abort", pending: false, toolResults: false, success: false, reason: "aborted", sends: 0, persists: 0, synced: 0 },
+  { scenario: "pending tool results", pending: true, toolResults: true, reason: "stop", sends: 0, persists: 2, synced: 2 },
+  { scenario: "mixed pending messages", pending: true, toolResults: true, reason: "stop", sends: 0, persists: 2, synced: 3 },
+  { scenario: "queued calls without results", pending: true, toolResults: false, reason: "error", sends: 0, persists: 0, synced: 0, error: "Antigravity CLI is waiting for Pi tool results, but no matching result was returned" },
+  { scenario: "resolver exception", pending: true, toolResults: true, reason: "error", sends: 0, persists: 0, synced: 0, error: "result resolver failed" },
+  { scenario: "MCP write failure followed by quota", pending: true, toolResults: true, reason: "error", sends: 0, persists: 1, synced: 1, error: "MCP write failed" },
+  { scenario: "transport failure", pending: true, toolResults: true, reason: "error", sends: 0, persists: 1, synced: 1, error: "MCP write failed" },
+  { scenario: "model error after enqueued results with tools pending", pending: true, toolResults: true, reason: "error", sends: 0, persists: 1, synced: 1, error: "model error with pending tools" },
+  { scenario: "runtime error after enqueued results with tools pending", pending: true, toolResults: true, reason: "error", sends: 0, persists: 1, synced: 1, error: "synthetic process failure" },
+  { scenario: "error while tools pending", pending: true, toolResults: false, reason: "error", sends: 0, persists: 0, synced: 0, error: "model error with pending tools" },
+  { scenario: "blocked native tool", pending: false, toolResults: false, reason: "error", sends: 1, persists: 0, synced: 0, error: "The model attempted to call an unavailable tool: run_command" },
+  { scenario: "runtime synthetic failure", pending: false, toolResults: false, reason: "error", sends: 1, persists: 0, synced: 0, error: "synthetic process failure" },
+  { scenario: "abort", pending: false, toolResults: false, reason: "aborted", sends: 1, persists: 0, synced: 0 },
+  { scenario: "payload abort", pending: false, toolResults: false, reason: "aborted", sends: 0, persists: 0, synced: 0 },
 ] as const;
 
 for (const row of continueCases) {
@@ -231,16 +351,11 @@ for (const row of continueCases) {
     const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", (_results: Context["messages"], _appendix?: string) => {
       assert.ok(listener, "provider must subscribe before resolving tool results");
       if (scenario === "resolver exception") throw new Error("result resolver failed");
-      if (scenario === "resolver exception with malformed fixture content") {
-        assert.equal(_results[0]?.role, "toolResult");
-        assert.deepEqual(_results[0]?.content, [{ type: "invalid", text: "bad result" }]);
-        throw new Error("resolver rejected malformed fixture content");
-      }
       if (scenario === "error while tools pending") {
         listener({ event: "result", result: { status: "error", error: "model error with pending tools" } }, "agy");
         return 0;
       }
-      if (["abort", "payload abort", "missing result", "unmatched result"].includes(scenario)) return 0;
+      if (scenario === "queued calls without results") return 0;
       const captured = listener;
       setImmediate(() => {
         if (["transport failure", "MCP write failure followed by quota"].includes(scenario)) {
@@ -255,7 +370,7 @@ for (const row of continueCases) {
           captured({ event: "result", status: "success" }, "agy");
         }
       });
-      return 1;
+      return _results.length;
     });
     t.mock.method(bridge.runtimeSessionSync, "decide", () => ({ action: "continue" }) as RuntimeSessionDecision);
     const restore = t.mock.method(bridge.runtimeSessionStore, "get", async () => undefined);
@@ -273,9 +388,6 @@ for (const row of continueCases) {
       tools: [],
     };
     bridge.runtimeSessionSync.record(session, []);
-    if (scenario === "resolver exception with malformed fixture content") {
-      context.messages[0]!.content = [{ type: "invalid", text: "bad result" }] as unknown as Context["messages"][number]["content"];
-    }
     if (scenario === "mixed pending messages") {
       context.messages.push({ role: "system", content: "new instruction", timestamp: 3 });
     }
@@ -306,31 +418,31 @@ for (const row of continueCases) {
       context.messages.filter((message) => message.role === "toolResult"),
       scenario === "mixed pending messages"
         ? JSON.stringify({ purpose: "pending_tool_continuation", messages: [{ role: "system", content: "new instruction" }] })
-        : ["missing result", "error while tools pending"].includes(scenario)
+        : ["queued calls without results", "error while tools pending"].includes(scenario)
           ? JSON.stringify({ purpose: "pending_tool_continuation", messages: [{ role: "user", content: "latest request" }] })
           : undefined,
     ]);
     assert.equal(unsubscribe.mock.callCount(), 1);
     assert.equal(listener, undefined);
-    if (row.success) {
-      assert.equal(send.mock.callCount(), 0);
+    assert.equal(send.mock.callCount(), row.sends);
+    assert.equal(persist.mock.callCount(), row.persists);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), row.synced);
+    if (row.reason === "stop") {
       assert.equal(events.at(-1)?.type, "done");
       assert.equal(events.some((event) => event.type === "error"), false);
-      assert.equal(session.turnIndex, 1);
-      assert.equal(persist.mock.callCount(), row.persists);
-      assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), row.synced);
+      assert.equal(invalidate.mock.callCount(), 0);
       assert.deepEqual(persist.mock.calls[0]!.arguments, [
         session.piSessionId, { conversationId: "old-conversation", hasPendingCalls: true }, context.messages, "current-login",
       ]);
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "done");
+      assert.equal(terminal.reason, row.reason);
       assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
       assert.equal(persist.mock.calls[1]!.arguments[3], "current-login");
       assert.equal(session.activeProcess, proc);
       assert.equal(close.mock.callCount(), 0);
       assert.equal(abort.mock.callCount(), 0);
     } else {
-      assert.equal(send.mock.callCount(), row.sends);
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "error");
       assert.equal(terminal.reason, row.reason);
@@ -338,17 +450,12 @@ for (const row of continueCases) {
         assert.equal(terminal.error.errorMessage, row.error);
         assert.equal(invalidate.mock.callCount(), 1);
         assert.deepEqual(invalidate.mock.calls[0]!.arguments, [session.piSessionId]);
-        assert.equal(persist.mock.callCount(), row.persists);
-        assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), row.synced);
-        assert.equal(session.turnIndex, 0);
         if (row.persists > 0) {
           assert.deepEqual(persist.mock.calls.at(-1)!.arguments[2], context.messages, "preserve only the accepted-result checkpoint, never a failed infrastructure assistant");
           assert.equal(row.synced, context.messages.length);
         }
       } else {
         assert.equal(invalidate.mock.callCount(), 0, "nonpending user abort does not invalidate a saved reference");
-        assert.equal(persist.mock.callCount(), 0);
-        assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), row.synced);
       }
       assert.equal(session.activeProcess, null);
       assert.equal(session.activeMcpServer, null);
@@ -464,7 +571,6 @@ for (const row of pendingTerminalCases) {
     assert.equal(record.mock.callCount(), row.enqueued ? 1 : 0);
     assert.equal(persist.mock.callCount(), row.enqueued ? 1 : 0);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), row.enqueued ? context.messages.length : 0);
-    assert.equal(session.turnIndex, 0, "do not record or count the terminal assistant");
     if (row.enqueued) {
       assert.deepEqual(record.mock.calls[0]!.arguments, [session, context.messages]);
       assert.deepEqual(persist.mock.calls[0]!.arguments, [sessionId, { conversationId: "old-conversation", hasPendingCalls: true }, context.messages, epoch]);
@@ -544,40 +650,22 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
       ...instructions,
     ] };
     session.setSession(oldProc, calculateSyncKey("Rules", [], "test-model", "", "pi-bridge"), oldMcp, "old-conversation");
-    session.turnIndex = 1;
     bridge.runtimeSessionSync.record(session, prefix);
 
-    const lifecycle: string[] = [];
     const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
     t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
     let pending = true;
     t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp && pending; });
-    t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
-    t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
-    t.mock.method(BridgeIPC.prototype, "start", async () => { lifecycle.push("mcp-start"); });
+    t.mock.method(BridgeIPC.prototype, "start", async () => { throw new Error("unexpected MCP start"); });
     t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {});
-    const close = t.mock.method(BridgeIPC.prototype, "close", async function (this: BridgeIPC) {
-      lifecycle.push(this === oldMcp ? "old-close" : "new-close");
-    });
-    const abort = t.mock.method(AgyRuntime.prototype, "abort", async function (this: AgyRuntime) {
-      lifecycle.push(this === oldProc ? "old-abort" : "new-abort");
-    });
-    const start = t.mock.method(AgyRuntime.prototype, "start", async () => {
-      lifecycle.push("start");
-      return { event: "init", conversation_id: "new-conversation" } as Awaited<ReturnType<AgyRuntime["start"]>>;
-    });
+    const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
+    const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
+    const start = t.mock.method(AgyRuntime.prototype, "start", async () => { throw new Error("unexpected runtime start"); });
     t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
       listeners.set(this, listener);
       return () => { listeners.delete(this); };
     });
-    const send = t.mock.method(AgyRuntime.prototype, "send", async function (this: AgyRuntime, _input: AgyInput) {
-      assert.equal(this, oldProc);
-      lifecycle.push("send");
-      const listener = listeners.get(this);
-      assert.ok(listener);
-      listener({ event: "step_update", delta: "finished" }, "agy");
-      listener({ event: "result", status: "success" }, "agy");
-    });
+    const send = t.mock.method(AgyRuntime.prototype, "send", async () => { throw new Error("pending results must not resend a prompt"); });
 
     const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", function (this: BridgeIPC, _results: Context["messages"], _appendix?: string) {
       assert.equal(this, oldMcp);
@@ -598,7 +686,6 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     const terminal = events.at(-1);
     assert.ok(terminal?.type === "done");
     assert.equal(terminal.reason, "stop");
-    assert.deepEqual(lifecycle, []);
     assert.equal(start.mock.callCount(), 0);
     assert.equal(send.mock.callCount(), 0);
     assert.equal(close.mock.callCount(), 0);
@@ -617,7 +704,6 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     assert.deepEqual(persist.mock.calls[0]!.arguments[2], context.messages);
     assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
-    assert.equal(session.turnIndex, 2);
     assert.equal(listeners.size, 0);
     await bridge.liveSessions.disposeAll();
     assert.equal(close.mock.callCount(), 1);

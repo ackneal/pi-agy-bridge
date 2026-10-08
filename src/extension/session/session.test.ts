@@ -152,7 +152,6 @@ describe("LiveSession", () => {
       const existingMcp = { close: async () => {} } as unknown as AgyMcpServer;
       const replacementMcp = { close: async () => {} } as unknown as AgyMcpServer;
       session.setSession(existing.runtime, "existing-key", existingMcp, "existing-conversation");
-      session.incrementTurn();
       const old = session.beginPreparation();
       const current = session.beginPreparation();
       if (row.token === "released") session.releasePreparation(current);
@@ -168,7 +167,6 @@ describe("LiveSession", () => {
         assert.equal(session.activeProcess, row.installed ? replacement.runtime : existing.runtime);
         assert.equal(session.activeMcpServer, row.installed ? replacementMcp : existingMcp);
         assert.equal(session.syncKey, row.installed ? "replacement-key" : "existing-key");
-        assert.equal(session.turnIndex, row.installed ? 0 : 1);
         assert.equal(session.conversationId, row.installed ? "replacement-conversation" : "existing-conversation");
         assert.equal(session.ownsPreparation(current), row.token !== "released");
       } finally {
@@ -192,7 +190,6 @@ describe("LiveSession", () => {
       session.setSession(mock.runtime, "key", mcp, "conversation");
       session.setRuntimeEventHandler(() => { events.push("event"); });
       session.setAbortSignal(controller.signal, () => { events.push("abort"); });
-      session.incrementTurn();
       const handle = session.resources.terminals.bind("pi-terminal");
       const old = session.beginPreparation();
       if (row.token === "released") session.releasePreparation(old);
@@ -208,7 +205,6 @@ describe("LiveSession", () => {
         assert.equal(session.activeProcess, mock.runtime);
         assert.equal(session.activeMcpServer, mcp);
         assert.equal(session.syncKey, "key");
-        assert.equal(session.turnIndex, 1);
         assert.equal(session.conversationId, "conversation");
         assert.equal(session.resources.terminals.resolve(handle), "pi-terminal");
         assert.equal(mock.subscriptions[0]!.unsubscribeCalls, 0);
@@ -224,8 +220,8 @@ describe("LiveSession", () => {
     const session = new LiveSession("pi-session-a");
     assert.equal(session.piSessionId, "pi-session-a");
     assert.equal(session.activeProcess, null);
+    assert.equal(session.activeMcpServer, null);
     assert.equal(session.syncKey, "");
-    assert.equal(session.turnIndex, 0);
     assert.equal(session.conversationId, undefined);
   });
 
@@ -250,7 +246,6 @@ describe("LiveSession", () => {
       session.setSession(mockProc, "key-123", mockMcpServer, "agy-conversation");
       session.setRuntimeEventHandler(() => {});
       session.setAbortSignal(controller.signal, () => { lifecycle.push("cancel"); });
-      session.incrementTurn();
       const handle = session.resources.terminals.bind("pi-terminal");
       const disposal = session.dispose(row.options);
 
@@ -261,7 +256,6 @@ describe("LiveSession", () => {
         assert.equal(session.activeProcess, null);
         assert.equal(session.activeMcpServer, null);
         assert.equal(session.syncKey, "");
-        assert.equal(session.turnIndex, 0);
         assert.equal(session.conversationId, undefined);
         assert.equal(session.resources.terminals.resolve(handle), row.terminalId);
 
@@ -334,7 +328,6 @@ describe("LiveSession", () => {
         assert.equal(session.setSession(replacement.runtime, "new-key", replacementMcp, "new-conversation", replacementPreparation), true);
         session.setRuntimeEventHandler(() => { events.push("new"); });
         session.setAbortSignal(replacementController.signal, () => { cancellations.push("new"); });
-        session.incrementTurn();
         const replacementHandle = session.resources.terminals.bind("replacement-terminal");
         release();
         await disposal;
@@ -352,7 +345,6 @@ describe("LiveSession", () => {
         assert.equal(session.activeProcess, replacement.runtime);
         assert.equal(session.activeMcpServer, replacementMcp);
         assert.equal(session.syncKey, "new-key");
-        assert.equal(session.turnIndex, 1);
         assert.equal(session.conversationId, "new-conversation");
         assert.equal(session.resources.terminals.resolve(replacementHandle), "replacement-terminal");
       } finally {
@@ -390,15 +382,21 @@ describe("LiveSessionRegistry", () => {
     const sessionA = registry.getOrCreate("pi-session-a");
     const sessionB = registry.getOrCreate("pi-session-b");
 
-    assert.notEqual(sessionA, sessionB);
-    assert.notEqual(sessionA.id, sessionB.id);
-    assert.equal(registry.get("pi-session-a"), sessionA);
-    assert.equal(registry.get("pi-session-b"), sessionB);
+    try {
+      assert.notEqual(sessionA, sessionB);
+      assert.notEqual(sessionA.id, sessionB.id);
+      assert.equal(registry.get("pi-session-a"), sessionA);
+      assert.equal(registry.get("pi-session-b"), sessionB);
+      assert.equal(registry.getOrCreate("pi-session-b"), sessionB);
 
-    await registry.remove("pi-session-a");
-    assert.equal(registry.get("pi-session-a"), undefined);
-    assert.equal(registry.get("pi-session-b"), sessionB);
-    await registry.disposeAll();
+      await registry.remove("pi-session-a");
+
+      assert.equal(registry.get("pi-session-a"), undefined);
+      assert.equal(registry.get("pi-session-b"), sessionB);
+    } finally {
+      await registry.disposeAll();
+    }
+    assert.equal(registry.get("pi-session-b"), undefined);
   });
 });
 

@@ -136,7 +136,6 @@ export type RuntimeSessionDecision =
 
 export interface RuntimeSessionSyncInput {
   syncKey: string;
-  turnIndex: number;
   conversationId?: string;
   canonicalHistory: readonly unknown[];
   runtimeRef?: AgyRuntimeSessionRef;
@@ -166,8 +165,7 @@ export class RuntimeSessionSync {
     const ref = input.runtimeRef;
     // An older checkpoint cannot roll back a conversation whose newer live
     // history is already known. A different branch conversation may still resume.
-    if (ref && (!deadPendingRuntime || ref.conversationId !== session.conversationId) &&
-      (syncedCount === undefined || ref.conversationId !== session.conversationId) &&
+    if (ref && (ref.conversationId !== session.conversationId || (!deadPendingRuntime && syncedCount === undefined)) &&
       this.matchesPersistedSession(ref, input)) {
       this.record(session, input.canonicalHistory.slice(0, ref.historyLength));
       return { action: "resume", conversationId: ref.conversationId };
@@ -175,8 +173,8 @@ export class RuntimeSessionSync {
 
     debugLog("session", "Rebuilding Antigravity CLI runtime instead of reusing", {
       syncKeyMatches: session.syncKey === input.syncKey,
-      sessionTurnIndex: session.turnIndex,
-      inputTurnIndex: input.turnIndex,
+      historyLength: input.canonicalHistory.length,
+      syncedMessageCount: syncedCount,
       sessionConversationId: session.conversationId,
       inputConversationId: input.conversationId,
       processRunning: session.activeProcess?.isRunning ?? false,

@@ -19,8 +19,7 @@ type ModelSwitchCase = {
     foreignHistory: boolean;
     pending: boolean;
     selectedModel: "gemini" | "claude";
-    startup: "success" | "reject" | "waitReject" | "dead" | "mismatch" | "abort" | "fallbackReject";
-    sendFails: boolean;
+    outcome: "success" | "reject" | "waitReject" | "dead" | "mismatch" | "abort" | "fallbackReject" | "sendReject";
     priorError?: string;
     omitPriorError?: boolean;
   };
@@ -48,7 +47,7 @@ const cases: ModelSwitchCase[] = [
     name: "Gemini to Claude",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "success",
     },
     expected: {
       terminal: "done", starts: 1, sends: 1, waits: 1,
@@ -61,7 +60,7 @@ const cases: ModelSwitchCase[] = [
     name: "live reference only",
     arrange: {
       persisted: false, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "success",
     },
     expected: {
       terminal: "done", starts: 1, sends: 1, waits: 1,
@@ -74,7 +73,7 @@ const cases: ModelSwitchCase[] = [
     name: "foreign roundtrip",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "gemini", startup: "success", sendFails: false,
+      pending: false, selectedModel: "gemini", outcome: "success",
     },
     expected: {
       terminal: "done", starts: 0, sends: 1, waits: 0,
@@ -87,7 +86,7 @@ const cases: ModelSwitchCase[] = [
     name: "foreign assistant without responseId",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: true,
-      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "success",
     },
     expected: {
       terminal: "done", starts: 1, sends: 1, waits: 1,
@@ -100,7 +99,7 @@ const cases: ModelSwitchCase[] = [
     name: "branch checkpoint",
     arrange: {
       persisted: true, conversationId: "branch-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "success",
     },
     expected: {
       terminal: "done", starts: 1, sends: 1, waits: 1,
@@ -113,7 +112,7 @@ const cases: ModelSwitchCase[] = [
     name: "pending model switch",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: true, selectedModel: "claude", startup: "success", sendFails: false,
+      pending: true, selectedModel: "claude", outcome: "success",
     },
     expected: {
       terminal: "done", starts: 0, sends: 0, waits: 0,
@@ -126,7 +125,7 @@ const cases: ModelSwitchCase[] = [
     name: "resume rejects",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "reject", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "reject",
     },
     expected: {
       terminal: "done", starts: 2, sends: 1, waits: 1,
@@ -139,7 +138,7 @@ const cases: ModelSwitchCase[] = [
     name: "after-quota resume rejects and reconstructs failed history once",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "reject", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "reject",
       priorError: "Individual quota reached. Resets in 3h27m34s.",
     },
     expected: {
@@ -153,7 +152,7 @@ const cases: ModelSwitchCase[] = [
     name: "Pi recovery projection removes the failed assistant",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "success", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "success",
       priorError: "Rate limit exceeded", omitPriorError: true,
     },
     expected: {
@@ -167,7 +166,7 @@ const cases: ModelSwitchCase[] = [
     name: "resume wait rejects",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "waitReject", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "waitReject",
     },
     expected: {
       terminal: "done", starts: 2, sends: 1, waits: 2,
@@ -180,7 +179,7 @@ const cases: ModelSwitchCase[] = [
     name: "resume exits between init and MCP connection",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "dead", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "dead",
     },
     expected: {
       terminal: "done", starts: 2, sends: 1, waits: 2,
@@ -193,7 +192,7 @@ const cases: ModelSwitchCase[] = [
     name: "resume mismatched init",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "mismatch", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "mismatch",
     },
     expected: {
       terminal: "done", starts: 2, sends: 1, waits: 1,
@@ -206,7 +205,7 @@ const cases: ModelSwitchCase[] = [
     name: "resume abort",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "abort", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "abort",
     },
     expected: {
       terminal: "aborted", starts: 1, sends: 0, waits: 0,
@@ -217,7 +216,7 @@ const cases: ModelSwitchCase[] = [
     name: "fallback fails",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "fallbackReject", sendFails: false,
+      pending: false, selectedModel: "claude", outcome: "fallbackReject",
     },
     expected: {
       terminal: "error", starts: 2, sends: 0, waits: 0,
@@ -228,7 +227,7 @@ const cases: ModelSwitchCase[] = [
     name: "active send fails",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", startup: "success", sendFails: true,
+      pending: false, selectedModel: "claude", outcome: "sendReject",
     },
     expected: {
       terminal: "error", starts: 1, sends: 1, waits: 1,
@@ -273,7 +272,6 @@ for (const { name, arrange, expected } of cases) {
     const oldProc = new AgyRuntime({ agentName: "pi-bridge", model: gemini.id });
     const oldMcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(oldProc, calculateSyncKey("Rules", [], gemini.id, "", "pi-bridge"), oldMcp, "same-conversation");
-    session.turnIndex = 1;
     const terminalHandle = session.resources.terminals.bind("pi-terminal");
     bridge.runtimeSessionSync.record(session, prefix);
     assistant.responseId = arrange.conversationId;
@@ -299,8 +297,7 @@ for (const { name, arrange, expected } of cases) {
     const controller = new AbortController();
     const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
     const lifecycle: string[] = [];
-    let attempts = 0;
-    t.mock.getter(AgyRuntime.prototype, "isRunning", () => arrange.startup !== "dead" || attempts !== 1);
+    t.mock.getter(AgyRuntime.prototype, "isRunning", () => arrange.outcome !== "dead" || start.mock.callCount() !== 1);
     t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp && pending; });
     t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
     t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
@@ -308,18 +305,18 @@ for (const { name, arrange, expected } of cases) {
     t.mock.method(BridgeIPC.prototype, "close", async () => { lifecycle.push("close"); });
     t.mock.method(AgyRuntime.prototype, "abort", async () => { lifecycle.push("abort"); });
     const start = t.mock.method(AgyRuntime.prototype, "start", async function (this: AgyRuntime) {
-      attempts++;
+      const attempt = start.mock.callCount() + 1;
       lifecycle.push(`start:${this.options.conversationId ?? "fresh"}`);
-      if (attempts === 1 && ["reject", "abort", "fallbackReject"].includes(arrange.startup)) {
-        if (arrange.startup === "abort") controller.abort(new Error("startup aborted"));
+      if (attempt === 1 && ["reject", "abort", "fallbackReject"].includes(arrange.outcome)) {
+        if (arrange.outcome === "abort") controller.abort(new Error("startup aborted"));
         throw new Error("resume rejected");
       }
-      if (attempts === 2 && arrange.startup === "fallbackReject") throw new Error("fresh rejected");
-      return { event: "init", conversation_id: arrange.startup === "mismatch" || !this.options.conversationId
+      if (attempt === 2 && arrange.outcome === "fallbackReject") throw new Error("fresh rejected");
+      return { event: "init", conversation_id: arrange.outcome === "mismatch" || !this.options.conversationId
         ? "fresh-conversation" : this.options.conversationId } as Awaited<ReturnType<AgyRuntime["start"]>>;
     });
     const wait = t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {
-      if (attempts === 1 && arrange.startup === "waitReject") throw new Error("connection rejected");
+      if (start.mock.callCount() === 1 && arrange.outcome === "waitReject") throw new Error("connection rejected");
     });
     t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
       listeners.set(this, listener);
@@ -332,7 +329,7 @@ for (const { name, arrange, expected } of cases) {
       listener({ event: "result", status: "success", conversation_id: proc === oldProc ? "same-conversation" : session.conversationId! }, "agy");
     };
     const send = t.mock.method(AgyRuntime.prototype, "send", async function (this: AgyRuntime, _input: AgyInput) {
-      if (arrange.sendFails) throw new Error("active turn failed");
+      if (arrange.outcome === "sendReject") throw new Error("active turn failed");
       finish(this);
     });
     const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", (results: Context["messages"]) => {
@@ -357,6 +354,8 @@ for (const { name, arrange, expected } of cases) {
       assert.ok(terminal?.type === "error");
       assert.equal(terminal.reason, expected.terminal);
       assert.equal(session.activeProcess, null);
+      assert.equal(session.activeMcpServer, null);
+      assert.equal(resolve.mock.callCount(), 0);
       const stored = await bridge.runtimeSessionStore.get(sessionId);
       assert.equal(stored?.conversationId, expected.store === "retained" ? arrange.conversationId : undefined);
       assert.equal(listeners.size, 0);
@@ -371,6 +370,7 @@ for (const { name, arrange, expected } of cases) {
     assert.equal(session.resources.terminals.resolve(terminalHandle), expected.preservesTerminal ? "pi-terminal" : undefined);
     assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, expected.responseId);
     assert.equal(listeners.size, 0);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
 
     if (expected.continuation.kind === "pending") {
       assert.equal(resolve.mock.callCount(), 1);
@@ -389,6 +389,7 @@ for (const { name, arrange, expected } of cases) {
       assert.equal(session.resources.terminals.resolve(terminalHandle), "pi-terminal");
       assert.equal(send.mock.calls[0]!.arguments[0].message.content, "next request");
       assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, next.message.responseId);
+      assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
       assert.equal(listeners.size, 0);
       return;
     }

@@ -22,7 +22,7 @@ for (const scenario of [
 
     assert.equal(restored?.conversationId, scenario.accepted ? "conversation-a" : undefined);
     const decision = new RuntimeSessionSync().decide(new LiveSession(id), {
-      syncKey: "model-and-tools", turnIndex: 0, canonicalHistory: [],
+      syncKey: "model-and-tools", canonicalHistory: [],
       conversationId: "conversation-a", ...(restored ? { runtimeRef: restored } : {}),
     });
     assert.equal(decision.action, scenario.accepted ? "resume" : "rebuild");

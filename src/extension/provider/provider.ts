@@ -114,8 +114,8 @@ function formatJsonMessage(message: Message): Record<string, unknown> {
     formatted.stopReason = message.stopReason;
     if (message.errorMessage !== undefined) formatted.errorMessage = message.errorMessage;
   }
-  if (message.role === "system" && message.sections) {
-    if (Object.keys(message.sections).length > 0) formatted.sections = message.sections;
+  if (message.role === "system" && message.sections && Object.keys(message.sections).length > 0) {
+    formatted.sections = message.sections;
   }
   return formatted;
 }
@@ -209,7 +209,6 @@ async function prepareRuntime(
     parameters: tool.parameters,
   }));
   const syncKey = calculateSyncKey(context.systemPrompt ?? "", toolSyncValues, baseModel, effort ?? "", agentName);
-  const turnIndex = context.messages.filter((message) => message.role === "assistant").length;
   const latestAssistant = [...context.messages].reverse().find((message) => message.role === "assistant");
   const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
   const rawPluginDir = config?.pluginDir ?? config?.agentDir;
@@ -218,7 +217,6 @@ async function prepareRuntime(
   checkPreparation();
   const decision = bridge.runtimeSessionSync.decide(liveSession, {
     syncKey,
-    turnIndex,
     ...(expectedConversationId ? { conversationId: expectedConversationId } : {}),
     canonicalHistory: context.messages,
     ...(runtimeRef ? { runtimeRef } : {}),
@@ -226,8 +224,8 @@ async function prepareRuntime(
 
   debugLog("register", "Antigravity CLI runtime decision", {
     action: decision.action,
-    turnIndex,
-    sessionTurnIndex: liveSession.turnIndex,
+    historyLength: context.messages.length,
+    syncedMessageCount: bridge.runtimeSessionSync.getSyncedMessageCount(liveSession),
     processRunning: liveSession.activeProcess?.isRunning ?? false,
     sessionConversationId: liveSession.conversationId,
     expectedConversationId,
@@ -235,7 +233,7 @@ async function prepareRuntime(
   });
 
   if (decision.action === "continue" && liveSession.activeProcess) {
-    debugLog("register", `Reusing existing agy process for turn ${turnIndex}`);
+    debugLog("register", "Reusing existing agy process");
     if (!liveSession.activeMcpServer) {
       throw new Error("Antigravity CLI process or Pi MCP bridge was not initialized");
     }
@@ -255,7 +253,7 @@ async function prepareRuntime(
     };
   }
 
-  debugLog("register", `Starting fresh agy process (turn ${turnIndex}, canReuse: ${decision.action === "continue"})`);
+  debugLog("register", "Starting a replacement agy process");
   debugLog("session", "Replacing Antigravity CLI runtime", {
     action: decision.action,
     conversationId: liveSession.conversationId,
@@ -303,7 +301,6 @@ async function prepareRuntime(
       if (!liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id, preparationId)) {
         throw new Error("Antigravity CLI runtime preparation was superseded");
       }
-      liveSession.turnIndex = turnIndex;
       return { proc, mcpServer, modelId: model.id };
     } catch (error) {
       // Ownership transfers to liveSession only after startup succeeds.
@@ -417,9 +414,6 @@ export function streamAgyProvider(
       const enqueuedToolResults = hasPendingCalls
         ? mcpServer.resolveToolResults(toolResults, contextUpdate)
         : 0;
-      if (hasPendingCalls && enqueuedToolResults !== toolResults.length) {
-        throw new Error("Some appended Pi tool results were not enqueued for the MCP broker; history was not marked synchronized");
-      }
       if (enqueuedToolResults > 0) {
         await turn.recordAcceptedContext();
         // Installing a handler can immediately dispatch calls queued during the

@@ -89,8 +89,9 @@ describe("RuntimeSessionStore", () => {
   });
 });
 
-test("metadata changes preserve live pending tool results and versioned persisted history", async () => {
+test("metadata changes preserve live pending tool results and versioned persisted history", async (t) => {
   const gateway = new CapabilityGateway([{ name: "read", description: "Read", parameters: { type: "object" } }]);
+  t.after(() => gateway.cancelPendingCalls("Test cleanup"));
   let dispatch: ((call: unknown) => void) | undefined;
   const dispatched = new Promise<unknown>((resolve) => { dispatch = resolve; });
   gateway.setToolCallHandler((batch) => { dispatch!(batch.calls[0]); batch.complete(); });
@@ -104,7 +105,7 @@ test("metadata changes preserve live pending tool results and versioned persiste
   live.setSession({ isRunning: true } as AgyProcess, "sync-key", undefined, "agy-conversation");
   const sync = new RuntimeSessionSync();
   sync.record(live, [user], assistant);
-  assert.deepEqual(sync.decide(live, { syncKey: "sync-key", turnIndex: 0, canonicalHistory: [user, replay, toolResult] }), { action: "continue" });
+  assert.deepEqual(sync.decide(live, { syncKey: "sync-key", canonicalHistory: [user, replay, toolResult] }), { action: "continue" });
   assert.equal(gateway.resolveToolResults([toolResult]), 1);
   assert.deepEqual(await result, { content: toolResult.content, isError: false });
   assert.equal(gateway.hasPendingCalls, false);
@@ -127,7 +128,7 @@ describe("RuntimeSessionSync", () => {
   }
 
   const input = {
-    syncKey: "sync-key", turnIndex: 0, conversationId: "agy-conversation",
+    syncKey: "sync-key", conversationId: "agy-conversation",
     canonicalHistory: [{ role: "user", content: "question" }],
   };
 
@@ -227,24 +228,37 @@ describe("RuntimeSessionSync", () => {
     });
   }
 
-  it("continues, resumes, or rebuilds according to process and synchronization state", () => {
-    const sync = new RuntimeSessionSync();
-    const live = createSession(true);
-    assert.equal(sync.getSyncedMessageCount(live), undefined);
-    sync.record(live, input.canonicalHistory, { role: "assistant", responseId: "agy-conversation", content: "answer" });
-    assert.equal(sync.getSyncedMessageCount(live), 2);
-    assert.deepEqual(sync.decide(live, { ...input, canonicalHistory: [...input.canonicalHistory, { role: "assistant", responseId: "agy-conversation", content: "answer" }, { role: "user", content: "next" }] }), { action: "continue" });
+  const answer = { role: "assistant", responseId: "agy-conversation", content: "answer" };
+  const recordedHistory = [...input.canonicalHistory, answer];
+  for (const row of [
+    { name: "live compatible continuation", running: true, recorded: true, current: { ...input, canonicalHistory: [...recordedHistory, { role: "user", content: "next" }] }, action: "continue" },
+    { name: "live rewritten prefix", running: true, recorded: true, current: { ...input, canonicalHistory: [{ role: "user", content: "branch" }, answer] }, action: "rebuild" },
+    { name: "live shortened prefix", running: true, recorded: true, current: input, action: "rebuild" },
+    { name: "live changed key with compatible history", running: true, recorded: true, current: { ...input, syncKey: "other-model", canonicalHistory: recordedHistory }, action: "resume" },
+    { name: "live changed conversation", running: true, recorded: true, current: { ...input, conversationId: "other-conversation", canonicalHistory: recordedHistory }, action: "rebuild" },
+    { name: "dead compatible conversation", running: false, recorded: false, current: input, action: "resume" },
+    { name: "dead different conversation", running: false, recorded: false, current: { ...input, conversationId: "other" }, action: "rebuild" },
+  ]) {
+    it(`selects by process and synchronization state: ${row.name}`, () => {
+      const sync = new RuntimeSessionSync();
+      const live = createSession(row.running);
+      const process = live.activeProcess;
+      assert.equal(sync.getSyncedMessageCount(live), undefined);
+      if (row.recorded) sync.record(live, input.canonicalHistory, answer);
+      const syncedCount = row.recorded ? recordedHistory.length : undefined;
+      assert.equal(sync.getSyncedMessageCount(live), syncedCount);
 
-    const changedCases = [
-      { ...input, canonicalHistory: [{ role: "user", content: "branch" }] },
-      { ...input, syncKey: "other-model" }, { ...input, turnIndex: 1 }, { ...input, conversationId: "other-conversation" },
-    ];
-    for (const changed of changedCases) assert.deepEqual(sync.decide(live, changed), { action: "rebuild" });
+      const decision = sync.decide(live, row.current);
 
-    const dead = createSession(false);
-    assert.deepEqual(sync.decide(dead, input), { action: "resume", conversationId: "agy-conversation" });
-    assert.deepEqual(sync.decide(dead, { ...input, conversationId: "other" }), { action: "rebuild" });
-  });
+      assert.deepEqual(decision, row.action === "resume"
+        ? { action: "resume", conversationId: "agy-conversation" }
+        : { action: row.action });
+      assert.equal(sync.getSyncedMessageCount(live), syncedCount);
+      assert.equal(live.activeProcess, process);
+      assert.equal(live.conversationId, "agy-conversation");
+      assert.equal(live.syncKey, input.syncKey);
+    });
+  }
 
   it("reuses pending mixed continuations when history is compatible", async () => {
     const history = [
@@ -370,7 +384,6 @@ describe("RuntimeSessionSync", () => {
     const cases = [
       { name: "model change no ref", key: "other", action: "resume" },
       { name: "pending model change", key: "other", pending: true, action: "continue" },
-      { name: "turn bookkeeping", turn: 8, action: "continue" },
       { name: "foreign assistant without id", tail: [{ role: "assistant", content: "foreign" }], ref: runtimeRef, action: "rebuild" },
       { name: "agy unsynced assistant", tail: [{ role: "assistant", provider: "agy", responseId: "agy-conversation", content: "new" }], action: "rebuild" },
       { name: "persisted prefix", persisted: true, ref: runtimeRef, action: "resume" },
@@ -389,7 +402,6 @@ describe("RuntimeSessionSync", () => {
       if (!row.persisted && !row.unrecorded) sync.record(live, history);
       assert.deepEqual(sync.decide(live, {
         syncKey: row.key ?? input.syncKey,
-        turnIndex: row.turn ?? 0,
         ...(row.id ? { conversationId: row.id } : {}),
         canonicalHistory: [...(row.userOnly ? input.canonicalHistory : history), ...(row.tail ?? [])],
         ...(row.ref ? { runtimeRef: row.ref } : {}),

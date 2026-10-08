@@ -25,7 +25,6 @@ export interface AgyEventAdapterOptions {
 
 export class PiEventAdapter {
   public readonly stream: AssistantMessageEventStream;
-  private readonly provider: string;
   private readonly allowedToolNames: ReadonlySet<string> | undefined;
   private readonly bridgeToolCallsExternally: boolean;
   private readonly onBlockedTool: ((name: string) => void) | undefined;
@@ -33,14 +32,12 @@ export class PiEventAdapter {
   private started = false;
   private completed = false;
   private currentTextIndex: number | null = null;
-  private currentText = "";
   private toolCallCount = 0;
   private hasStepUsage = false;
 
   private partial: AssistantMessage;
 
   constructor(options: AgyEventAdapterOptions) {
-    this.provider = options.provider ?? "agy";
     this.allowedToolNames = options.allowedToolNames;
     this.bridgeToolCallsExternally = options.bridgeToolCallsExternally ?? false;
     this.onBlockedTool = options.onBlockedTool;
@@ -50,7 +47,7 @@ export class PiEventAdapter {
       role: "assistant",
       content: [],
       api: "agy" as any,
-      provider: this.provider,
+      provider: options.provider ?? "agy",
       model: options.model,
       usage: {
         input: 0,
@@ -267,7 +264,6 @@ export class PiEventAdapter {
       };
       this.partial.content.push(textBlock);
       this.currentTextIndex = this.partial.content.length - 1;
-      this.currentText = "";
 
       this.stream.push({
         type: "text_start",
@@ -276,8 +272,7 @@ export class PiEventAdapter {
       });
     }
 
-    this.currentText += delta;
-    (this.partial.content[this.currentTextIndex] as TextContent).text = this.currentText;
+    (this.partial.content[this.currentTextIndex] as TextContent).text += delta;
 
     this.stream.push({
       type: "text_delta",
@@ -290,9 +285,8 @@ export class PiEventAdapter {
   private closeActiveText(): void {
     if (this.currentTextIndex !== null) {
       const index = this.currentTextIndex;
-      const content = this.currentText;
+      const content = (this.partial.content[index] as TextContent).text;
       this.currentTextIndex = null;
-      this.currentText = "";
 
       this.stream.push({
         type: "text_end",

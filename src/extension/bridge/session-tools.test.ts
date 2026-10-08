@@ -123,7 +123,21 @@ describe("CapabilityGateway", () => {
     assert.equal(relay.hasPendingCalls, false);
   });
 
-  for (const scenario of ["ordered", "reversed", "partial", "unknown", "duplicate", "name mismatch", "missing"] as const) {
+  const resultBatchCases: {
+    scenario: string;
+    supply: (results: Message[]) => Message[];
+    expectedError: RegExp | null;
+  }[] = [
+    { scenario: "ordered", supply: (results) => [...results], expectedError: null },
+    { scenario: "reversed", supply: (results) => [...results].reverse(), expectedError: null },
+    { scenario: "partial", supply: (results) => results.slice(0, 1), expectedError: /Missing tool result ID:/ },
+    { scenario: "unknown", supply: (results) => [...results, toolResult("unknown", false, [])], expectedError: /Unknown tool result ID: unknown/ },
+    { scenario: "duplicate", supply: (results) => [...results, results[0]!], expectedError: /Duplicate tool result ID:/ },
+    { scenario: "name mismatch", supply: (results) => [results[0]!, { ...results[1]!, toolName: "wrong" } as Message], expectedError: /Tool name mismatch for result:/ },
+    { scenario: "missing", supply: () => [], expectedError: /Missing tool result ID:/ },
+  ];
+
+  for (const { scenario, supply, expectedError } of resultBatchCases) {
     it(`delivers an atomic result batch: ${scenario}`, async (t) => {
       const relay = new CapabilityGateway([tool]);
       t.after(() => relay.cancelPendingCalls("cleanup"));
@@ -137,22 +151,19 @@ describe("CapabilityGateway", () => {
         { type: "text", text: `result-${index}` },
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
       ]));
-      let supplied = [...results];
-      if (scenario === "reversed") supplied.reverse();
-      if (scenario === "partial") supplied.pop();
-      if (scenario === "missing") supplied = [];
-      if (scenario === "unknown") supplied.push(toolResult("unknown", false, []));
-      if (scenario === "duplicate") supplied.push(results[0]!);
-      if (scenario === "name mismatch") supplied[1] = { ...results[1]!, toolName: "wrong" } as Message;
+      let supplied = supply(results);
       const snapshot = structuredClone(supplied);
 
-      if (scenario !== "ordered" && scenario !== "reversed") {
-        assert.throws(() => relay.resolveToolResults(supplied, "context"));
+      if (expectedError) {
+        assert.throws(() => relay.resolveToolResults(supplied, "context"), expectedError);
+        assert.deepEqual(supplied, snapshot);
         await setImmediate();
         assert.equal(settled, 0);
         assert.equal(relay.hasPendingCalls, true);
         supplied = results;
       }
+      const recoverySnapshot = structuredClone(supplied);
+
       assert.equal(relay.resolveToolResults(supplied, "context"), 2);
       const delivered = await Promise.all(promises);
       for (let index = 0; index < 2; index++) {
@@ -163,7 +174,7 @@ describe("CapabilityGateway", () => {
           content: [...source.content, ...(last ? [{ type: "text", text: "context" }] : [])],
         });
       }
-      if (scenario === "ordered" || scenario === "reversed") assert.deepEqual(supplied, snapshot);
+      assert.deepEqual(supplied, recoverySnapshot);
       assert.equal(relay.hasPendingCalls, false);
     });
   }

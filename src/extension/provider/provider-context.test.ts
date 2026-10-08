@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Context } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { formatContextPrompt } from "./provider.ts";
 
-const context = {
+const assistantMetadata: Pick<AssistantMessage, "api" | "provider" | "model" | "usage"> = {
+  api: "agy",
+  provider: "agy",
+  model: "test",
+  usage: {
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
+};
+
+const context: Context = {
   systemPrompt: "Follow <policy> & safety.",
   tools: [],
   messages: [
@@ -20,17 +30,7 @@ const context = {
         name: "read",
         arguments: { path: "README.md" },
       }],
-      api: "agy",
-      provider: "agy",
-      model: "test",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      ...assistantMetadata,
       stopReason: "toolUse",
       timestamp: 2,
     },
@@ -45,6 +45,7 @@ const context = {
     {
       role: "assistant",
       content: [{ type: "text", text: "read complete" }],
+      ...assistantMetadata,
       stopReason: "stop",
       timestamp: 4,
     },
@@ -57,7 +58,7 @@ const context = {
       timestamp: 5,
     },
   ],
-} as Context;
+};
 
 describe("formatContextPrompt", () => {
   it("compacts prior tool results and serializes rebuilt context as minified JSON", () => {
@@ -89,18 +90,20 @@ describe("formatContextPrompt", () => {
   });
 
   it("omits completed result bodies but preserves their call metadata", () => {
-    const prompt = formatContextPrompt({
+    const context: Context = {
       messages: [
-        { role: "user", content: "old request" },
-        { role: "assistant", content: [{ type: "toolCall", id: "old", name: "read", arguments: {} }], stopReason: "toolUse" },
-        { role: "toolResult", toolCallId: "old", toolName: "read", content: "old result", isError: false },
-        { role: "assistant", content: "old answer", stopReason: "stop" },
-        { role: "user", content: "current request" },
-        { role: "assistant", content: [{ type: "toolCall", id: "current", name: "read", arguments: {} }], stopReason: "toolUse" },
-        { role: "toolResult", toolCallId: "current", toolName: "read", content: "current result", isError: false },
-        { role: "user", content: "appended request" },
+        { role: "user", content: "old request", timestamp: 1 },
+        { role: "assistant", ...assistantMetadata, content: [{ type: "toolCall", id: "old", name: "read", arguments: {} }], stopReason: "toolUse", timestamp: 2 },
+        { role: "toolResult", toolCallId: "old", toolName: "read", content: [{ type: "text", text: "old result" }], isError: false, timestamp: 3 },
+        { role: "assistant", ...assistantMetadata, content: [{ type: "text", text: "old answer" }], stopReason: "stop", timestamp: 4 },
+        { role: "user", content: "current request", timestamp: 5 },
+        { role: "assistant", ...assistantMetadata, content: [{ type: "toolCall", id: "current", name: "read", arguments: {} }], stopReason: "toolUse", timestamp: 6 },
+        { role: "toolResult", toolCallId: "current", toolName: "read", content: [{ type: "text", text: "current result" }], isError: false, timestamp: 7 },
+        { role: "user", content: "appended request", timestamp: 8 },
       ],
-    } as Context, false);
+    };
+
+    const prompt = formatContextPrompt(context, false);
 
     assert.deepEqual(JSON.parse(prompt), {
       purpose: "reconstructed_conversation",
@@ -108,10 +111,10 @@ describe("formatContextPrompt", () => {
         { role: "user", content: "old request" },
         { role: "assistant", content: [{ type: "toolCall", id: "old", name: "read", arguments: {} }], stopReason: "toolUse" },
         { role: "toolResult", toolCallId: "old", toolName: "read", isError: false, contentOmitted: true },
-        { role: "assistant", content: "old answer", stopReason: "stop" },
+        { role: "assistant", content: [{ type: "text", text: "old answer" }], stopReason: "stop" },
         { role: "user", content: "current request" },
         { role: "assistant", content: [{ type: "toolCall", id: "current", name: "read", arguments: {} }], stopReason: "toolUse" },
-        { role: "toolResult", toolCallId: "current", toolName: "read", isError: false, content: "current result" },
+        { role: "toolResult", toolCallId: "current", toolName: "read", isError: false, content: [{ type: "text", text: "current result" }] },
       ],
       currentMessage: { role: "user", content: "appended request" },
     });

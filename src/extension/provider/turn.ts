@@ -23,7 +23,6 @@ export class AgyTurn {
   private runtime: { proc: AgyRuntime; mcpServer: BridgeIPC } | undefined;
   private completed = false;
   private sendingInput = false;
-  private invalidated = false;
   private readonly options: TurnOptions;
 
   constructor(options: TurnOptions) {
@@ -56,7 +55,7 @@ export class AgyTurn {
   }
 
   public async recordAcceptedContext(): Promise<void> {
-    if (this.invalidated || !this.ownsRuntime()) return;
+    if (!this.ownsRuntime()) return;
 
     const { session, context, sync } = this.options;
     sync.record(session, context.messages);
@@ -136,7 +135,7 @@ export class AgyTurn {
 
   private complete(resumableError = false): void {
     const { adapter, session, context, sync } = this.options;
-    if (!adapter.isCompleted() || this.completed || this.invalidated || !this.ownsRuntime()) return;
+    if (!adapter.isCompleted() || this.completed || !this.ownsRuntime()) return;
 
     this.completed = true;
     const message = adapter.message;
@@ -153,7 +152,6 @@ export class AgyTurn {
       session.conversationId = responseId;
     }
     sync.record(session, context.messages, message);
-    session.incrementTurn();
     void this.persist([...context.messages, message]).catch((error) => {
       debugLog("session", "Could not persist Antigravity CLI runtime reference:", error);
     });
@@ -192,12 +190,11 @@ export class AgyTurn {
 
   private close(reference: "invalidate" | "preserve"): void {
     const { session, store } = this.options;
-    if (this.invalidated || !this.ownsSession()) return;
+    if (!this.ownsSession()) return;
 
     const mcpServer = this.runtime?.mcpServer ?? session.activeMcpServer;
     mcpServer?.setToolCallHandler(null);
     if (reference === "invalidate") {
-      this.invalidated = true;
       // The tombstone is written synchronously before asynchronous resource cleanup.
       void store.delete(session.piSessionId).catch((error) => {
         debugLog("session", "Could not invalidate failed AGY runtime reference:", error);

@@ -418,14 +418,25 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
 }
 
-for (const phase of ["destroyed", "disconnect", "callback", "serialization", "idle"] as const) {
-  it(`signals owed result transport failure: ${phase}`, async (t) => {
+for (const { phase, expectedError, expectedWrites } of [
+  { phase: "destroyed", expectedError: /^Pi MCP result socket was destroyed before write\.$/, expectedWrites: 0 },
+  { phase: "disconnect", expectedError: /^Pi MCP proxy disconnected before tool results were written\.$/, expectedWrites: 0 },
+  { phase: "callback", expectedError: /^async write failed$/, expectedWrites: 1 },
+  { phase: "serialization", expectedError: /serialize a BigInt/i, expectedWrites: 0 },
+  { phase: "success", expectedError: null, expectedWrites: 1 },
+  { phase: "idle", expectedError: null, expectedWrites: 0 },
+] as const) {
+  it(`handles owed result transport: ${phase}`, async (t) => {
     const bridge = new AgyMcpServer([]);
     t.after(() => bridge.close());
+    const resultWrites: string[] = [];
     const socket = Object.assign(new EventEmitter(), {
       destroyed: false,
-      write(_data: string, callback?: (error?: Error) => void) {
-        if (callback) queueMicrotask(() => callback(new Error("async write failed")));
+      write(data: string, callback?: (error?: Error) => void) {
+        if (callback) {
+          resultWrites.push(data);
+          queueMicrotask(() => callback(phase === "callback" ? new Error("async write failed") : undefined));
+        }
         return true;
       },
       destroy() { this.destroyed = true; },
@@ -441,22 +452,31 @@ for (const phase of ["destroyed", "disconnect", "callback", "serialization", "id
     internals.gateway.call = () => new Promise((done) => { resolve = done; });
     internals.handleConnection(socket as unknown as Socket);
     socket.emit("data", Buffer.from(`${JSON.stringify({ type: "hello", sessionId: bridge.sessionId })}\n`));
-    if (phase !== "idle") {
+
+    if (phase === "idle") {
+      socket.emit("close");
+    } else {
       socket.emit("data", Buffer.from('{"type":"call","id":"one","name":"tool"}\n'));
       if (phase === "destroyed" || phase === "disconnect") socket.destroy();
       if (phase === "disconnect") {
         socket.emit("close");
         assert.equal(failures.length, 1);
+        assert.match(failures[0]!.message, expectedError);
       }
       resolve(phase === "serialization" ? { content: BigInt(1) } : { content: [] });
       await new Promise((done) => setImmediate(done));
-      assert.equal(failures.length, 1);
-      const replayed: Error[] = [];
-      bridge.setTransportFailureHandler((error) => replayed.push(error));
-      assert.deepEqual(replayed, failures);
-    } else {
+    }
+
+    assert.equal(resultWrites.length, expectedWrites);
+    assert.equal(failures.length, expectedError ? 1 : 0);
+    if (expectedError) assert.match(failures[0]!.message, expectedError);
+    if (phase === "success") {
+      assert.deepEqual(JSON.parse(resultWrites[0]!), { type: "result", id: "one", result: { content: [] } });
       socket.emit("close");
       assert.equal(failures.length, 0);
     }
+    const replayed: Error[] = [];
+    bridge.setTransportFailureHandler((error) => replayed.push(error));
+    assert.deepEqual(replayed, failures);
   });
 }

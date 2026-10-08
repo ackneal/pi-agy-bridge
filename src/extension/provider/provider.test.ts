@@ -70,26 +70,32 @@ for (const row of resolverCases) {
   });
 }
 
-for (const modelId of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) {
-  for (const option of ["reasoningEffort", "reasoning", "thinkingLevel"]) {
-    for (const effort of ["low", "medium", "high"]) {
-      test(`rejects fixed ${modelId} ${option}=${effort} before runtime preparation`, async (t) => {
-        const bridge = new AgyBridge({} as ExtensionAPI);
-        const runtimeLookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
-          throw new Error("Runtime preparation must not begin");
-        });
-        const model = { id: modelId, provider: "agy", thinkingLevelMap: allNullThinkingLevels } as Model<any>;
-        const stream = streamAgyProvider(model, { messages: [], tools: [] }, {
-          sessionId: "validation-test", [option]: effort,
-        }, undefined, bridge);
-        const message = await stream.result();
+const fixedEffortCases = ["claude-sonnet-4-6", "claude-opus-4-6-thinking"].flatMap((modelId) =>
+  ["reasoningEffort", "reasoning", "thinkingLevel"].flatMap((option) =>
+    ["low", "medium", "high"].map((effort) => ({
+      name: `rejects fixed ${modelId} ${option}=${effort} before runtime preparation`,
+      modelId,
+      options: { [option]: effort },
+      error: `Unsupported Antigravity CLI reasoning effort for ${modelId}: ${effort}.`,
+    }))));
 
-        assert.equal(message.stopReason, "error");
-        assert.equal(message.errorMessage, `Unsupported Antigravity CLI reasoning effort for ${modelId}: ${effort}.`);
-        assert.equal(runtimeLookup.mock.callCount(), 0);
-      });
-    }
-  }
+for (const row of fixedEffortCases) {
+  test(row.name, async (t) => {
+    const bridge = new AgyBridge({} as ExtensionAPI);
+    const runtimeLookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
+      throw new Error("Runtime preparation must not begin");
+    });
+    const model = { id: row.modelId, provider: "agy", thinkingLevelMap: allNullThinkingLevels } as Model<any>;
+
+    const message = await streamAgyProvider(model, { messages: [], tools: [] }, {
+      sessionId: "validation-test", ...row.options,
+    }, undefined, bridge).result();
+
+    assert.equal(message.stopReason, "error");
+    assert.equal(message.errorMessage, row.error);
+    assert.equal(runtimeLookup.mock.callCount(), 0);
+    assert.equal(bridge.liveSessions.get("validation-test"), undefined);
+  });
 }
 
 test("doctor reports installation errors without starting a model turn", async (t) => {
@@ -164,11 +170,17 @@ test("registers the Antigravity CLI provider and session lifecycle without start
   const execFile = t.mock.method(cp, "execFile", () => { throw new Error("Registration must not execute a command"); });
   const runtimeStart = t.mock.method(AgyRuntime.prototype, "start", async () => { throw new Error("Registration must not start the runtime"); });
   syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-
   const handlers = new Map<string, unknown>();
   const commands = new Map<string, unknown>();
   let provider: Provider | undefined;
+  t.after(async () => {
+    try {
+      await (handlers.get("session_shutdown") as (() => Promise<void>) | undefined)?.();
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
 
   const pi = {
     on: (event: string, handler: unknown) => handlers.set(event, handler),
@@ -207,9 +219,6 @@ test("registers the Antigravity CLI provider and session lifecycle without start
   assert.equal(spawn.mock.callCount(), 0);
   assert.equal(execFile.mock.callCount(), 0);
   assert.equal(runtimeStart.mock.callCount(), 0);
-
-  const shutdown = handlers.get("session_shutdown") as (() => Promise<void>);
-  await shutdown();
 });
 
 test("explicit Antigravity CLI models are native static models preserving configured fields", () => {
@@ -346,9 +355,9 @@ for (const failure of modelErrors) {
       assert.ok(session.activeMcpServer);
       assert.equal(listeners.size, 0);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
-      assert.equal(session.turnIndex, 1);
       assert.equal(close.mock.callCount(), 0);
       assert.equal(abort.mock.callCount(), 0);
+      assert.equal(send.mock.callCount(), 1, "native errors do not automatically resend input");
 
       const recovered = await runTurn(row.model, "retry request", [
         { event: "step_update", delta: "Hello! How can I help you today?" }, row.result,
@@ -363,7 +372,10 @@ for (const failure of modelErrors) {
       assert.equal(processes.length, row.processes);
       assert.equal(recoveredProcess.options.model, row.model);
       assert.equal(recoveredProcess.options.conversationId, "conversation-1");
-      assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-1");
+      const recoveredRef = await bridge.runtimeSessionStore.get(sessionId, epoch);
+      assert.equal(recoveredRef?.conversationId, "conversation-1");
+      assert.ok(recoveredRef && historyMatches(recoveredRef, manager.buildSessionContext().messages));
+      assert.equal(send.mock.callCount(), 2, "only the explicit retry adds input");
       assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
       assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "retry request");
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 4);
@@ -377,6 +389,7 @@ for (const failure of modelErrors) {
       assert.deepEqual(continued.content, [{ type: "text", text: "Continuing normally" }]);
       assert.equal(session.activeProcess, recoveredProcess);
       assert.equal(processes.length, row.processes);
+      assert.equal(send.mock.callCount(), 3);
       assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
       assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "continue request");
       assert.deepEqual(manager.buildSessionContext().messages.filter((message) => message.role === "user").map((message) => message.content), [
@@ -882,7 +895,6 @@ for (const row of [
     const handle = session.resources.terminals.bind("healthy-pi-pty");
     const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
     const syncKey = session.syncKey;
-    const turnIndex = session.turnIndex;
     const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
     const dispose = t.mock.method(session, "dispose", session.dispose.bind(session));
     const eventBinding = t.mock.method(session, "setRuntimeEventHandler", session.setRuntimeEventHandler.bind(session));
@@ -906,7 +918,6 @@ for (const row of [
     assert.equal(session.activeMcpServer, mcp);
     assert.equal(session.conversationId, reference?.conversationId);
     assert.equal(session.syncKey, syncKey);
-    assert.equal(session.turnIndex, turnIndex);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
     assert.equal(session.resources.terminals.resolve(handle), "healthy-pi-pty");
     assert.equal(session.resources.terminals.toHandle("healthy-pi-pty"), handle);

@@ -65,7 +65,7 @@ describe("RuntimeSessionSync history regression", () => {
       sync.record(live, history, assistant);
 
       const decision = sync.decide(live, {
-        syncKey: "sync-key", turnIndex: 0, conversationId: "conversation",
+        syncKey: "sync-key", conversationId: "conversation",
         canonicalHistory: [...history, response, { role: "user", content: "next" }],
       });
 

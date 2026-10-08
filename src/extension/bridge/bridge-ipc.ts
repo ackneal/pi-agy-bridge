@@ -220,7 +220,6 @@ export class BridgeIPC {
 
     const decoder = new StringDecoder("utf8");
     let buffer = "";
-    let authenticated = false;
 
     socket.on("data", (chunk) => {
       buffer += decoder.write(chunk);
@@ -233,7 +232,7 @@ export class BridgeIPC {
 
         try {
           const message = JSON.parse(line) as BrokerMessage;
-          if (!authenticated) {
+          if (!this.authenticatedSockets.has(socket)) {
             if (message.type !== "hello" || message.sessionId !== this.sessionId) {
               socket.end(`${JSON.stringify({
                 type: "error",
@@ -250,7 +249,6 @@ export class BridgeIPC {
               return;
             }
 
-            authenticated = true;
             this.authenticatedSockets.add(socket);
             this.markConnected?.();
             this.markConnected = null;

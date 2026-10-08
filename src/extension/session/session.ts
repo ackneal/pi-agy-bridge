@@ -88,7 +88,6 @@ export class LiveSession {
   public activeProcess: AgyRuntime | null = null;
   public activeMcpServer: BridgeIPC | null = null;
   public syncKey: string = "";
-  public turnIndex: number = 0;
   public conversationId: string | undefined;
   public readonly resources = new SessionResources();
   private unsubscribeRuntimeEvents: (() => void) | null = null;
@@ -126,7 +125,6 @@ export class LiveSession {
     this.activeProcess = process;
     this.activeMcpServer = mcpServer ?? null;
     this.syncKey = syncKey;
-    this.turnIndex = 0;
     this.conversationId = conversationId;
     return true;
   }
@@ -158,10 +156,6 @@ export class LiveSession {
     this.abortListener = null;
   }
 
-  public incrementTurn(): void {
-    this.turnIndex++;
-  }
-
   public async dispose(options?: { preserveResources?: boolean; preparationId?: symbol }): Promise<void> {
     if (options?.preparationId !== undefined) {
       if (!this.ownsPreparation(options.preparationId)) return;
@@ -175,7 +169,6 @@ export class LiveSession {
     this.activeProcess = null;
     this.activeMcpServer = null;
     this.syncKey = "";
-    this.turnIndex = 0;
     this.conversationId = undefined;
     this.clearAbortSignal();
     this.setRuntimeEventHandler(null);
