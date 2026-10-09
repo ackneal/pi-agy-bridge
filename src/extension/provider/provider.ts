@@ -233,14 +233,14 @@ async function prepareRuntime(
   });
 
   if (decision.action === "continue" && liveSession.activeProcess) {
-    debugLog("register", "Reusing existing agy process");
+    debugLog("register", "Reusing existing Antigravity CLI process");
     if (!liveSession.activeMcpServer) {
       throw new Error("Antigravity CLI process or Pi MCP bridge was not initialized");
     }
     const proc = liveSession.activeProcess;
     const modelMatches = proc.options.model === baseModel && proc.options.effort === effort;
     if (liveSession.syncKey !== syncKey) {
-      debugLog("session", "Deferring runtime settings change until the pending AGY turn finishes", {
+      debugLog("session", "Deferring runtime settings change until the pending Antigravity CLI turn finishes", {
         activeModel: proc.options.model,
         requestedModel: baseModel,
       });
@@ -253,7 +253,7 @@ async function prepareRuntime(
     };
   }
 
-  debugLog("register", "Starting a replacement agy process");
+  debugLog("register", "Starting a replacement Antigravity CLI process");
   debugLog("session", "Replacing Antigravity CLI runtime", {
     action: decision.action,
     conversationId: liveSession.conversationId,
@@ -454,7 +454,7 @@ export function streamAgyProvider(
       turn.fail(error);
     }
   })().catch((error) => {
-    debugLog("session", "AGY turn cleanup failed:", error);
+    debugLog("session", "Antigravity CLI turn cleanup failed:", error);
   });
 
   return stream;

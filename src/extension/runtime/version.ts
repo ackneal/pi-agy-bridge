@@ -90,7 +90,7 @@ export async function validateAgyVersion(
     );
   }
 
-  debugLog("version", `Detected agy version output: "${output}"`);
+  debugLog("version", `Detected Antigravity CLI version output: "${output}"`);
 
   const [major, minor, patch] = parseSemver(output);
   const parsedVersion = `${major}.${minor}.${patch}`;

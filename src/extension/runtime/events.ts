@@ -148,7 +148,7 @@ export class PiEventAdapter {
       }
 
       default:
-        debugLog("events", `Unhandled agy event type: "${event.event}"`);
+        debugLog("events", `Unhandled Antigravity CLI event type: "${event.event}"`);
         break;
     }
   }
@@ -442,7 +442,7 @@ export class PiEventAdapter {
       this.partial.responseId = (result.conversation_id ?? result.session_id) as string;
     }
 
-    debugLog("events", "AGY result outcome:", { status: result.status, error: result.error });
+    debugLog("events", "Antigravity CLI result outcome:", { status: result.status, error: result.error });
 
     const status = result.status?.toLowerCase();
     const conversationId = this.partial.responseId ?? this.errorState.conversationId;

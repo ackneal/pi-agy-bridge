@@ -197,11 +197,11 @@ export class AgyTurn {
     if (reference === "invalidate") {
       // The tombstone is written synchronously before asynchronous resource cleanup.
       void store.delete(session.piSessionId).catch((error) => {
-        debugLog("session", "Could not invalidate failed AGY runtime reference:", error);
+        debugLog("session", "Could not invalidate failed Antigravity CLI runtime reference:", error);
       });
     }
     void session.dispose().catch((error) => {
-      debugLog("session", "Could not dispose AGY runtime:", error);
+      debugLog("session", "Could not dispose Antigravity CLI runtime:", error);
     });
   }
 }

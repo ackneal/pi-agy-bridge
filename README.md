@@ -102,7 +102,7 @@ For additional detail, enable logging before starting Pi:
 export AGY_BRIDGE_DEBUG=1
 ```
 
-Start Pi from the same terminal. Diagnostic logs are written to `stderr` with `[agy:...]` tags.
+Start Pi from the same terminal. Diagnostic logs are written to `stderr` with `[Antigravity CLI:...]` tags.
 
 ## Development
 
