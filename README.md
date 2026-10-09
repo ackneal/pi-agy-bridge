@@ -67,9 +67,9 @@ Pi also manages custom tools and skills. Antigravity CLI's own executable tools 
 
 The bridge reuses your Antigravity CLI conversation across turns and can resume it after restarting Pi when the history still matches.
 
-Switching Antigravity models does not by itself reset the conversation. If tools are still running, the current turn finishes with the previous model; the next request uses the selected model. Switching to another provider and back without a new assistant response also preserves the conversation.
+Switching Antigravity models preserves the conversation. If tools are still running, the model change applies to the next request.
 
-When Pi history diverges—for example after compaction, branching, or a response from another provider—the bridge starts a new conversation using Pi's current instructions and history. It also rebuilds context if an existing conversation cannot be restored. Your Pi session remains unchanged.
+After compaction, branching, a response from another provider, or a failed restore, the bridge starts a new conversation from Pi's current instructions and history. Your Pi session remains unchanged.
 
 ### Model Discovery
 
@@ -83,9 +83,9 @@ The bridge reports token usage from the latest model request, not the conversati
 
 Cancelling a request stops its Antigravity CLI process and closes the MCP connection. If the process does not initialize within 30 seconds, the bridge terminates it and reports an error to Pi.
 
-Errors returned by Antigravity CLI, such as quota limits, do not by themselves reset the conversation when no tool calls are pending and Pi history still matches. You can select another Antigravity model and retry; the bridge attempts to resume the same conversation. The bridge does not automatically resend the failed request.
+After a quota error, you can select another Antigravity model and retry. The bridge reuses the conversation when it is safe to do so; it does not automatically resend failed requests.
 
-Input-stream failures, unexpected exits during an active request, invalid tool-result batches, MCP delivery failures, and blocked native tools invalidate the saved conversation reference. AGY terminal results or cancellation with pending tool calls also invalidate it. Checkpoints saved while tools are pending cannot be restored after a restart. The next request rebuilds context from Pi history.
+If a runtime or tool failure makes the conversation unsafe to reuse, the next request rebuilds context from Pi history.
 
 ## Troubleshooting
 
