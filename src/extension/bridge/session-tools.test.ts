@@ -103,7 +103,7 @@ describe("CapabilityGateway", () => {
 
     let settled = false;
     resultPromise.then(() => { settled = true; });
-    relay.resolveToolResults([toolResult("different-call", false, [{ type: "text", text: "wrong" }])]);
+    assert.throws(() => relay.resolveToolResults([toolResult("different-call", false, [{ type: "text", text: "wrong" }])]), /Unknown/);
     await setImmediate();
     assert.equal(settled, false);
 
@@ -122,6 +122,138 @@ describe("CapabilityGateway", () => {
     });
     assert.equal(relay.hasPendingCalls, false);
   });
+
+  const resultBatchCases: {
+    scenario: string;
+    supply: (results: Message[]) => Message[];
+    expectedError: RegExp | null;
+  }[] = [
+    { scenario: "ordered", supply: (results) => [...results], expectedError: null },
+    { scenario: "reversed", supply: (results) => [...results].reverse(), expectedError: null },
+    { scenario: "partial", supply: (results) => results.slice(0, 1), expectedError: /Missing tool result ID:/ },
+    { scenario: "unknown", supply: (results) => [...results, toolResult("unknown", false, [])], expectedError: /Unknown tool result ID: unknown/ },
+    { scenario: "duplicate", supply: (results) => [...results, results[0]!], expectedError: /Duplicate tool result ID:/ },
+    { scenario: "name mismatch", supply: (results) => [results[0]!, { ...results[1]!, toolName: "wrong" } as Message], expectedError: /Tool name mismatch for result:/ },
+    { scenario: "missing", supply: () => [], expectedError: /Missing tool result ID:/ },
+  ];
+
+  for (const { scenario, supply, expectedError } of resultBatchCases) {
+    it(`delivers an atomic result batch: ${scenario}`, async (t) => {
+      const relay = new CapabilityGateway([tool]);
+      t.after(() => relay.cancelPendingCalls("cleanup"));
+      const calls: string[] = [];
+      relay.setToolCallHandler((batch) => calls.push(...batch.calls.map((call) => call.id)));
+      let settled = 0;
+      const promises = [relay.call("echo", {}), relay.call("echo", {})];
+      for (const promise of promises) void promise.then(() => { settled++; });
+      await setImmediate();
+      const results = calls.map((id, index) => toolResult(id, index === 1, [
+        { type: "text", text: `result-${index}` },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      ]));
+      let supplied = supply(results);
+      const snapshot = structuredClone(supplied);
+
+      if (expectedError) {
+        assert.throws(() => relay.resolveToolResults(supplied, "context"), expectedError);
+        assert.deepEqual(supplied, snapshot);
+        await setImmediate();
+        assert.equal(settled, 0);
+        assert.equal(relay.hasPendingCalls, true);
+        supplied = results;
+      }
+      const recoverySnapshot = structuredClone(supplied);
+
+      assert.equal(relay.resolveToolResults(supplied, "context"), 2);
+      const delivered = await Promise.all(promises);
+      for (let index = 0; index < 2; index++) {
+        const source = results[index]! as Extract<Message, { role: "toolResult" }>;
+        const last = (supplied.at(-1)! as Extract<Message, { role: "toolResult" }>).toolCallId === calls[index];
+        assert.deepEqual(delivered[index], {
+          isError: source.isError,
+          content: [...source.content, ...(last ? [{ type: "text", text: "context" }] : [])],
+        });
+      }
+      assert.deepEqual(supplied, recoverySnapshot);
+      assert.equal(relay.hasPendingCalls, false);
+    });
+  }
+
+  for (const queued of [false, true]) {
+    it(`allows no dispatched results with queued=${queued}`, async (t) => {
+      const relay = new CapabilityGateway([tool]);
+      t.after(() => relay.cancelPendingCalls("cleanup"));
+      if (queued) void relay.call("echo", {});
+      assert.equal(relay.resolveToolResults([], "context"), 0);
+      assert.equal(relay.hasPendingCalls, queued);
+    });
+  }
+
+  for (const withDispatched of [false, true]) {
+    it(`rejects undispatched results atomically with dispatched=${withDispatched}`, async (t) => {
+      const relay = new CapabilityGateway([tool]);
+      t.after(() => relay.cancelPendingCalls("cleanup"));
+      const ids: string[] = [];
+      const original = PiToolAdapter.prototype.createCall;
+      t.mock.method(PiToolAdapter.prototype, "createCall", function (this: PiToolAdapter, ...args: Parameters<PiToolAdapter["createCall"]>) {
+        const call = original.apply(this, args);
+        if (call) ids.push(call.id);
+        return call;
+      });
+      const dispatched: string[] = [];
+      relay.setToolCallHandler((batch) => dispatched.push(...batch.calls.map((call) => call.id)));
+      const promises: Promise<unknown>[] = [];
+      if (withDispatched) {
+        promises.push(relay.call("echo", {}));
+        await setImmediate();
+      }
+      relay.setToolCallHandler(null);
+      promises.push(relay.call("echo", {}));
+      let settled = 0;
+      for (const promise of promises) void promise.then(() => { settled++; });
+      const results = ids.map((id) => toolResult(id, false, [{ type: "text", text: "answer" }]));
+
+      assert.throws(() => relay.resolveToolResults(results, "context"), /before dispatch/);
+      await setImmediate();
+      assert.equal(settled, 0);
+      assert.equal(relay.hasPendingCalls, true);
+      assert.deepEqual(dispatched, withDispatched ? [ids[0]] : []);
+
+      relay.setToolCallHandler((batch) => dispatched.push(...batch.calls.map((call) => call.id)));
+      assert.deepEqual(dispatched, ids);
+      assert.equal(relay.resolveToolResults(results, "context"), ids.length);
+      await Promise.all(promises);
+      assert.equal(relay.hasPendingCalls, false);
+    });
+  }
+
+  for (const failedIndex of [0, 1]) {
+    it(`settles result conversion failure at index ${failedIndex} with one context appendix`, async (t) => {
+      const relay = new CapabilityGateway([tool]);
+      t.after(() => relay.cancelPendingCalls("cleanup"));
+      const ids: string[] = [];
+      relay.setToolCallHandler((batch) => ids.push(...batch.calls.map((call) => call.id)));
+      const promises = [relay.call("echo", {}), relay.call("echo", {})];
+      await setImmediate();
+      const original = PiToolAdapter.prototype.toMcpResult;
+      t.mock.method(PiToolAdapter.prototype, "toMcpResult", function (this: PiToolAdapter, ...args: Parameters<PiToolAdapter["toMcpResult"]>) {
+        if (args[0].toolCallId === ids[failedIndex]) throw new Error("conversion failed");
+        return original.apply(this, args);
+      });
+      const results = ids.map((id, index) => toolResult(id, false, [{ type: "text", text: `answer-${index}` }]));
+
+      assert.equal(relay.resolveToolResults(results, "context"), 2);
+      const delivered = await Promise.all(promises);
+      assert.deepEqual(delivered, ids.map((_, index) => ({
+        isError: index === failedIndex,
+        content: [
+          { type: "text", text: index === failedIndex ? "conversion failed" : `answer-${index}` },
+          ...(index === 1 ? [{ type: "text", text: "context" }] : []),
+        ],
+      })));
+      assert.equal(relay.hasPendingCalls, false);
+    });
+  }
 
   it("returns a structured MCP error when call conversion rejects an unknown terminal", async () => {
     const relay = new CapabilityGateway([ptyTool], new SessionResources());

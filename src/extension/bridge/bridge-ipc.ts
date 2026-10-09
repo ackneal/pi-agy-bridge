@@ -26,6 +26,8 @@ export class BridgeIPC {
   private readonly resultSockets = new Map<string, Socket>();
   private readonly sockets = new Set<Socket>();
   private readonly authenticatedSockets = new Set<Socket>();
+  private transportFailureHandler: ((error: Error) => void) | null = null;
+  private transportFailure: Error | null = null;
   private broker: Server | null = null;
   private startPromise: Promise<void> | null = null;
   private closePromise: Promise<void> | null = null;
@@ -88,8 +90,19 @@ export class BridgeIPC {
     this.gateway.setToolCallHandler(handler);
   }
 
-  public resolveToolResults(messages: readonly Message[]): number {
-    return this.gateway.resolveToolResults(messages);
+  public setTransportFailureHandler(handler: ((error: Error) => void) | null): void {
+    this.transportFailureHandler = handler;
+    if (handler && this.transportFailure) handler(this.transportFailure);
+  }
+
+  private failTransport(error: unknown): void {
+    if (this.transportFailure) return;
+    this.transportFailure = error instanceof Error ? error : new Error(String(error));
+    this.transportFailureHandler?.(this.transportFailure);
+  }
+
+  public resolveToolResults(messages: readonly Message[], contextUpdate?: string): number {
+    return this.gateway.resolveToolResults(messages, contextUpdate);
   }
 
   public async start(): Promise<void> {
@@ -154,6 +167,7 @@ export class BridgeIPC {
   private async disposeBroker(): Promise<void> {
     this.cleanupExitListener();
 
+    this.transportFailureHandler = null;
     this.gateway.setToolCallHandler(null);
     this.gateway.cancelPendingCalls("Pi MCP bridge closed before the tool result was returned.");
 
@@ -195,6 +209,9 @@ export class BridgeIPC {
         .map(([id]) => id);
       for (const id of disconnectedCalls) this.resultSockets.delete(id);
 
+      if (disconnectedCalls.length > 0) {
+        this.failTransport(new Error("Pi MCP proxy disconnected before tool results were written."));
+      }
       if (!this.authenticatedSockets.delete(socket)) return;
       if (this.authenticatedSockets.size === 0 && disconnectedCalls.length > 0) {
         this.gateway.cancelPendingCalls("Pi MCP proxy disconnected during tool execution.");
@@ -203,7 +220,6 @@ export class BridgeIPC {
 
     const decoder = new StringDecoder("utf8");
     let buffer = "";
-    let authenticated = false;
 
     socket.on("data", (chunk) => {
       buffer += decoder.write(chunk);
@@ -216,7 +232,7 @@ export class BridgeIPC {
 
         try {
           const message = JSON.parse(line) as BrokerMessage;
-          if (!authenticated) {
+          if (!this.authenticatedSockets.has(socket)) {
             if (message.type !== "hello" || message.sessionId !== this.sessionId) {
               socket.end(`${JSON.stringify({
                 type: "error",
@@ -233,7 +249,6 @@ export class BridgeIPC {
               return;
             }
 
-            authenticated = true;
             this.authenticatedSockets.add(socket);
             this.markConnected?.();
             this.markConnected = null;
@@ -273,6 +288,8 @@ export class BridgeIPC {
           debugLog("mcp", "Broker call received", { brokerId: callId, name: toolName });
           void this.gateway.call(toolName, args).then((result) => {
             const payload = { type: "result", id: callId, result };
+            if (socket.destroyed) throw new Error("Pi MCP result socket was destroyed before write.");
+            const wireResult = `${JSON.stringify(payload)}\n`;
             if (isDebugEnabled()) {
               const content = JSON.stringify(result.content);
               debugLog("mcp", "Broker result ready", {
@@ -280,22 +297,16 @@ export class BridgeIPC {
                 name: toolName,
                 contentBytes: Buffer.byteLength(content),
                 contentHash: createHash("sha256").update(content).digest("hex"),
-                socketDestroyed: socket.destroyed,
               });
               debugArtifact("mcp-wire-result", { sessionId: this.sessionId, name: toolName, payload });
             }
-            if (!socket.destroyed) {
-              socket.write(`${JSON.stringify(payload)}\n`, (error) => {
-                debugLog("mcp", "Broker result socket write", {
-                  brokerId: callId,
-                  name: toolName,
-                  status: error ? "error" : "written",
-                  error: error?.message,
-                });
-              });
-            } else {
-              debugLog("mcp", "Broker result not sent: socket destroyed", { brokerId: callId, name: toolName });
-            }
+            socket.write(wireResult, (error) => {
+              // A successful callback is a local write, not a remote acknowledgement.
+              if (error) this.failTransport(error);
+              this.resultSockets.delete(callId);
+            });
+          }).catch((error) => {
+            this.failTransport(error);
             this.resultSockets.delete(callId);
           });
         } catch (error) {

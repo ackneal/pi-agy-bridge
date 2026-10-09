@@ -1,8 +1,8 @@
 // Compare conversation semantics, not metadata the Pi agent loop adds after streaming.
-export const HISTORY_FORMAT = "pi-semantic-v1";
+export const MESSAGE_FORMAT = "pi-semantic-v1";
 
-export function serializeHistoryMessage(value: unknown): string {
-  if (!isRecord(value)) throw new Error("Unsupported Pi history message: expected an object");
+export function serializeMessage(value: unknown): string {
+  if (!isRecord(value)) throw new Error("Unsupported Pi message: expected an object");
   const { role, content } = value;
   const message: Record<string, unknown> = { role, content: projectContent(content) };
 
@@ -28,7 +28,7 @@ export function serializeHistoryMessage(value: unknown): string {
       message.details = value.details;
       break;
     default:
-      throw new Error(`Unsupported Pi history role: ${String(role)}`);
+      throw new Error(`Unsupported Pi message role: ${String(role)}`);
   }
 
   return JSON.stringify(message);
@@ -36,10 +36,10 @@ export function serializeHistoryMessage(value: unknown): string {
 
 function projectContent(content: unknown): unknown {
   if (typeof content === "string") return content;
-  if (!Array.isArray(content)) throw new Error("Unsupported Pi history content: expected text or blocks");
+  if (!Array.isArray(content)) throw new Error("Unsupported Pi message content: expected text or blocks");
 
   return content.map((block: unknown) => {
-    if (!isRecord(block)) throw new Error("Unsupported Pi history content block");
+    if (!isRecord(block)) throw new Error("Unsupported Pi message content block");
     switch (block.type) {
       case "text":
         return { type: block.type, text: block.text };
@@ -50,7 +50,7 @@ function projectContent(content: unknown): unknown {
       case "toolCall":
         return { type: block.type, id: block.id, name: block.name, arguments: block.arguments, namespace: block.namespace };
       default:
-        throw new Error(`Unsupported Pi history content block: ${String(block.type)}`);
+        throw new Error(`Unsupported Pi message content block: ${String(block.type)}`);
     }
   });
 }

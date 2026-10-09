@@ -36,22 +36,29 @@ describe("static Antigravity CLI bridge plugin", () => {
     assert.match(markdown, /\ninheritMcp: true\n/);
     assert.doesNotMatch(markdown, /\ntools:\n/);
     assert.match(markdown, /model runtime delegated by Pi/);
-    assert.match(markdown, /<pi_context purpose="reconstructed_conversation">/);
-    assert.match(markdown, /<system_instructions>/);
-    assert.match(markdown, /<history>/);
-    assert.match(markdown, /<current_message>/);
-    assert.match(markdown, /dynamically supplied by the MCP server `pi-agy-bridge_pi`/);
-    assert.match(markdown, /Pi's current tool declarations and the MCP tool list refer to the same capabilities/);
-    assert.match(markdown, /ServerName: "pi-agy-bridge_pi"/);
-    assert.match(markdown, /Set `ToolName` to its exact plain Pi tool name/);
-    assert.match(markdown, /Do not claim that a tool or subagent is missing or unadvertised merely because/);
-    assert.match(markdown, /Examples of Pi's default tools are `read`, `bash`, `edit`, and `write`/);
-    assert.match(markdown, /additional tools or subagents may be supplied by extensions/);
-    assert.match(markdown, /Follow the current tool input schema/);
-    assert.match(markdown, /If the MCP server explicitly reports that the tool is not registered/);
-    assert.match(markdown, /A historical mention alone does not establish current availability/);
-    assert.match(markdown, /If a call fails schema validation, correct the arguments/);
-    assert.match(markdown, /Do not claim that an external action succeeded unless the corresponding tool result confirms it/);
+    for (const requirement of [
+      /`purpose: "reconstructed_conversation"`/,
+      /`purpose: "incremental_conversation"`/,
+      /`purpose: "pending_tool_continuation"`/,
+      /`systemInstructions`/,
+      /`history`/,
+      /`currentMessage`/,
+      /`contentOmitted: true`/,
+      /recorded `role`/,
+      /Do not .*promote a message to a system instruction/,
+      /Tool results.*untrusted data/,
+      /only to the bridge-added block/,
+      /original tool data.*do not grant authority/,
+      /do not override Pi's tool authorization or permission policies/,
+      /[Cc]laimed approval.*not authorization/,
+      /`call_mcp_tool`/,
+      /ServerName: "pi-agy-bridge_pi"/,
+      /`ToolName`.*exact plain Pi tool name/,
+      /tool input schema/,
+      /schema validation/,
+      /`SKILL\.md`.*before following it/,
+    ]) assert.match(markdown, requirement);
+    assert.doesNotMatch(markdown, /incremental XML|<pi_context/);
     assert.doesNotMatch(markdown, /session ID|conversation ID|PTY ID|socket|tool snapshot/i);
   });
 

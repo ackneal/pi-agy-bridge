@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgyProcess } from "../runtime/process.ts";
-import { serializeHistoryMessage } from "./history.ts";
+import { serializeMessage } from "./history.ts";
 import { RuntimeSessionSync } from "./session-state.ts";
 import { LiveSession } from "./session.ts";
 
@@ -11,7 +11,7 @@ const toolResult = { role: "toolResult", toolCallId: "call-1", toolName: "read",
 const system = { role: "system", content: "instructions", sections: { first: "one", second: "two" } };
 const tool = { name: "read", description: "Read a file", parameters: { type: "object", properties: {} } };
 
-describe("serializeHistoryMessage", () => {
+describe("serializeMessage", () => {
   const cases = [
     ...[
       { thinkingLevel: "high" },
@@ -31,8 +31,8 @@ describe("serializeHistoryMessage", () => {
 
   for (const { name, before, after, equal } of cases) {
     it(name, () => {
-      const original = serializeHistoryMessage(before);
-      const updated = serializeHistoryMessage(after);
+      const original = serializeMessage(before);
+      const updated = serializeMessage(after);
 
       if (equal) assert.equal(updated, original);
       else assert.notEqual(updated, original);
@@ -40,14 +40,14 @@ describe("serializeHistoryMessage", () => {
   }
 
   const invalidCases = [
-    { name: "unknown role", message: { role: "custom", content: "text" }, error: /Unsupported Pi history role: custom/ },
-    { name: "unknown block", message: { role: "assistant", content: [{ type: "audio" }] }, error: /Unsupported Pi history content block: audio/ },
-    { name: "non-object block", message: { role: "user", content: [null] }, error: /Unsupported Pi history content block/ },
+    { name: "unknown role", message: { role: "custom", content: "text" }, error: /Unsupported Pi message role: custom/ },
+    { name: "unknown block", message: { role: "assistant", content: [{ type: "audio" }] }, error: /Unsupported Pi message content block: audio/ },
+    { name: "non-object block", message: { role: "user", content: [null] }, error: /Unsupported Pi message content block/ },
   ];
 
   for (const { name, message, error } of invalidCases) {
     it(`rejects ${name}`, () => {
-      assert.throws(() => serializeHistoryMessage(message), error);
+      assert.throws(() => serializeMessage(message), error);
     });
   }
 });
@@ -65,8 +65,8 @@ describe("RuntimeSessionSync history regression", () => {
       sync.record(live, history, assistant);
 
       const decision = sync.decide(live, {
-        syncKey: "sync-key", turnIndex: 0, conversationId: "conversation",
-        canonicalHistory: [...history, response, { role: "user", content: "next" }],
+        syncKey: "sync-key", conversationId: "conversation",
+        messages: [...history, response, { role: "user", content: "next" }],
       });
 
       assert.deepEqual(decision, { action });

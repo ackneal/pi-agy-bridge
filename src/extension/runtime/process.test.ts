@@ -4,8 +4,8 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { describe, it } from "node:test";
-import { AgyProcess } from "./process.ts";
-import { AgyProcessError } from "../shared/types.ts";
+import { AgyProcess, type AgyEventSource } from "./process.ts";
+import { AgyProcessError, type AgyEvent } from "../shared/types.ts";
 
 describe("AgyProcess", () => {
   it("starts agy with stream-json input and output", async (t) => {
@@ -66,43 +66,72 @@ process.stdin.resume();
     });
   }
 
-  it("sends multiple stream-json inputs through one process and exposes events", async (t) => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-reuse-"));
-    t.after(() => rm(tempDir, { recursive: true, force: true }));
-    const executable = path.join(tempDir, "agy");
-    const script = `#!${process.execPath}
+  for (const row of [
+    { name: "sends multiple stream-json inputs through one process and exposes events", exitsOnSecond: false },
+    { name: "reports exactly one runtime failure when turn two exits without a result after turn one succeeds", exitsOnSecond: true },
+  ]) {
+    it(row.name, { timeout: 5000 }, async (t) => {
+      const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-reuse-"));
+      t.after(() => rm(tempDir, { recursive: true, force: true }));
+      const executable = path.join(tempDir, "agy");
+      const inputsFile = path.join(tempDir, "inputs.json");
+      const script = `#!${process.execPath}
+import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 const lines = createInterface({ input: process.stdin });
+const inputs = [];
 process.stdout.write(JSON.stringify({ event: "init" }) + "\\n");
 lines.on("line", (line) => {
   const input = JSON.parse(line);
+  inputs.push(input);
+  writeFileSync(${JSON.stringify(inputsFile)}, JSON.stringify(inputs));
+  if (inputs.length === 2 && ${row.exitsOnSecond}) process.exit(0);
   process.stdout.write(JSON.stringify({ event: "step_update", text_delta: input.message.content }) + "\\n");
   process.stdout.write(JSON.stringify({ event: "result", status: "success" }) + "\\n");
 });
 `;
-    await writeFile(executable, script, "utf-8");
-    await chmod(executable, 0o755);
+      await writeFile(executable, script, "utf-8");
+      await chmod(executable, 0o755);
 
-    const proc = new AgyProcess({ agyPath: executable, agentName: "pi-test", model: "test" });
-    t.after(() => proc.abort());
+      const proc = new AgyProcess({ agyPath: executable, agentName: "pi-test", model: "test" });
+      t.after(() => proc.abort());
 
-    await proc.start();
-    const events = proc.events()[Symbol.asyncIterator]();
-    for (const prompt of ["first", "second"]) {
-      await proc.send({ event: "user", message: { content: prompt } });
-      const received: string[] = [];
-      while (true) {
-        const { value, done } = await events.next();
-        assert.equal(done, false);
-        if (value?.event === "step_update" && typeof value.text_delta === "string") {
-          received.push(value.text_delta);
+      await proc.start();
+      const received: { event: AgyEvent; source: AgyEventSource }[] = [];
+      proc.onEvent((event, source) => received.push({ event, source }));
+      const events = proc.events()[Symbol.asyncIterator]();
+      const inputs = ["first", "second"].map((content) => ({ event: "user", message: { content } } as const));
+      for (const input of inputs) {
+        const start = received.length;
+        const turnEvents: AgyEvent[] = [];
+        let pending = events.next();
+
+        await proc.send(input);
+        while (true) {
+          const { value, done } = await pending;
+          assert.equal(done, false);
+          assert.ok(value);
+          turnEvents.push(value);
+          if (value.event === "result") break;
+          pending = events.next();
         }
-        if (value?.event === "result") break;
+
+        const failed = row.exitsOnSecond && input.message.content === "second";
+        const expected: AgyEvent[] = failed
+          ? [{ event: "result", status: "error", error: { message: "Antigravity CLI process terminated unexpectedly (exit code 0, signal none)" } }]
+          : [{ event: "step_update", text_delta: input.message.content }, { event: "result", status: "success" }];
+        assert.equal(turnEvents.length, expected.length);
+        assert.deepEqual(turnEvents, expected);
+        assert.deepEqual(received.slice(start), expected.map((event) => ({ event, source: failed ? "runtime" : "agy" })));
       }
-      assert.deepEqual(received, [prompt]);
-    }
-    await events.return?.();
-  });
+      assert.deepEqual(JSON.parse(await readFile(inputsFile, "utf-8")), inputs);
+      if (row.exitsOnSecond) {
+        assert.deepEqual(await events.next(), { value: undefined, done: true });
+        assert.equal(proc.isRunning, false);
+      }
+      await events.return?.();
+    });
+  }
 
   it("send() throws when process is not running", async () => {
     const proc = new AgyProcess({
@@ -183,10 +212,73 @@ process.stdin.resume();
   });
 });
 
+const quotaError = "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h27m34s.";
+const exitQuotaError = `Antigravity CLI process terminated unexpectedly (exit code 1, signal none): ${quotaError}`;
+const processQuotaError = `Antigravity CLI process error: ${quotaError}`;
+const stdinQuotaError = `Antigravity CLI stdin error: ${quotaError}`;
+
 for (const row of [
-  { name: "decodes split UTF-8 and flushes a final result after exit", result: true, trailing: false },
-  { name: "keeps a final result settled through trailing events", result: true, trailing: true },
-  { name: "reports exit without a final result after draining stdout", result: false, trailing: false },
+  { name: "native quota error", failure: "native", message: quotaError },
+  { name: "native error identical to synthetic exit", failure: "native", message: exitQuotaError },
+  { name: "synthetic exit with quota stderr", failure: "exit", message: exitQuotaError },
+  { name: "native error identical to synthetic process failure", failure: "native", message: processQuotaError },
+  { name: "synthetic process failure with quota text", failure: "process", message: processQuotaError },
+  { name: "native error identical to synthetic stdin failure", failure: "native", message: stdinQuotaError },
+  { name: "synthetic stdin failure with quota text", failure: "stdin", message: stdinQuotaError },
+] as const) {
+  test(`classifies provenance independently of payload: ${row.name}`, { timeout: 5000 }, async (t) => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-source-"));
+    t.after(() => rm(tempDir, { recursive: true, force: true }));
+    const executable = path.join(tempDir, "agy");
+    await writeFile(executable, `#!${process.execPath}
+process.stdout.write('{"event":"init"}\\n');
+process.stdin.resume();
+`, { mode: 0o755 });
+    const proc = new AgyProcess({ agyPath: executable, agentName: "test", model: "test" });
+    let child: ChildProcess | null = null;
+    t.after(async () => {
+      child?.kill("SIGKILL");
+      await proc.abort();
+    });
+    await proc.start();
+    child = (proc as unknown as { child: ChildProcess }).child;
+    const received: { event: AgyEvent; source: AgyEventSource }[] = [];
+    proc.onEvent((event, source) => received.push({ event, source }));
+    const iterator = proc.events()[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const expected: AgyEvent = { event: "result", status: "error", error: { message: row.message } };
+    if (row.failure === "native") expected.source = "runtime";
+    const input = { event: "user", message: { content: "test" } } as const;
+    const write = t.mock.method(child.stdin!, "write");
+
+    await proc.send(input);
+    assert.equal(write.mock.calls[0]?.arguments[0], `${JSON.stringify(input)}\n`);
+    if (row.failure === "native") {
+      child.stdout!.emit("data", Buffer.from(`${JSON.stringify(expected)}\n`));
+      child.stdout!.emit("end");
+      child.emit("close", 1, null);
+    } else if (row.failure === "exit") {
+      child.stderr!.emit("data", Buffer.from(quotaError));
+      child.stdout!.emit("end");
+      child.emit("close", 1, null);
+    } else if (row.failure === "process") {
+      child.emit("error", new Error(quotaError));
+    } else {
+      child.stdin!.emit("error", new Error(quotaError));
+    }
+
+    assert.deepEqual(await pending, { value: expected, done: false });
+    assert.equal((await iterator.next()).done, true);
+    assert.deepEqual(received, [{ event: expected, source: row.failure === "native" ? "agy" : "runtime" }]);
+  });
+}
+
+for (const row of [
+  { name: "decodes split UTF-8 and flushes a final success after exit", status: "success", trailing: false },
+  { name: "flushes a native error after exit without a synthetic result", status: "error", trailing: false },
+  { name: "keeps a final success settled through trailing events", status: "success", trailing: true },
+  { name: "keeps a final native error settled through trailing events", status: "error", trailing: true },
+  { name: "reports exit without a final result after draining stdout", status: null, trailing: false },
 ]) {
   test(row.name, async (t) => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-drain-"));
@@ -207,10 +299,15 @@ process.stdin.resume();
     child = (proc as unknown as { child: ChildProcess }).child;
     const iterator = proc.events()[Symbol.asyncIterator]();
     const first = iterator.next();
+    const results: { event: AgyEvent; source: AgyEventSource }[] = [];
+    proc.onEvent((event, source) => {
+      if (event.event === "result") results.push({ event, source });
+    });
     child.emit("exit", 0, null);
     const payload = Buffer.from('{"event":"step_update","text_delta":"中文😀"}\n');
     for (const byte of payload) child.stdout!.emit("data", Buffer.from([byte]));
-    if (row.result) child.stdout!.emit("data", Buffer.from('{"event":"result","status":"success"}'));
+    const nativeResult = { event: "result", status: row.status };
+    if (row.status) child.stdout!.emit("data", Buffer.from(JSON.stringify(nativeResult)));
     if (row.trailing) child.stdout!.emit("data", Buffer.from('\n{"event":"step_update","text_delta":"trailing"}\n'));
     child.stdout!.emit("end");
     child.emit("close", 0, null);
@@ -218,7 +315,10 @@ process.stdin.resume();
     assert.equal((await first).value?.text_delta, "中文😀");
     const result = await iterator.next();
     assert.equal(result.value?.event, "result");
-    assert.equal(result.value?.status, row.result ? "success" : "error");
+    assert.equal(result.value?.status, row.status ?? "error");
+    assert.deepEqual(results, [{ event: result.value, source: row.status ? "agy" : "runtime" }]);
+    if (row.status) assert.deepEqual(result.value, nativeResult);
+    else assert.equal(Object.hasOwn(result.value!, "source"), false);
     if (row.trailing) assert.equal((await iterator.next()).value?.text_delta, "trailing");
     assert.equal((await iterator.next()).done, true);
   });
@@ -297,13 +397,26 @@ for (const state of ["unstarted", "active", "exited", "spawn failure"] as const)
     if (state === "active" || state === "exited") {
       await writeFile(executable, `#!${process.execPath}
 process.stdout.write('{"event":"init"}\\n');
-process.stdin.resume();
+${state === "exited" ? `process.stdin.once("data", () => {
+  process.stdout.write('{"event":"result","status":"success"}\\n', () => process.exit(0));
+});` : "process.stdin.resume();"}
 `, { mode: 0o755 });
       await proc.start();
     } else if (state === "spawn failure") {
       await assert.rejects(proc.start(), AgyProcessError);
     }
-    if (state === "exited") await proc.abort();
+    if (state === "exited") {
+      const child = (proc as unknown as { child: ChildProcess }).child;
+      const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+
+      await proc.send({ event: "user", message: { content: "finish naturally" } });
+      await closed;
+
+      assert.equal(child.exitCode, 0);
+      assert.equal(child.signalCode, null);
+      assert.equal(child.killed, false);
+      assert.equal(proc.isRunning, false);
+    }
     const iterator = proc.events()[Symbol.asyncIterator]();
     const pending = iterator.next();
 
@@ -351,6 +464,10 @@ process.stdin.resume();
     if (row.result) child.stdout!.emit("data", Buffer.from('{"event":"result","status":"success"}\n'));
     const iterator = proc.events()[Symbol.asyncIterator]();
     const pending = iterator.next();
+    const results: { event: AgyEvent; source: AgyEventSource }[] = [];
+    proc.onEvent((event, source) => {
+      if (event.event === "result") results.push({ event, source });
+    });
     const error = Object.assign(new Error("broken pipe"), { code: "EPIPE" });
 
     if (row.failure === "destroy") {
@@ -381,10 +498,14 @@ process.stdin.resume();
     if (row.phase === "started" && !row.result) {
       assert.equal(received.value?.event, "result");
       assert.equal(received.value?.status, "error");
-      assert.deepEqual(received.value?.error, { message: "Antigravity CLI stdin error: broken pipe" });
+      assert.deepEqual(received.value, {
+        event: "result", status: "error", error: { message: "Antigravity CLI stdin error: broken pipe" },
+      });
+      assert.deepEqual(results, [{ event: received.value, source: "runtime" }]);
       assert.equal((await iterator.next()).done, true);
     } else {
       assert.equal(received.done, true);
+      assert.deepEqual(results, []);
     }
     assert.equal(proc.isRunning, false);
     assert.ok(child.exitCode !== null || child.signalCode !== null);

@@ -1,3 +1,4 @@
+import type { ConversationErrorState } from "../runtime/events.ts";
 import { randomUUID } from "node:crypto";
 import type { AgyRuntime } from "../runtime/process.ts";
 import type { ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -88,27 +89,63 @@ export class LiveSession {
   public activeProcess: AgyRuntime | null = null;
   public activeMcpServer: BridgeIPC | null = null;
   public syncKey: string = "";
-  public turnIndex: number = 0;
-  public conversationId: string | undefined;
+  public readonly errorState: ConversationErrorState = {};
+  public get conversationId(): string | undefined {
+    return this.errorState.conversationId;
+  }
+
+  public set conversationId(value: string | undefined) {
+    if (value !== this.errorState.conversationId) this.errorState.lastError = undefined;
+    this.errorState.conversationId = value;
+  }
   public readonly resources = new SessionResources();
+  private unsubscribeRuntimeEvents: (() => void) | null = null;
   private abortSignal: AbortSignal | null = null;
   private abortListener: (() => void) | null = null;
+  private preparationId: symbol | undefined;
 
   constructor(piSessionId: string) {
     this.piSessionId = piSessionId;
+  }
+
+  public beginPreparation(): symbol {
+    const preparationId = Symbol();
+    this.preparationId = preparationId;
+    return preparationId;
+  }
+
+  public ownsPreparation(token: symbol): boolean {
+    return this.preparationId === token;
+  }
+
+  public releasePreparation(token: symbol): void {
+    if (this.ownsPreparation(token)) this.preparationId = undefined;
   }
 
   public setSession(
     process: AgyRuntime,
     syncKey: string,
     mcpServer?: BridgeIPC,
-    conversationId?: string
-  ): void {
+    conversationId?: string,
+    preparationId?: symbol
+  ): boolean {
+    if (preparationId !== undefined && !this.ownsPreparation(preparationId)) return false;
+
     this.activeProcess = process;
     this.activeMcpServer = mcpServer ?? null;
     this.syncKey = syncKey;
-    this.turnIndex = 0;
     this.conversationId = conversationId;
+    return true;
+  }
+
+  public setRuntimeEventHandler(handler: Parameters<AgyRuntime["onEvent"]>[0] | null): void {
+    const unsubscribe = this.unsubscribeRuntimeEvents;
+    this.unsubscribeRuntimeEvents = null;
+    unsubscribe?.();
+
+    if (handler && this.activeProcess) {
+      this.unsubscribeRuntimeEvents = this.activeProcess.onEvent(handler);
+    }
   }
 
   public setAbortSignal(signal: AbortSignal | undefined, onAbort: () => void): void {
@@ -128,21 +165,23 @@ export class LiveSession {
     this.abortListener = null;
   }
 
-  public incrementTurn(): void {
-    this.turnIndex++;
-  }
+  public async dispose(options?: { preserveResources?: boolean; preserveConversation?: boolean; preparationId?: symbol }): Promise<void> {
+    if (options?.preparationId !== undefined) {
+      if (!this.ownsPreparation(options.preparationId)) return;
+    } else {
+      this.preparationId = undefined;
+    }
 
-  public async dispose(): Promise<void> {
     const proc = this.activeProcess;
     const mcpServer = this.activeMcpServer;
 
     this.activeProcess = null;
     this.activeMcpServer = null;
     this.syncKey = "";
-    this.turnIndex = 0;
-    this.conversationId = undefined;
+    if (!options?.preserveConversation) this.conversationId = undefined;
     this.clearAbortSignal();
-    this.resources.disposeAll();
+    this.setRuntimeEventHandler(null);
+    if (!options?.preserveResources) this.resources.disposeAll();
 
     if (mcpServer) {
       try {

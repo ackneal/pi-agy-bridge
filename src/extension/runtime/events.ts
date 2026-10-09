@@ -14,7 +14,13 @@ import { debugLog } from "../shared/debug.ts";
 
 const AGY_INTERNAL_TOOL_NAMES = new Set(["list_resources", "call_mcp_tool", "manage_task"]);
 
+export interface ConversationErrorState {
+  conversationId?: string | undefined;
+  lastError?: string | undefined;
+}
+
 export interface AgyEventAdapterOptions {
+  errorState?: ConversationErrorState | undefined;
   model: string;
   provider?: string;
   stream?: AssistantMessageEventStream;
@@ -25,24 +31,24 @@ export interface AgyEventAdapterOptions {
 
 export class PiEventAdapter {
   public readonly stream: AssistantMessageEventStream;
-  private readonly model: string;
-  private readonly provider: string;
   private readonly allowedToolNames: ReadonlySet<string> | undefined;
   private readonly bridgeToolCallsExternally: boolean;
   private readonly onBlockedTool: ((name: string) => void) | undefined;
 
+  private errorState: ConversationErrorState;
+
   private started = false;
   private completed = false;
   private currentTextIndex: number | null = null;
-  private currentText = "";
   private toolCallCount = 0;
   private hasStepUsage = false;
+  private completedResponse = false;
+  private hasTurnError = false;
 
   private partial: AssistantMessage;
 
   constructor(options: AgyEventAdapterOptions) {
-    this.model = options.model;
-    this.provider = options.provider ?? "agy";
+    this.errorState = options.errorState ?? {};
     this.allowedToolNames = options.allowedToolNames;
     this.bridgeToolCallsExternally = options.bridgeToolCallsExternally ?? false;
     this.onBlockedTool = options.onBlockedTool;
@@ -52,8 +58,8 @@ export class PiEventAdapter {
       role: "assistant",
       content: [],
       api: "agy" as any,
-      provider: this.provider,
-      model: this.model,
+      provider: options.provider ?? "agy",
+      model: options.model,
       usage: {
         input: 0,
         output: 0,
@@ -73,6 +79,18 @@ export class PiEventAdapter {
     };
   }
 
+  public setErrorState(state: ConversationErrorState): void {
+    this.errorState = state;
+  }
+
+  public setModel(model: string): void {
+    if (this.started) {
+      throw new Error("Cannot change model after the stream has started");
+    }
+
+    this.partial.model = model;
+  }
+
   public isCompleted(): boolean {
     return this.completed;
   }
@@ -81,7 +99,21 @@ export class PiEventAdapter {
     return this.snapshot();
   }
 
-  public handleEvent(event: AgyEvent): void {
+  public getBlockedToolName(event: AgyEvent): string | undefined {
+    if (event.event !== "step_update") return undefined;
+
+    const update = event as AgyStepUpdateEvent;
+    const step = { ...update.step_update, ...update };
+    const tool = this.selectToolName(step);
+    return tool === null ? undefined : this.getBlockedAgyToolName(tool.name);
+  }
+
+  public handleEvent(event: AgyEvent, source: "agy" | "runtime" = "agy"): void {
+    if (source === "runtime") {
+      const result = event as AgyResultEvent;
+      this.handleTermination("error", typeof result.error === "string" ? result.error : result.error?.message);
+      return;
+    }
     if (this.completed) {
       debugLog("events", `Ignoring event after stream completed: ${event.event}`);
       return;
@@ -116,7 +148,7 @@ export class PiEventAdapter {
       }
 
       default:
-        debugLog("events", `Unhandled agy event type: "${event.event}"`);
+        debugLog("events", `Unhandled Antigravity CLI event type: "${event.event}"`);
         break;
     }
   }
@@ -181,6 +213,16 @@ export class PiEventAdapter {
   }
 
   private handleStepUpdate(step: AgyStepUpdateEvent): void {
+    const stepType = step.update_type ?? step.type ?? step.step_type;
+    if (stepType === "user_input") {
+      this.completedResponse = false;
+      this.hasTurnError = false;
+    } else if (stepType === "error_message") {
+      this.hasTurnError = true;
+    } else if (stepType === "agent_response") {
+      this.completedResponse = step.state === "DONE";
+    }
+
     if (step.usage) {
       debugLog("usage", "Antigravity CLI step usage:", step.usage);
       this.hasStepUsage = true;
@@ -193,12 +235,17 @@ export class PiEventAdapter {
       this.appendTextDelta(deltaText);
     }
 
-    const toolCall = this.extractToolCall(step);
-    if (toolCall !== null) {
+    const tool = this.selectToolName(step);
+    if (tool !== null) {
+      const blockedTool = this.getBlockedAgyToolName(tool.name);
+      if (blockedTool !== undefined) {
+        this.blockTool(blockedTool);
+        return;
+      }
+
+      const toolCall = this.extractToolCall(step, tool.name as string);
       if (AGY_INTERNAL_TOOL_NAMES.has(toolCall.name)) {
         debugLog("events", `Allowing Antigravity CLI internal coordination tool: ${toolCall.name}`);
-      } else if (!this.isAllowedAgyTool(toolCall.name)) {
-        this.blockTool(toolCall.name);
       } else if (this.bridgeToolCallsExternally) {
         debugLog("events", `Waiting for MCP bridge to relay tool call: ${toolCall.name}`);
       } else {
@@ -247,7 +294,6 @@ export class PiEventAdapter {
       };
       this.partial.content.push(textBlock);
       this.currentTextIndex = this.partial.content.length - 1;
-      this.currentText = "";
 
       this.stream.push({
         type: "text_start",
@@ -256,8 +302,7 @@ export class PiEventAdapter {
       });
     }
 
-    this.currentText += delta;
-    (this.partial.content[this.currentTextIndex] as TextContent).text = this.currentText;
+    (this.partial.content[this.currentTextIndex] as TextContent).text += delta;
 
     this.stream.push({
       type: "text_delta",
@@ -270,9 +315,8 @@ export class PiEventAdapter {
   private closeActiveText(): void {
     if (this.currentTextIndex !== null) {
       const index = this.currentTextIndex;
-      const content = this.currentText;
+      const content = (this.partial.content[index] as TextContent).text;
       this.currentTextIndex = null;
-      this.currentText = "";
 
       this.stream.push({
         type: "text_end",
@@ -283,7 +327,29 @@ export class PiEventAdapter {
     }
   }
 
-  private extractToolCall(step: AgyStepUpdateEvent): ToolCall | null {
+  private selectToolName(step: AgyStepUpdateEvent): { name: unknown } | null {
+    // A nested call owns its name, even when malformed; never use a flat fallback.
+    if (step.tool_call) return { name: step.tool_call.name };
+
+    const stepType = step.update_type ?? step.type ?? step.step_type;
+    if (stepType !== "tool") return null;
+    if ("tool_name" in step) return { name: step.tool_name };
+    if ("name" in step) return { name: step["name"] };
+
+    return null;
+  }
+
+  private getBlockedAgyToolName(name: unknown): string | undefined {
+    if (name === undefined) return "<unnamed>";
+    if (name !== null && typeof name === "object") return "<invalid>";
+    if (typeof name !== "string") return String(name);
+    if (name.length === 0) return name;
+    if (AGY_INTERNAL_TOOL_NAMES.has(name) || this.isAllowedAgyTool(name)) return undefined;
+
+    return name;
+  }
+
+  private extractToolCall(step: AgyStepUpdateEvent, name: string): ToolCall {
     if (step.tool_call) {
       const tc = step.tool_call;
       const args = typeof tc.arguments === "string"
@@ -293,27 +359,21 @@ export class PiEventAdapter {
       return {
         type: "toolCall",
         id: tc.id || `call_${Date.now()}_${++this.toolCallCount}`,
-        name: tc.name,
-        arguments: args as JsonObject,
-      };
-    }
-
-    const stepType = step.update_type ?? step.type ?? step.step_type;
-    if (stepType === "tool" && (step.tool_name || step["name"])) {
-      const name = (step.tool_name ?? step["name"]) as string;
-      const id = (step.call_id ?? (step as Record<string, unknown>)["id"] ?? `call_${Date.now()}_${++this.toolCallCount}`) as string;
-      const rawInput = step.tool_input ?? step["input"] ?? step["arguments"] ?? {};
-      const args = typeof rawInput === "string" ? this.safeParseJson(rawInput) : rawInput;
-
-      return {
-        type: "toolCall",
-        id,
         name,
         arguments: args as JsonObject,
       };
     }
 
-    return null;
+    const id = (step.call_id ?? step["id"] ?? `call_${Date.now()}_${++this.toolCallCount}`) as string;
+    const rawInput = step.tool_input ?? step["input"] ?? step["arguments"] ?? {};
+    const args = typeof rawInput === "string" ? this.safeParseJson(rawInput) : rawInput;
+
+    return {
+      type: "toolCall",
+      id,
+      name,
+      arguments: args as JsonObject,
+    };
   }
 
   private appendToolCall(toolCall: ToolCall): void {
@@ -382,12 +442,24 @@ export class PiEventAdapter {
       this.partial.responseId = (result.conversation_id ?? result.session_id) as string;
     }
 
-    debugLog("events", "AGY result outcome:", { status: result.status, error: result.error });
+    debugLog("events", "Antigravity CLI result outcome:", { status: result.status, error: result.error });
 
-    // An explicit terminal status describes this turn, not an attached historical error.
     const status = result.status?.toLowerCase();
-    if (status === "aborted" || status === "error" || (status !== "success" && result.error)) {
+    const conversationId = this.partial.responseId ?? this.errorState.conversationId;
+    if (conversationId !== this.errorState.conversationId) {
+      this.errorState.conversationId = conversationId;
+      this.errorState.lastError = undefined;
+    }
+    const error = typeof result.error === "string" ? result.error : result.error?.message;
+    const historicalError = status === "error" && conversationId !== undefined &&
+      error !== undefined && error === this.errorState.lastError && this.completedResponse && !this.hasTurnError;
+    if (status === "success") this.errorState.lastError = undefined;
+    if (historicalError) {
+      debugLog("events", "Ignored historical Antigravity CLI error after completed response:", { conversationId, error });
+    }
+    if (!historicalError && (status === "aborted" || status === "error" || (status !== "success" && result.error))) {
       const reason = status === "aborted" ? "aborted" : "error";
+      if (reason === "error") this.errorState.lastError = error;
       this.partial.stopReason = reason;
       if (result.error || reason === "error") {
         this.partial.errorMessage = typeof result.error === "string"

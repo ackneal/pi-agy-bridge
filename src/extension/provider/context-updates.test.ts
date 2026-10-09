@@ -12,11 +12,9 @@ interface Case {
   isReused: boolean;
   syncedMessageCount?: number;
   exact?: string;
-  includes?: string[];
-  excludes?: string[];
+  expected?: unknown;
 }
 
-const incremental = '<pi_context purpose="incremental_conversation">';
 const cases: Case[] = [
   ...[
     { name: "string", content: "next <request> & now" },
@@ -38,29 +36,34 @@ const cases: Case[] = [
       { role: "user", content: "second & new", timestamp: 3 },
     ] },
     isReused: true, syncedMessageCount: 1,
-    includes: [incremental, '<message role="user">\n    <text>first &lt;new&gt;</text>', '<message role="user">\n    <text>second &amp; new</text>'],
-    excludes: ["OLD_HISTORY_SENTINEL", "<history", "<current_message"],
+    expected: { purpose: "incremental_conversation", messages: [
+      { role: "user", content: "first <new>" },
+      { role: "user", content: "second & new" },
+    ] },
   },
   {
     name: "zero synced messages includes the entire new slice",
     context: { messages: [{ role: "system", content: "new rules", timestamp: 1 }, { role: "user", content: "request", timestamp: 2 }] },
     isReused: true, syncedMessageCount: 0,
-    includes: [incremental, '<message role="system">', '<text>new rules</text>', '<message role="user">', '<text>request</text>'],
-    excludes: ["<history"],
+    expected: { purpose: "incremental_conversation", messages: [
+      { role: "system", content: "new rules" },
+      { role: "user", content: "request" },
+    ] },
   },
   {
-    name: "formats a single new system message as incremental XML",
+    name: "formats a single new system message as incremental JSON",
     context: { messages: [oldMessage, { role: "system", content: "rules & policy", timestamp: 2 }] },
     isReused: true, syncedMessageCount: 1,
-    includes: [incremental, '<message role="system">', '<text>rules &amp; policy</text>'],
-    excludes: ["OLD_HISTORY_SENTINEL", "<history"],
+    expected: { purpose: "incremental_conversation", messages: [{ role: "system", content: "rules & policy" }] },
   },
   ...[true, false].map((isReused): Case => ({
-    name: `preserves exact image bytes in ${isReused ? "incremental" : "rebuilt"} XML`,
+    name: `preserves exact image bytes in ${isReused ? "incremental JSON" : "rebuilt JSON"}`,
     context: { messages: [oldMessage, { role: "user", content: [{ type: "text", text: "look" }, image], timestamp: 2 }] },
     isReused, syncedMessageCount: 1,
-    includes: [isReused ? incremental : '<pi_context purpose="reconstructed_conversation">', '<image mime_type="image/png" encoding="base64">AAECA/8=</image>'],
-    excludes: ["binary content omitted", "[Image:", ...(isReused ? ["OLD_HISTORY_SENTINEL", "<history"] : [])],
+    expected: isReused
+      ? { purpose: "incremental_conversation", messages: [{ role: "user", content: [{ type: "text", text: "look" }, image] }] }
+      : { purpose: "reconstructed_conversation", history: [{ role: "user", content: "OLD_HISTORY_SENTINEL" }],
+        currentMessage: { role: "user", content: [{ type: "text", text: "look" }, image] } },
   })),
   ...[
     { name: "fully synced history", messages: [oldMessage], syncedMessageCount: 1 },
@@ -72,13 +75,12 @@ const cases: Case[] = [
 ];
 
 describe("formatContextPrompt context updates", () => {
-  for (const { name, context, isReused, syncedMessageCount, exact, includes = [], excludes = [] } of cases) {
+  for (const { name, context, isReused, syncedMessageCount, exact, expected } of cases) {
     it(name, () => {
       const prompt = format(context, isReused, syncedMessageCount);
 
       if (exact !== undefined) assert.equal(prompt, exact);
-      for (const fragment of includes) assert.ok(prompt.includes(fragment), `Missing ${fragment} in ${prompt}`);
-      for (const fragment of excludes) assert.ok(!prompt.includes(fragment), `Unexpected ${fragment} in ${prompt}`);
+      if (expected !== undefined) assert.deepEqual(JSON.parse(prompt), expected);
     });
   }
 });
