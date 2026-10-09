@@ -400,3 +400,20 @@ describe("LiveSessionRegistry", () => {
   });
 });
 
+
+for (const row of [
+  { name: "replacement preserves conversation", preserveConversation: true, next: "same", expected: "quota" },
+  { name: "new conversation clears error", preserveConversation: true, next: "new", expected: undefined },
+  { name: "disposal clears error", preserveConversation: false, next: undefined, expected: undefined },
+]) {
+  test(row.name, async () => {
+    const session = new LiveSession("pi");
+    session.conversationId = "same";
+    session.errorState.lastError = "quota";
+    const state = session.errorState;
+    await session.dispose({ preserveConversation: row.preserveConversation });
+    session.conversationId = row.next;
+    assert.equal(session.errorState, state);
+    assert.equal(state.lastError, row.expected);
+  });
+}

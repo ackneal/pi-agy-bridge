@@ -113,7 +113,7 @@ export class AgyTurn {
     }
 
     try {
-      adapter.handleEvent(event);
+      adapter.handleEvent(event, source);
       this.complete(source === "agy" && event.event === "result" && !mcpServer.hasPendingCalls);
     } catch (error) {
       this.fail(error);

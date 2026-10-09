@@ -14,7 +14,13 @@ import { debugLog } from "../shared/debug.ts";
 
 const AGY_INTERNAL_TOOL_NAMES = new Set(["list_resources", "call_mcp_tool", "manage_task"]);
 
+export interface ConversationErrorState {
+  conversationId?: string | undefined;
+  lastError?: string | undefined;
+}
+
 export interface AgyEventAdapterOptions {
+  errorState?: ConversationErrorState | undefined;
   model: string;
   provider?: string;
   stream?: AssistantMessageEventStream;
@@ -29,15 +35,20 @@ export class PiEventAdapter {
   private readonly bridgeToolCallsExternally: boolean;
   private readonly onBlockedTool: ((name: string) => void) | undefined;
 
+  private errorState: ConversationErrorState;
+
   private started = false;
   private completed = false;
   private currentTextIndex: number | null = null;
   private toolCallCount = 0;
   private hasStepUsage = false;
+  private completedResponse = false;
+  private hasTurnError = false;
 
   private partial: AssistantMessage;
 
   constructor(options: AgyEventAdapterOptions) {
+    this.errorState = options.errorState ?? {};
     this.allowedToolNames = options.allowedToolNames;
     this.bridgeToolCallsExternally = options.bridgeToolCallsExternally ?? false;
     this.onBlockedTool = options.onBlockedTool;
@@ -68,6 +79,10 @@ export class PiEventAdapter {
     };
   }
 
+  public setErrorState(state: ConversationErrorState): void {
+    this.errorState = state;
+  }
+
   public setModel(model: string): void {
     if (this.started) {
       throw new Error("Cannot change model after the stream has started");
@@ -93,7 +108,12 @@ export class PiEventAdapter {
     return tool === null ? undefined : this.getBlockedAgyToolName(tool.name);
   }
 
-  public handleEvent(event: AgyEvent): void {
+  public handleEvent(event: AgyEvent, source: "agy" | "runtime" = "agy"): void {
+    if (source === "runtime") {
+      const result = event as AgyResultEvent;
+      this.handleTermination("error", typeof result.error === "string" ? result.error : result.error?.message);
+      return;
+    }
     if (this.completed) {
       debugLog("events", `Ignoring event after stream completed: ${event.event}`);
       return;
@@ -193,6 +213,16 @@ export class PiEventAdapter {
   }
 
   private handleStepUpdate(step: AgyStepUpdateEvent): void {
+    const stepType = step.update_type ?? step.type ?? step.step_type;
+    if (stepType === "user_input") {
+      this.completedResponse = false;
+      this.hasTurnError = false;
+    } else if (stepType === "error_message") {
+      this.hasTurnError = true;
+    } else if (stepType === "agent_response") {
+      this.completedResponse = step.state === "DONE";
+    }
+
     if (step.usage) {
       debugLog("usage", "Antigravity CLI step usage:", step.usage);
       this.hasStepUsage = true;
@@ -414,10 +444,22 @@ export class PiEventAdapter {
 
     debugLog("events", "AGY result outcome:", { status: result.status, error: result.error });
 
-    // An explicit terminal status describes this turn, not an attached historical error.
     const status = result.status?.toLowerCase();
-    if (status === "aborted" || status === "error" || (status !== "success" && result.error)) {
+    const conversationId = this.partial.responseId ?? this.errorState.conversationId;
+    if (conversationId !== this.errorState.conversationId) {
+      this.errorState.conversationId = conversationId;
+      this.errorState.lastError = undefined;
+    }
+    const error = typeof result.error === "string" ? result.error : result.error?.message;
+    const historicalError = status === "error" && conversationId !== undefined &&
+      error !== undefined && error === this.errorState.lastError && this.completedResponse && !this.hasTurnError;
+    if (status === "success") this.errorState.lastError = undefined;
+    if (historicalError) {
+      debugLog("events", "Ignored historical Antigravity CLI error after completed response:", { conversationId, error });
+    }
+    if (!historicalError && (status === "aborted" || status === "error" || (status !== "success" && result.error))) {
       const reason = status === "aborted" ? "aborted" : "error";
+      if (reason === "error") this.errorState.lastError = error;
       this.partial.stopReason = reason;
       if (result.error || reason === "error") {
         this.partial.errorMessage = typeof result.error === "string"

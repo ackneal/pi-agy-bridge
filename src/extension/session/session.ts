@@ -1,3 +1,4 @@
+import type { ConversationErrorState } from "../runtime/events.ts";
 import { randomUUID } from "node:crypto";
 import type { AgyRuntime } from "../runtime/process.ts";
 import type { ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -88,7 +89,15 @@ export class LiveSession {
   public activeProcess: AgyRuntime | null = null;
   public activeMcpServer: BridgeIPC | null = null;
   public syncKey: string = "";
-  public conversationId: string | undefined;
+  public readonly errorState: ConversationErrorState = {};
+  public get conversationId(): string | undefined {
+    return this.errorState.conversationId;
+  }
+
+  public set conversationId(value: string | undefined) {
+    if (value !== this.errorState.conversationId) this.errorState.lastError = undefined;
+    this.errorState.conversationId = value;
+  }
   public readonly resources = new SessionResources();
   private unsubscribeRuntimeEvents: (() => void) | null = null;
   private abortSignal: AbortSignal | null = null;
@@ -156,7 +165,7 @@ export class LiveSession {
     this.abortListener = null;
   }
 
-  public async dispose(options?: { preserveResources?: boolean; preparationId?: symbol }): Promise<void> {
+  public async dispose(options?: { preserveResources?: boolean; preserveConversation?: boolean; preparationId?: symbol }): Promise<void> {
     if (options?.preparationId !== undefined) {
       if (!this.ownsPreparation(options.preparationId)) return;
     } else {
@@ -169,7 +178,7 @@ export class LiveSession {
     this.activeProcess = null;
     this.activeMcpServer = null;
     this.syncKey = "";
-    this.conversationId = undefined;
+    if (!options?.preserveConversation) this.conversationId = undefined;
     this.clearAbortSignal();
     this.setRuntimeEventHandler(null);
     if (!options?.preserveResources) this.resources.disposeAll();

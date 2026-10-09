@@ -260,6 +260,7 @@ async function prepareRuntime(
     hasPendingCalls: liveSession.activeMcpServer?.hasPendingCalls ?? false,
   });
   await liveSession.dispose({
+    preserveConversation: decision.action === "resume",
     preserveResources: decision.action === "resume" && decision.conversationId === liveSession.conversationId,
     preparationId,
   });
@@ -380,6 +381,7 @@ export function streamAgyProvider(
   }
 
   const liveSession = bridge.liveSessions.getOrCreate(piSessionId);
+  adapter.setErrorState(liveSession.errorState);
   const preparationId = liveSession.beginPreparation();
   const turn = new AgyTurn({
     session: liveSession,

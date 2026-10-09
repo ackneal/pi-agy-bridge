@@ -744,3 +744,52 @@ describe("AgyEventAdapter", () => {
     });
   });
 });
+
+const turnStep = (step_type: string, state = "DONE", step_index = 7): AgyEvent => ({
+  event: "step_update",
+  step_update: { conversation_id: "continued", step_index, step_type, state,
+    ...(step_type === "agent_response" ? { text: "Gemini reply", usage: { input_tokens: 4198, output_tokens: 11 } } : {}) },
+});
+
+for (const row of [
+  { name: "nested completed response overrides historical quota", steps: [turnStep("user_input", "DONE", 5), turnStep("system_message", "DONE", 6), turnStep("agent_response")], status: "ERROR", terminal: "done" },
+  { name: "continued repeated turns reset historical error evidence", steps: [turnStep("error_message", "DONE", 4), turnStep("user_input", "DONE", 5), turnStep("agent_response"), turnStep("user_input", "DONE", 8), turnStep("agent_response", "DONE", 9)], status: "ERROR", terminal: "done" },
+  { name: "error after completed response remains an error", steps: [turnStep("agent_response"), turnStep("error_message")], status: "ERROR", terminal: "error" },
+  { name: "current error before completed response remains an error", steps: [turnStep("user_input"), turnStep("error_message"), turnStep("agent_response")], status: "ERROR", terminal: "error" },
+  { name: "partial response with usage remains an error", steps: [turnStep("agent_response", "RUNNING")], status: "ERROR", terminal: "error" },
+  { name: "text without completion remains an error", steps: [{ event: "step_update", text_delta: "partial" } as AgyEvent], status: "ERROR", terminal: "error" },
+  { name: "new turn cannot reuse completed response", steps: [turnStep("agent_response"), turnStep("user_input")], status: "ERROR", terminal: "error" },
+  { name: "missing status error is not overridden", steps: [turnStep("agent_response")], status: undefined, terminal: "error" },
+  { name: "unknown status error is not overridden", steps: [turnStep("agent_response")], status: "UNKNOWN", terminal: "error" },
+  { name: "aborted is not overridden", steps: [turnStep("agent_response")], status: "ABORTED", terminal: "error" },
+]) {
+  test(`current-turn completion: ${row.name}`, async () => {
+    const adapter = new AgyEventAdapter({ model: "gemini", errorState: { conversationId: "continued", lastError: "Historical Claude quota" } });
+    for (const step of row.steps) adapter.handleEvent(step);
+    adapter.handleEvent({ event: "result", result: { status: row.status, error: "Historical Claude quota" } });
+
+    const events = await collectStreamEvents(adapter);
+    const terminal = events.filter((event) => event.type === "done" || event.type === "error");
+    assert.equal(terminal.length, 1);
+    assert.equal(terminal[0]?.type, row.terminal);
+    assert.equal(adapter.message.stopReason, row.terminal === "done" ? "stop" : row.status === "ABORTED" ? "aborted" : "error");
+    assert.equal(adapter.message.errorMessage, row.terminal === "done" ? undefined : "Historical Claude quota");
+  });
+}
+
+for (const row of [
+  { name: "unknown error", previous: undefined, error: "quota", status: "ERROR", source: "agy", reason: "error", stored: "quota" },
+  { name: "different error", previous: "quota", error: "new", status: "ERROR", source: "agy", reason: "error", stored: "new" },
+  { name: "same error", previous: "quota", error: "quota", status: "ERROR", source: "agy", reason: "stop", stored: "quota" },
+  { name: "success clears", previous: "quota", error: "quota", status: "SUCCESS", source: "agy", reason: "stop", stored: undefined },
+  { name: "runtime failure", previous: "quota", error: "quota", status: "ERROR", source: "runtime", reason: "error", stored: "quota" },
+] as const) {
+  test(`stored conversation error: ${row.name}`, () => {
+    const errorState = { conversationId: "continued", lastError: row.previous as string | undefined };
+    const adapter = new AgyEventAdapter({ model: "gemini", errorState });
+    adapter.handleEvent(turnStep("agent_response"));
+    adapter.handleEvent({ event: "result", status: row.status, error: row.error }, row.source);
+    assert.equal(adapter.message.stopReason, row.reason);
+    assert.equal(errorState.lastError, row.stored);
+  });
+}
