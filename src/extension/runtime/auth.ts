@@ -55,7 +55,12 @@ function runAuthentication(path: string | undefined, signal: AbortSignal | undef
       if (pty) {
         pty.kill(sig);
       } else if (child.pid) {
-        try { process.kill(-child.pid, sig); } catch { child.kill(sig); }
+        // Descendants can outlive the root and keep its stdio open.
+        try {
+          process.kill(-child.pid, sig);
+        } catch {
+          if (!closed && child.exitCode == null && child.signalCode == null) child.kill(sig);
+        }
       }
     };
     const finish = (result: boolean | Error) => {
@@ -146,7 +151,7 @@ function runAuthentication(path: string | undefined, signal: AbortSignal | undef
       prompt?.abort();
       clearTimeout(timer);
       clearTimeout(killTimer);
-      if (!escalated) kill("SIGKILL");
+      if (!pty && !escalated) kill("SIGKILL");
       pty?.dispose();
       signal?.removeEventListener("abort", onAbort);
       child.stdout.off("data", onStdout);

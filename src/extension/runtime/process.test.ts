@@ -99,37 +99,31 @@ lines.on("line", (line) => {
       await proc.start();
       const received: { event: AgyEvent; source: AgyEventSource }[] = [];
       proc.onEvent((event, source) => received.push({ event, source }));
-      const events = proc.events()[Symbol.asyncIterator]();
       const inputs = ["first", "second"].map((content) => ({ event: "user", message: { content } } as const));
       for (const input of inputs) {
         const start = received.length;
-        const turnEvents: AgyEvent[] = [];
-        let pending = events.next();
+        const completed = new Promise<void>((resolve) => {
+          const unsubscribe = proc.onEvent((event) => {
+            if (event.event === "result") {
+              unsubscribe();
+              resolve();
+            }
+          });
+        });
 
         await proc.send(input);
-        while (true) {
-          const { value, done } = await pending;
-          assert.equal(done, false);
-          assert.ok(value);
-          turnEvents.push(value);
-          if (value.event === "result") break;
-          pending = events.next();
-        }
+        await completed;
 
         const failed = row.exitsOnSecond && input.message.content === "second";
         const expected: AgyEvent[] = failed
           ? [{ event: "result", status: "error", error: { message: "Antigravity CLI process terminated unexpectedly (exit code 0, signal none)" } }]
           : [{ event: "step_update", text_delta: input.message.content }, { event: "result", status: "success" }];
-        assert.equal(turnEvents.length, expected.length);
-        assert.deepEqual(turnEvents, expected);
         assert.deepEqual(received.slice(start), expected.map((event) => ({ event, source: failed ? "runtime" : "agy" })));
       }
       assert.deepEqual(JSON.parse(await readFile(inputsFile, "utf-8")), inputs);
       if (row.exitsOnSecond) {
-        assert.deepEqual(await events.next(), { value: undefined, done: true });
         assert.equal(proc.isRunning, false);
       }
-      await events.return?.();
     });
   }
 
@@ -244,8 +238,6 @@ process.stdin.resume();
     child = (proc as unknown as { child: ChildProcess }).child;
     const received: { event: AgyEvent; source: AgyEventSource }[] = [];
     proc.onEvent((event, source) => received.push({ event, source }));
-    const iterator = proc.events()[Symbol.asyncIterator]();
-    const pending = iterator.next();
     const expected: AgyEvent = { event: "result", status: "error", error: { message: row.message } };
     if (row.failure === "native") expected.source = "runtime";
     const input = { event: "user", message: { content: "test" } } as const;
@@ -267,8 +259,6 @@ process.stdin.resume();
       child.stdin!.emit("error", new Error(quotaError));
     }
 
-    assert.deepEqual(await pending, { value: expected, done: false });
-    assert.equal((await iterator.next()).done, true);
     assert.deepEqual(received, [{ event: expected, source: row.failure === "native" ? "agy" : "runtime" }]);
   });
 }
@@ -297,8 +287,8 @@ process.stdin.resume();
 
     await proc.start();
     child = (proc as unknown as { child: ChildProcess }).child;
-    const iterator = proc.events()[Symbol.asyncIterator]();
-    const first = iterator.next();
+    const received: AgyEvent[] = [];
+    proc.onEvent((event) => received.push(event));
     const results: { event: AgyEvent; source: AgyEventSource }[] = [];
     proc.onEvent((event, source) => {
       if (event.event === "result") results.push({ event, source });
@@ -312,15 +302,15 @@ process.stdin.resume();
     child.stdout!.emit("end");
     child.emit("close", 0, null);
 
-    assert.equal((await first).value?.text_delta, "中文😀");
-    const result = await iterator.next();
-    assert.equal(result.value?.event, "result");
-    assert.equal(result.value?.status, row.status ?? "error");
-    assert.deepEqual(results, [{ event: result.value, source: row.status ? "agy" : "runtime" }]);
-    if (row.status) assert.deepEqual(result.value, nativeResult);
-    else assert.equal(Object.hasOwn(result.value!, "source"), false);
-    if (row.trailing) assert.equal((await iterator.next()).value?.text_delta, "trailing");
-    assert.equal((await iterator.next()).done, true);
+    assert.equal(received[0]?.text_delta, "中文😀");
+    const result = received[1]!;
+    assert.equal(result.event, "result");
+    assert.equal(result.status, row.status ?? "error");
+    assert.deepEqual(results, [{ event: result, source: row.status ? "agy" : "runtime" }]);
+    if (row.status) assert.deepEqual(result, nativeResult);
+    else assert.equal(Object.hasOwn(result, "source"), false);
+    if (row.trailing) assert.equal(received[2]?.text_delta, "trailing");
+    assert.equal(received.length, row.trailing ? 3 : 2);
   });
 }
 
@@ -388,7 +378,7 @@ for (const row of [
 }
 
 for (const state of ["unstarted", "active", "exited", "spawn failure"] as const) {
-  test(`abort ends a pending iterator: ${state}`, { timeout: 5000 }, async (t) => {
+  test(`abort clears event listeners: ${state}`, { timeout: 5000 }, async (t) => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-abort-"));
     t.after(() => rm(tempDir, { recursive: true, force: true }));
     const executable = path.join(tempDir, "agy");
@@ -417,14 +407,16 @@ ${state === "exited" ? `process.stdin.once("data", () => {
       assert.equal(child.killed, false);
       assert.equal(proc.isRunning, false);
     }
-    const iterator = proc.events()[Symbol.asyncIterator]();
-    const pending = iterator.next();
+
+    const received: AgyEvent[] = [];
+    proc.onEvent((event) => received.push(event));
 
     await proc.abort();
+    const child = (proc as unknown as { child: ChildProcess | null }).child;
+    child?.stdout?.emit("data", Buffer.from('{"event":"result","status":"success"}\n'));
 
-    assert.deepEqual(await pending, { value: undefined, done: true });
+    assert.deepEqual(received, []);
     assert.equal(proc.isRunning, false);
-    assert.deepEqual(await iterator.next(), { value: undefined, done: true });
   });
 }
 
@@ -462,8 +454,6 @@ process.stdin.resume();
     if (row.phase !== "starting") await starting;
     if (row.phase === "aborted") await proc.abort();
     if (row.result) child.stdout!.emit("data", Buffer.from('{"event":"result","status":"success"}\n'));
-    const iterator = proc.events()[Symbol.asyncIterator]();
-    const pending = iterator.next();
     const results: { event: AgyEvent; source: AgyEventSource }[] = [];
     proc.onEvent((event, source) => {
       if (event.event === "result") results.push({ event, source });
@@ -494,17 +484,12 @@ process.stdin.resume();
     await rejection;
     await closed;
 
-    const received = await pending;
     if (row.phase === "started" && !row.result) {
-      assert.equal(received.value?.event, "result");
-      assert.equal(received.value?.status, "error");
-      assert.deepEqual(received.value, {
+      assert.deepEqual(results[0]?.event, {
         event: "result", status: "error", error: { message: "Antigravity CLI stdin error: broken pipe" },
       });
-      assert.deepEqual(results, [{ event: received.value, source: "runtime" }]);
-      assert.equal((await iterator.next()).done, true);
+      assert.deepEqual(results, [{ event: results[0]?.event, source: "runtime" }]);
     } else {
-      assert.equal(received.done, true);
       assert.deepEqual(results, []);
     }
     assert.equal(proc.isRunning, false);
@@ -559,6 +544,60 @@ process.stdin.resume();
     if (!row.init) assert.equal(child.signalCode, row.ignoreInterrupt ? "SIGKILL" : "SIGINT");
     assert.equal(proc.isRunning, false);
     assert.deepEqual(process.listeners("exit"), before);
-    assert.equal((await proc.events()[Symbol.asyncIterator]().next()).done, true);
+  });
+}
+
+for (const row of [
+  { phase: "starting", failure: "event" },
+  { phase: "started", failure: "event" },
+  { phase: "started", failure: "callback" },
+] as const) {
+  test(`ignores stdin failure during abort: ${row.phase}, ${row.failure}`, { timeout: 5000 }, async (t) => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-abort-window-"));
+    t.after(() => rm(tempDir, { recursive: true, force: true }));
+    const executable = path.join(tempDir, "agy");
+    await writeFile(executable, `#!${process.execPath}
+${row.phase === "started" ? "process.stdout.write('{\"event\":\"init\"}\\n');" : ""}
+process.stdin.resume();
+`, { mode: 0o755 });
+    const proc = new AgyProcess({ agyPath: executable, agentName: "test", model: "test" });
+    t.after(() => proc.abort());
+    const starting = proc.start();
+    const child = (proc as unknown as { child: ChildProcess }).child;
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const rejection = row.phase === "starting"
+      ? assert.rejects(starting, (error: unknown) => {
+          assert.ok(error instanceof AgyProcessError);
+          assert.match(error.message, /exited prematurely/);
+          return true;
+        })
+      : null;
+    if (row.phase === "started") await starting;
+    const kill = t.mock.method(child, "kill");
+
+    const aborting = proc.abort();
+    assert.equal(child.killed, true);
+    assert.equal(child.exitCode, null);
+    assert.equal(child.signalCode, null);
+    const received: { event: AgyEvent; source: AgyEventSource }[] = [];
+    const unsubscribe = proc.onEvent((event, source) => received.push({ event, source }));
+    const error = new Error("abort-window broken pipe");
+    if (row.failure === "callback") {
+      t.mock.method(child.stdin!, "write", (_payload: unknown, _encoding: unknown, callback: (error: Error) => void) => {
+        callback(error);
+        return false;
+      });
+      await assert.rejects(proc.send({ event: "user", message: { content: "test" } }), /Failed to write turn to stdin: abort-window broken pipe/);
+    } else {
+      assert.doesNotThrow(() => child.stdin!.emit("error", error));
+    }
+
+    assert.deepEqual(kill.mock.calls.map((call) => call.arguments), [["SIGINT"]]);
+    assert.deepEqual(received, []);
+    unsubscribe();
+    await aborting;
+    await rejection;
+    await closed;
+    assert.equal(proc.isRunning, false);
   });
 }

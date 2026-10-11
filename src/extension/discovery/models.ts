@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { promisify } from "node:util";
+import { promisify, stripVTControlCharacters } from "node:util";
 import type { AnyModel, Api, Model } from "@earendil-works/pi-ai";
 import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "../runtime/version.ts";
@@ -70,7 +70,7 @@ export function restoreStoredAgyModels(models: readonly AnyModel[]): Model<Api>[
 }
 
 export function parseModelsOutput(output: string): Model<Api>[] {
-  const cleaned = output.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
+  const cleaned = stripVTControlCharacters(output);
   const rawLines = cleaned.split(/[\r\n]+/);
   const rows: { id: string; name: string }[] = [];
   const seenIds = new Set<string>();

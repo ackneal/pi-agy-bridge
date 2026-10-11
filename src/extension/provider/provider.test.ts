@@ -1031,3 +1031,45 @@ for (const outcome of ["failure", "cancellation", "delayed success"] as const) {
     assert.equal(session.activeProcess, replacement);
   });
 }
+
+for (const row of [
+  { name: "unchanged completed history", rewrite: undefined, valid: true },
+  { name: "payload rewrite", rewrite: "Continue with a summary.", valid: true },
+  { name: "payload rewrite to empty", rewrite: "", valid: false },
+  { name: "payload rewrite to whitespace", rewrite: " \n\t", valid: false },
+]) {
+  test(`provider explicitly continues ${row.name}`, async (t) => {
+    const { bridge, manager, session, sessionId, epoch, processes, listeners, send, runTurn } = await createRuntimeFixture(t);
+    const first = await runTurn("test-model", "original request", [
+      { event: "step_update", delta: "Done" }, { event: "result", status: "success" },
+    ]);
+    assert.equal(first.stopReason, "stop");
+    assert.equal(listeners.size, 0, "completion releases the old handler");
+    const messages = manager.buildSessionContext().messages.filter(
+      (message): message is Context["messages"][number] =>
+        message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+    );
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), messages.length);
+    const model = { id: "test-model", provider: "agy" } as Model<any>;
+    const continuation = "Continue from the current conversation state without repeating completed work.";
+    const observed: unknown[] = [];
+    const result = await streamAgyProvider(model, { systemPrompt: "Keep Pi history", tools: [], messages }, {
+      sessionId, env: { AGY_BRIDGE_LOGIN_EPOCH: epoch },
+      onPayload: (payload) => {
+        observed.push(payload);
+        return row.rewrite === undefined ? undefined : { prompt: row.rewrite };
+      },
+    }, undefined, bridge).result();
+
+    assert.deepEqual(observed, [{ prompt: continuation }]);
+    assert.equal(processes.length, 1, "reuse the completed conversation");
+    assert.equal(result.stopReason, row.valid ? "stop" : "error");
+    assert.equal(send.mock.callCount(), row.valid ? 2 : 1);
+    if (row.valid) {
+      assert.equal(send.mock.calls[1]!.arguments[0].message.content, row.rewrite ?? continuation);
+    } else {
+      assert.match(result.errorMessage!, /prompt must be a non-empty string/);
+    }
+    assert.equal(listeners.size, 0, "continuation completion also releases its handler");
+  });
+}
