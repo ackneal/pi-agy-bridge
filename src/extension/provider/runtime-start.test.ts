@@ -13,9 +13,7 @@ const cases = [
   { stage: "bridge.start", aborts: 0, cancelled: false },
   { stage: "plugin install", aborts: 0, cancelled: false },
   { stage: "proc.start", aborts: 1, cancelled: false },
-  { stage: "waitForConnection", aborts: 1, cancelled: false },
   { stage: "proc.start", aborts: 2, cancelled: true },
-  { stage: "waitForConnection", aborts: 2, cancelled: true },
 ] as const;
 
 for (const { stage, aborts, cancelled } of cases) {
@@ -36,12 +34,6 @@ for (const { stage, aborts, cancelled } of cases) {
       if (stage === "bridge.start") throw failure;
     });
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
-    const wait = t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {
-      if (stage === "waitForConnection") {
-        if (cancelled) controller.abort(failure);
-        throw failure;
-      }
-    });
     const startProc = t.mock.method(AgyRuntime.prototype, "start", async () => {
       if (stage === "proc.start") {
         if (cancelled) controller.abort(failure);
@@ -88,7 +80,6 @@ for (const { stage, aborts, cancelled } of cases) {
     assert.equal(startBridge.mock.callCount(), 1);
     assert.equal(install.mock.callCount(), stage === "bridge.start" ? 0 : 1);
     assert.equal(startProc.mock.callCount(), aborts ? 1 : 0);
-    assert.equal(wait.mock.callCount(), stage === "waitForConnection" ? 1 : 0);
     assert.equal(close.mock.callCount(), cancelled ? 2 : 1, "cancelled startup must close IPC before ownership transfers");
     assert.equal(abort.mock.callCount(), aborts, "only a constructed runtime must be aborted");
   });

@@ -77,6 +77,8 @@ describe("translateToolSchema and piToolToMcpTool", () => {
     assert.equal(mcpDef.inputSchema.type, "object");
     assert.ok(mcpDef.inputSchema.properties);
     assert.deepEqual(mcpDef.inputSchema.required, ["target"]);
+    assert.equal(Object.hasOwn(mcpDef, "_meta"), false);
+    assert.equal(Object.hasOwn(new PiToolAdapter([tool]).list()[0]!, "_meta"), false);
   });
 });
 

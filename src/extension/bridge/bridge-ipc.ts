@@ -33,10 +33,6 @@ export class BridgeIPC {
   private closePromise: Promise<void> | null = null;
   private socketPath: string | null = null;
   private exitListener: (() => void) | null = null;
-  private markConnected: (() => void) | null = null;
-  private readonly connected = new Promise<void>((resolve) => {
-    this.markConnected = resolve;
-  });
 
   constructor(
     tools: readonly Tool[],
@@ -67,23 +63,6 @@ export class BridgeIPC {
       PI_AGY_BRIDGE_MCP_ENTRYPOINT: entrypointPath,
       PI_AGY_BRIDGE_MCP_ENDPOINT: this.bridgeUri,
     };
-  }
-
-  public async waitForConnection(timeoutMs: number = 15_000): Promise<void> {
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        this.connected,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("Antigravity CLI did not connect to the Pi stdio MCP server")),
-            timeoutMs
-          );
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
   }
 
   public setToolCallHandler(handler: ((batch: PiToolCallBatch) => void) | null): void {
@@ -250,8 +229,6 @@ export class BridgeIPC {
             }
 
             this.authenticatedSockets.add(socket);
-            this.markConnected?.();
-            this.markConnected = null;
             socket.write(`${JSON.stringify({
               type: "tools",
               tools: this.gateway.list(),
