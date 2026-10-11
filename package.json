@@ -1,7 +1,7 @@
 {
   "name": "@ackneal/pi-agy-bridge",
-  "version": "0.2.0",
-  "description": "Standalone Antigravity CLI provider and Pi capability bridge plugin for Pi",
+  "version": "0.2.1",
+  "description": "Use Antigravity CLI models in Pi while keeping your existing tools and extensions.",
   "keywords": [
     "pi-package",
     "pi-extension",
