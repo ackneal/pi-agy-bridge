@@ -296,8 +296,6 @@ async function prepareRuntime(
       if (conversationId && initEvent.conversation_id !== conversationId) {
         throw new Error("Antigravity CLI did not restore the requested conversation");
       }
-      await mcpServer.waitForConnection();
-      checkPreparation();
       if (!proc.isRunning) throw new Error("Antigravity CLI exited before input delivery");
       if (!liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id, preparationId)) {
         throw new Error("Antigravity CLI runtime preparation was superseded");

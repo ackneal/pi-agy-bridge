@@ -19,7 +19,7 @@ type ModelSwitchCase = {
     foreignHistory: boolean;
     pending: boolean;
     selectedModel: "gemini" | "claude";
-    outcome: "success" | "reject" | "waitReject" | "dead" | "mismatch" | "abort" | "fallbackReject" | "sendReject";
+    outcome: "success" | "reject" | "dead" | "mismatch" | "abort" | "fallbackReject" | "sendReject";
     priorError?: string;
     omitPriorError?: boolean;
   };
@@ -27,13 +27,11 @@ type ModelSwitchCase = {
     terminal: "error" | "aborted";
     starts: number;
     sends: number;
-    waits: number;
     store: "retained" | "deleted";
   } | {
     terminal: "done";
     starts: number;
     sends: number;
-    waits: number;
     model: "gemini" | "claude";
     runtimeConversation: string | undefined;
     responseId: string;
@@ -50,7 +48,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "claude", outcome: "success",
     },
     expected: {
-      terminal: "done", starts: 1, sends: 1, waits: 1,
+      terminal: "done", starts: 1, sends: 1,
       model: "claude", runtimeConversation: "same-conversation",
       responseId: "same-conversation", preservesTerminal: true,
       continuation: { kind: "prompt", reconstructed: false, fallback: false },
@@ -63,7 +61,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "claude", outcome: "success",
     },
     expected: {
-      terminal: "done", starts: 1, sends: 1, waits: 1,
+      terminal: "done", starts: 1, sends: 1,
       model: "claude", runtimeConversation: "same-conversation",
       responseId: "same-conversation", preservesTerminal: true,
       continuation: { kind: "prompt", reconstructed: false, fallback: false },
@@ -76,7 +74,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "gemini", outcome: "success",
     },
     expected: {
-      terminal: "done", starts: 0, sends: 1, waits: 0,
+      terminal: "done", starts: 0, sends: 1,
       model: "gemini", runtimeConversation: undefined,
       responseId: "same-conversation", preservesTerminal: true,
       continuation: { kind: "prompt", reconstructed: false, fallback: false },
@@ -89,7 +87,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "claude", outcome: "success",
     },
     expected: {
-      terminal: "done", starts: 1, sends: 1, waits: 1,
+      terminal: "done", starts: 1, sends: 1,
       model: "claude", runtimeConversation: undefined,
       responseId: "fresh-conversation", preservesTerminal: false,
       continuation: { kind: "prompt", reconstructed: true, fallback: false },
@@ -102,7 +100,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "claude", outcome: "success",
     },
     expected: {
-      terminal: "done", starts: 1, sends: 1, waits: 1,
+      terminal: "done", starts: 1, sends: 1,
       model: "claude", runtimeConversation: "branch-conversation",
       responseId: "branch-conversation", preservesTerminal: false,
       continuation: { kind: "prompt", reconstructed: false, fallback: false },
@@ -115,7 +113,7 @@ const cases: ModelSwitchCase[] = [
       pending: true, selectedModel: "claude", outcome: "success",
     },
     expected: {
-      terminal: "done", starts: 0, sends: 0, waits: 0,
+      terminal: "done", starts: 0, sends: 0,
       model: "gemini", runtimeConversation: undefined,
       responseId: "same-conversation", preservesTerminal: true,
       continuation: { kind: "pending" },
@@ -128,7 +126,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "claude", outcome: "reject",
     },
     expected: {
-      terminal: "done", starts: 2, sends: 1, waits: 1,
+      terminal: "done", starts: 2, sends: 1,
       model: "claude", runtimeConversation: undefined,
       responseId: "fresh-conversation", preservesTerminal: false,
       continuation: { kind: "prompt", reconstructed: true, fallback: true },
@@ -142,7 +140,7 @@ const cases: ModelSwitchCase[] = [
       priorError: "Individual quota reached. Resets in 3h27m34s.",
     },
     expected: {
-      terminal: "done", starts: 2, sends: 1, waits: 1,
+      terminal: "done", starts: 2, sends: 1,
       model: "claude", runtimeConversation: undefined,
       responseId: "fresh-conversation", preservesTerminal: false,
       continuation: { kind: "prompt", reconstructed: true, fallback: true },
@@ -156,33 +154,20 @@ const cases: ModelSwitchCase[] = [
       priorError: "Rate limit exceeded", omitPriorError: true,
     },
     expected: {
-      terminal: "done", starts: 1, sends: 1, waits: 1,
+      terminal: "done", starts: 1, sends: 1,
       model: "claude", runtimeConversation: undefined,
       responseId: "fresh-conversation", preservesTerminal: false,
       continuation: { kind: "prompt", reconstructed: true, fallback: false },
     },
   },
   {
-    name: "resume wait rejects",
-    arrange: {
-      persisted: true, conversationId: "same-conversation", foreignHistory: false,
-      pending: false, selectedModel: "claude", outcome: "waitReject",
-    },
-    expected: {
-      terminal: "done", starts: 2, sends: 1, waits: 2,
-      model: "claude", runtimeConversation: undefined,
-      responseId: "fresh-conversation", preservesTerminal: false,
-      continuation: { kind: "prompt", reconstructed: true, fallback: true },
-    },
-  },
-  {
-    name: "resume exits between init and MCP connection",
+    name: "resume exits before input delivery",
     arrange: {
       persisted: true, conversationId: "same-conversation", foreignHistory: false,
       pending: false, selectedModel: "claude", outcome: "dead",
     },
     expected: {
-      terminal: "done", starts: 2, sends: 1, waits: 2,
+      terminal: "done", starts: 2, sends: 1,
       model: "claude", runtimeConversation: undefined,
       responseId: "fresh-conversation", preservesTerminal: false,
       continuation: { kind: "prompt", reconstructed: true, fallback: true },
@@ -195,7 +180,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "claude", outcome: "mismatch",
     },
     expected: {
-      terminal: "done", starts: 2, sends: 1, waits: 1,
+      terminal: "done", starts: 2, sends: 1,
       model: "claude", runtimeConversation: undefined,
       responseId: "fresh-conversation", preservesTerminal: false,
       continuation: { kind: "prompt", reconstructed: true, fallback: true },
@@ -208,7 +193,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "claude", outcome: "abort",
     },
     expected: {
-      terminal: "aborted", starts: 1, sends: 0, waits: 0,
+      terminal: "aborted", starts: 1, sends: 0,
       store: "retained",
     },
   },
@@ -219,7 +204,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "claude", outcome: "fallbackReject",
     },
     expected: {
-      terminal: "error", starts: 2, sends: 0, waits: 0,
+      terminal: "error", starts: 2, sends: 0,
       store: "deleted",
     },
   },
@@ -230,7 +215,7 @@ const cases: ModelSwitchCase[] = [
       pending: false, selectedModel: "claude", outcome: "sendReject",
     },
     expected: {
-      terminal: "error", starts: 1, sends: 1, waits: 1,
+      terminal: "error", starts: 1, sends: 1,
       store: "deleted",
     },
   },
@@ -315,9 +300,6 @@ for (const { name, arrange, expected } of cases) {
       return { event: "init", conversation_id: arrange.outcome === "mismatch" || !this.options.conversationId
         ? "fresh-conversation" : this.options.conversationId } as Awaited<ReturnType<AgyRuntime["start"]>>;
     });
-    const wait = t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {
-      if (start.mock.callCount() === 1 && arrange.outcome === "waitReject") throw new Error("connection rejected");
-    });
     t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
       listeners.set(this, listener);
       return () => { listeners.delete(this); };
@@ -349,7 +331,6 @@ for (const { name, arrange, expected } of cases) {
 
     assert.equal(start.mock.callCount(), expected.starts);
     assert.equal(send.mock.callCount(), expected.sends);
-    assert.equal(wait.mock.callCount(), expected.waits);
     if (expected.terminal !== "done") {
       assert.ok(terminal?.type === "error");
       assert.equal(terminal.reason, expected.terminal);

@@ -187,7 +187,6 @@ describe("AgyMcpServer", () => {
         },
       });
       const responses = collectResponses(child);
-      await bridge.waitForConnection();
 
       send(child, {
         jsonrpc: "2.0",

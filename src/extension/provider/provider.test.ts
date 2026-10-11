@@ -264,7 +264,6 @@ async function createRuntimeFixture(t: TestContext) {
   await runtimeBridge.runtimeSessionStore.set(sessionId, { conversationId: "conversation-1" }, [], epoch);
 
   t.mock.method(BridgeIPC.prototype, "start", async () => {});
-  t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {});
   t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
   t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
   t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);

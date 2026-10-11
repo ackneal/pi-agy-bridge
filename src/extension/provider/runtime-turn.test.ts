@@ -45,8 +45,8 @@ for (const { decision, incremental, payload } of cases) {
 
     const environment = { PI_AGY_BRIDGE_MCP_COMMAND: "mock-mcp" };
     const startBridge = t.mock.method(BridgeIPC.prototype, "start", async () => {});
-    const wait = t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {});
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
+    const dispatch = t.mock.method(BridgeIPC.prototype, "setToolCallHandler");
     const getEnvironment = t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => environment);
     const install = t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
     t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
@@ -66,6 +66,7 @@ for (const { decision, incremental, payload } of cases) {
     const send = t.mock.method(AgyRuntime.prototype, "send", async function (this: AgyRuntime, _input: AgyInput) {
       const listener = listeners.get(this);
       assert.ok(listener, "provider must subscribe before sending");
+      assert.equal(typeof dispatch.mock.calls.at(-1)?.arguments[0], "function", "tool dispatch must be ready before sending");
       listener({ event: "step_update", delta: "success answer" }, "agy");
       listener({ event: "result", status: "success" }, "agy");
     });
@@ -137,7 +138,6 @@ for (const { decision, incremental, payload } of cases) {
     const starts = decision.action === "continue" ? 0 : 1;
     assert.equal(startProc.mock.callCount(), starts);
     assert.equal(startBridge.mock.callCount(), starts);
-    assert.equal(wait.mock.callCount(), starts);
     assert.equal(install.mock.callCount(), starts);
     assert.equal(getEnvironment.mock.callCount(), starts);
     assert.equal(close.mock.callCount(), 0);
@@ -657,7 +657,6 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     let pending = true;
     t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp && pending; });
     t.mock.method(BridgeIPC.prototype, "start", async () => { throw new Error("unexpected MCP start"); });
-    t.mock.method(BridgeIPC.prototype, "waitForConnection", async () => {});
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
     const start = t.mock.method(AgyRuntime.prototype, "start", async () => { throw new Error("unexpected runtime start"); });
