@@ -9,6 +9,7 @@ import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "../runtime/version.ts";
 
 const execFileAsync = promisify(execFile);
+let pluginInstallQueue: Promise<void> = Promise.resolve();
 
 export const DEFAULT_AGY_PLUGIN_DIR = fileURLToPath(new URL("../../../plugin", import.meta.url));
 
@@ -37,10 +38,17 @@ export function generateMcpConfig(): {
   };
 }
 
-export async function ensureAgyPluginInstalled(
+export function ensureAgyPluginInstalled(
   agyPath?: string,
   pluginDir: string = DEFAULT_AGY_PLUGIN_DIR
 ): Promise<void> {
+  const installation = pluginInstallQueue.then(() => installPlugin(agyPath, pluginDir));
+  // Keep later requests runnable; the caller still receives the original rejection.
+  pluginInstallQueue = installation.catch(() => {});
+  return installation;
+}
+
+async function installPlugin(agyPath: string | undefined, pluginDir: string): Promise<void> {
   const sourceDir = path.resolve(pluginDir);
   const sourceManifest = await readPluginManifest(path.join(sourceDir, "plugin.json"));
   if (!sourceManifest) throw new Error(`Antigravity CLI plugin manifest not found: ${sourceDir}`);

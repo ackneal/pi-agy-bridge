@@ -175,3 +175,81 @@ test("outdated Antigravity CLI plugin synchronizes the exact static tree without
     await assert.rejects(fs.access(path.join(target, "stale")));
   });
 });
+
+for (const scenario of [
+  { name: "concurrent missing installs invoke the CLI once", installed: false, failure: undefined, distinct: false, copies: 1 },
+  { name: "concurrent outdated updates synchronize once", installed: true, failure: undefined, distinct: false, copies: 1 },
+  { name: "manifest failure releases the queue for retry", installed: false, failure: "manifest", distinct: false, copies: 1 },
+  { name: "CLI failure releases the queue for retry", installed: false, failure: "cli", distinct: false, copies: 1 },
+  { name: "sync failure releases the queue for retry", installed: true, failure: "sync", distinct: false, copies: 2 },
+  { name: "distinct queued source versions both synchronize", installed: false, failure: undefined, distinct: true, copies: 2 },
+] as const) {
+  test(scenario.name, async (t) => {
+    await withTemporaryHome(async (home) => {
+      const { executable, calls } = await writeFakeAgy(home);
+      const source = path.join(home, "source");
+      const secondSource = path.join(home, "second-source");
+      const target = path.join(home, ".gemini", "config", "plugins", "pi-agy-bridge");
+      await fs.cp(DEFAULT_AGY_PLUGIN_DIR, source, { recursive: true });
+      await fs.writeFile(path.join(source, "plugin.json"), JSON.stringify({ name: "pi-agy-bridge", version: "test-1" }));
+      if (scenario.distinct) {
+        await fs.cp(source, secondSource, { recursive: true });
+        await fs.writeFile(path.join(secondSource, "plugin.json"), JSON.stringify({ name: "pi-agy-bridge", version: "test-2" }));
+      }
+      if (scenario.installed) {
+        await fs.mkdir(target, { recursive: true });
+        await fs.writeFile(path.join(target, "plugin.json"), JSON.stringify({ name: "pi-agy-bridge", version: "old" }));
+      }
+      if (scenario.failure === "cli") {
+        await fs.writeFile(executable, `#!/bin/sh\nif [ ! -f "$AGY_CALLS" ]; then\n  printf 'failed\\n' > "$AGY_CALLS"\n  printf 'first install denied' >&2\n  exit 7\nfi\nprintf '%s\\n' "$*" >> "$AGY_CALLS"\n`);
+      }
+
+      const readFile = fs.readFile;
+      let manifestFailed = false;
+      t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+        if (scenario.failure === "manifest" && !manifestFailed && String(args[0]) === path.join(source, "plugin.json")) {
+          manifestFailed = true;
+          throw new Error("manifest read denied");
+        }
+        return readFile(...args);
+      });
+      const cp = fs.cp;
+      const copiedSources: string[] = [];
+      t.mock.method(fs, "cp", async (...args: Parameters<typeof fs.cp>) => {
+        copiedSources.push(String(args[0]));
+        if (scenario.failure === "sync" && copiedSources.length === 1) throw new Error("sync denied");
+        return cp(...args);
+      });
+
+      const results = await Promise.allSettled([
+        ensureAgyPluginInstalled(executable, source),
+        ensureAgyPluginInstalled(executable, scenario.distinct ? secondSource : source),
+        ensureAgyPluginInstalled(executable, scenario.distinct ? secondSource : source),
+      ]);
+
+      const firstResult = results[0]!;
+      if (scenario.failure) {
+        assert.ok(firstResult.status === "rejected");
+        const message = {
+          manifest: /manifest read denied/,
+          cli: /first install denied/,
+          sync: /sync denied/,
+        }[scenario.failure];
+        assert.match(String(firstResult.reason), message);
+      } else {
+        assert.equal(firstResult.status, "fulfilled");
+      }
+      assert.deepEqual(results.slice(1).map((result) => result.status), ["fulfilled", "fulfilled"]);
+      assert.deepEqual(copiedSources, scenario.distinct ? [source, secondSource] : Array(scenario.copies).fill(source));
+      await assertPluginAssetsEqual(target, scenario.distinct ? secondSource : source);
+      assert.deepEqual(await fs.readdir(path.dirname(target)), ["pi-agy-bridge"]);
+      if (scenario.installed) {
+        await assert.rejects(fs.access(calls), { code: "ENOENT" });
+      } else if (scenario.failure === "cli") {
+        assert.equal(await fs.readFile(calls, "utf8"), `failed\nplugin install ${source}\n`);
+      } else {
+        await assertSingleInstallCall(calls, source);
+      }
+    });
+  });
+}
