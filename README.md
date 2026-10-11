@@ -118,5 +118,3 @@ bun run test
 The pinned Pi packages in `devDependencies` are for local checks only; Pi provides them when loading an installed package.
 
 These commands preserve the existing package scripts: typechecking uses TypeScript, and the test suite uses Node.js with `node:test` and type stripping, not Bun's test runner. A Node.js version supporting the test script's flags is required.
-
-Plugin synchronization compares only `plugin/plugin.json` versions. When changing bundled plugin assets, including `plugin/agents/pi-bridge.md`, bump the release version before testing the update in an existing installation. A same-version installation is left unchanged, including local MCP configuration edits.
