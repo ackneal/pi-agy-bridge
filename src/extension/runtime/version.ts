@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CompatibilityError } from "../shared/types.ts";
+import { expandHome } from "../shared/paths.ts";
 import { debugLog } from "../shared/debug.ts";
 
 const execFileAsync = promisify(execFile);
@@ -12,7 +13,7 @@ export const DEFAULT_MIN_AGY_VERSION = "1.1.15";
 
 export function resolveAgyExecutable(customPath?: string): string {
   if (customPath && customPath !== "agy") {
-    return customPath;
+    return expandHome(customPath);
   }
 
   const standardLocal = path.join(os.homedir(), ".local", "bin", "agy");

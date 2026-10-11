@@ -24,8 +24,6 @@ export class AgyRuntime {
   private child: ChildProcess | null = null;
   private parser: AgyProtocolParser;
   private listeners = new Set<(event: AgyEvent, source: AgyEventSource) => void>();
-  private eventWaiters = new Set<() => void>();
-  private eventStreamEnded = false;
   private stderrBuffer = "";
   private isTerminated = false;
   private hasTurnResult = false;
@@ -143,7 +141,7 @@ export class AgyRuntime {
       }, initTimeoutMs);
 
       const fail = (error: AgyProcessError) => {
-        if (failed || this.eventStreamEnded) return;
+        if (failed || this.isTerminated || this.child?.killed) return;
         failed = true;
         clearTimeout(initTimer);
         unsubscribe();
@@ -169,7 +167,6 @@ export class AgyRuntime {
       const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
         this.cleanupNodeExitListener();
         this.isTerminated = true;
-        this.endEventStream();
         clearTimeout(initTimer);
         if (failed) return;
 
@@ -204,7 +201,6 @@ export class AgyRuntime {
       const onError = (err: Error) => {
         this.cleanupNodeExitListener();
         this.isTerminated = true;
-        this.endEventStream();
         clearTimeout(initTimer);
         if (failed) return;
 
@@ -276,36 +272,6 @@ export class AgyRuntime {
     });
   }
 
-  public async *events(): AsyncIterable<AgyEvent> {
-    const queue: AgyEvent[] = [];
-    let waiter: (() => void) | undefined;
-    const unsubscribe = this.onEvent((event) => {
-      queue.push(event);
-      waiter?.();
-      if (waiter) this.eventWaiters.delete(waiter);
-      waiter = undefined;
-    });
-
-    try {
-      while (true) {
-        const event = queue.shift();
-        if (event) {
-          yield event;
-          continue;
-        }
-        if (this.eventStreamEnded) return;
-        await new Promise<void>((resolve) => {
-          waiter = resolve;
-          this.eventWaiters.add(resolve);
-        });
-        if (waiter) this.eventWaiters.delete(waiter);
-        waiter = undefined;
-      }
-    } finally {
-      unsubscribe();
-    }
-  }
-
   public onEvent(listener: (event: AgyEvent, source: AgyEventSource) => void): () => void {
     this.listeners.add(listener);
     return () => {
@@ -315,7 +281,6 @@ export class AgyRuntime {
 
   public async abort(): Promise<void> {
     this.listeners.clear();
-    this.endEventStream();
     if (!this.child || this.child.exitCode !== null || this.child.signalCode !== null || this.isTerminated) {
       this.cleanupNodeExitListener();
       return;
@@ -362,15 +327,8 @@ export class AgyRuntime {
     });
   }
 
-  private endEventStream(): void {
-    this.eventStreamEnded = true;
-    for (const wake of this.eventWaiters) wake();
-    this.eventWaiters.clear();
-  }
-
   private dispatchEvent(event: AgyEvent, source: AgyEventSource = "agy"): void {
     if (event.event === "result") this.hasTurnResult = true;
-    for (const wake of this.eventWaiters) wake();
 
     for (const listener of this.listeners) {
       try {

@@ -533,7 +533,7 @@ export class PiEventAdapter {
   private safeParseJson(val: string): Record<string, unknown> {
     try {
       const parsed = JSON.parse(val);
-      if (parsed && typeof parsed === "object") {
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         return parsed as Record<string, unknown>;
       }
       return { value: parsed };

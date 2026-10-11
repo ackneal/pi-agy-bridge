@@ -793,3 +793,34 @@ for (const row of [
     assert.equal(errorState.lastError, row.stored);
   });
 }
+
+for (const row of [
+  { name: "object", input: '{"path":"README.md"}', expected: { path: "README.md" } },
+  { name: "array", input: '[1,{"path":"README.md"}]', expected: { value: [1, { path: "README.md" }] } },
+  { name: "empty array", input: '[]', expected: { value: [] } },
+  { name: "null", input: 'null', expected: { value: null } },
+  { name: "string", input: '"hello"', expected: { value: "hello" } },
+  { name: "number", input: '42', expected: { value: 42 } },
+  { name: "boolean", input: 'false', expected: { value: false } },
+  { name: "invalid JSON", input: '{broken', expected: { raw: "{broken" } },
+]) {
+  for (const source of ["arguments", "input", "flat input"] as const) {
+    test(`tool JSON parsing: ${source}, ${row.name}`, async () => {
+      const adapter = new AgyEventAdapter({ model: "test" });
+      const event: AgyEvent = source === "flat input"
+        ? { event: "step_update", type: "tool", name: "read", call_id: "call-json", input: row.input }
+        : { event: "step_update", tool_call: { id: "call-json", name: "read", [source]: row.input } };
+
+      adapter.handleEvent(event);
+      adapter.handleEvent({ event: "result", status: "success" });
+      const events = await collectStreamEvents(adapter);
+
+      const end = events.find((event) => event.type === "toolcall_end");
+      assert.ok(end?.type === "toolcall_end");
+      assert.deepEqual(end.toolCall, {
+        type: "toolCall", id: "call-json", name: "read", arguments: row.expected,
+      });
+      assert.deepEqual(adapter.message.content, [end.toolCall]);
+    });
+  }
+}

@@ -129,6 +129,7 @@ for (const row of [
     mock.method(process, "kill", (pid: number, signal: string) => {
       const entry = roots.get(Math.abs(pid)) ?? targets.get(Math.abs(pid));
       assert.ok(entry, `unexpected kill target ${pid}`);
+      if (roots.has(Math.abs(pid))) assert.equal(entry.closed, false, "must not signal an exited root process");
       signals.push(signal);
       if (roots.has(Math.abs(pid)) && (!("timeout" in row) || signal === "SIGKILL")) queueMicrotask(() => close(entry));
       return true;
@@ -203,6 +204,10 @@ for (const row of [
     assert.deepEqual(writes, "code" in row && !("error" in row && !("failCode" in row) && !("echoOnly" in row)) ? [`${row.code}\n`] : []);
     assert.deepEqual(progress, writes.length ? ["Completing Antigravity CLI authentication"] : [],
       "invalid, cancelled, browser-completed and cached login must not show code-submission progress");
+    if (!("login" in row) && !("cancel" in row) && !("timeout" in row) && !("spawnError" in row) && !("expected" in row && row.expected === false)) {
+      assert.deepEqual(signals, [], "natural close must not send termination signals");
+    }
+    if ("cancel" in row && !("login" in row)) assert.deepEqual(signals, ["SIGTERM"]);
     if ("timeout" in row) {
       assert.ok(signals.includes("SIGTERM"));
       assert.ok(signals.includes("SIGKILL"));

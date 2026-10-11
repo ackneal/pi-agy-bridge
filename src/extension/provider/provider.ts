@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
@@ -26,6 +25,7 @@ import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../discovery/p
 import { validateAgyVersion } from "../runtime/version.ts";
 import { discoverAgyModels, restoreStoredAgyModels } from "../discovery/models.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
+import { expandHome } from "../shared/paths.ts";
 import type { AgyBridgeConfig } from "../shared/types.ts";
 import { collectDoctorReport, type DoctorFailure } from "./doctor.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
@@ -173,13 +173,6 @@ export function resolveModelAndEffort(
   }
 
   return { baseModel, effort };
-}
-
-function expandHome(filepath: string): string {
-  if (filepath.startsWith("~/") || filepath === "~") {
-    return path.join(os.homedir(), filepath.slice(1));
-  }
-  return filepath;
 }
 
 async function prepareRuntime(
@@ -429,6 +422,9 @@ export function streamAgyProvider(
       turn.openToolDispatch();
 
       let prompt = formatContextPrompt(context, !runtime.reconstructContext, syncedMessageCount);
+      // A fully synced conversation still needs an explicit request for the next response.
+      if (!prompt.trim()) prompt = "Continue from the current conversation state without repeating completed work.";
+
       if (options?.onPayload) {
         try {
           const payload = { prompt };
@@ -439,6 +435,10 @@ export function streamAgyProvider(
         } catch (err) {
           debugLog("register", "Error in options.onPayload:", err);
         }
+      }
+
+      if (typeof prompt !== "string" || !prompt.trim()) {
+        throw new Error("Antigravity CLI prompt must be a non-empty string");
       }
 
       debugArtifact("agy-payload", {

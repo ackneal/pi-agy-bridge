@@ -254,3 +254,20 @@ missing-name
     );
   });
 });
+
+for (const row of [
+  { name: "plain text", output: "test-model  Test Model" },
+  { name: "SGR colors", output: "\u001b[32mtest-model  Test Model\u001b[0m" },
+  { name: "private CSI", output: "\u001b[?25ltest-model  Test Model\u001b[?25h" },
+  { name: "OSC hyperlink with BEL", output: "\u001b]8;;https://example.com\u0007test-model\u001b]8;;\u0007  Test Model" },
+  { name: "OSC hyperlink with ST", output: "\u001b]8;;https://example.com\u001b\\test-model\u001b]8;;\u001b\\  Test Model" },
+]) {
+  it(`strips terminal controls: ${row.name}`, () => {
+    const models = parseModelsOutput(row.output);
+
+    assert.deepEqual(models, parseModelsOutput("test-model  Test Model"));
+    assert.equal(models.length, 1);
+    assert.equal(models[0]?.id, "test-model");
+    assert.equal(models[0]?.name, "Test Model");
+  });
+}

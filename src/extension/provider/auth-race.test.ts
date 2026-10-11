@@ -132,12 +132,13 @@ test("pending failed login never returns a success credential", async (t) => {
 });
 
 for (const outcome of ["authenticated", "unauthenticated", "abort", "close", "manual", "failure"] as const) {
-  test(`detect probes once: ${outcome}`, async (t) => {
+  test(`detect deduplicates in flight: ${outcome}`, async (t) => {
     const { auth, children, finish } = setup(t);
     const controller = new AbortController();
     const detection = auth.detect(controller.signal);
     const settled = detection.then(value => ({ value }), error => ({ error }));
-    assert.equal(auth.detect(controller.signal), detection);
+    const concurrent = auth.detect(new AbortController().signal);
+    const concurrentSettled = concurrent.then(value => ({ value }), error => ({ error }));
     assert.equal(children.length, 1);
 
     if (outcome === "authenticated") finish(0);
@@ -169,8 +170,22 @@ for (const outcome of ["authenticated", "unauthenticated", "abort", "close", "ma
       if (outcome === "manual") assert.equal(auth.status, "authenticated");
       if (outcome === "failure") assert.ok(auth.failure);
     }
-    assert.equal(auth.detect(controller.signal), detection);
-    assert.equal(children.length, outcome === "manual" ? 2 : 1);
+    const sharedResult = await concurrentSettled;
+    if (outcome === "abort") {
+      assert.ok("value" in sharedResult && sharedResult.value?.agyBridge);
+      assert.equal(auth.status, "authenticated");
+      assert.equal(auth.failure, undefined);
+    } else assert.deepEqual(sharedResult, result);
+
+    const retry = auth.detect(new AbortController().signal);
+    if (outcome === "close") {
+      await assert.rejects(retry, /session has ended/);
+    } else {
+      const index = outcome === "manual" ? 2 : 1;
+      assert.equal(children.length, index + 1);
+      finish(index);
+      assert.ok((await retry)?.agyBridge);
+    }
   });
 }
 
@@ -199,7 +214,7 @@ test("slow detection leaves credential checks and resolution spawn-free", async 
 });
 
 for (const output of ["", "Remaining 100%\n"]) {
-  test(`invalid quota leaves detection unknown without retry: ${JSON.stringify(output)}`, async (t) => {
+  test(`invalid quota leaves detection unknown: ${JSON.stringify(output)}`, async (t) => {
     const { auth, children } = setup(t);
     const detection = auth.detect(new AbortController().signal);
     const rejected = assert.rejects(detection, (error: Error) => {
@@ -212,5 +227,53 @@ for (const output of ["", "Remaining 100%\n"]) {
     await rejected;
     assert.equal(auth.status, "unknown");
     assert.equal(children.length, 1);
+  });
+}
+
+for (const caller of ["first", "second", "pre-aborted"] as const) {
+  test(`caller cancellation is isolated: ${caller}`, async (t) => {
+    const { auth, children, finish } = setup(t);
+    const cancelled = new AbortController();
+    const reason = new Error("caller cancelled");
+    if (caller === "pre-aborted") cancelled.abort(reason);
+    const first = auth.detect(caller === "first" ? cancelled.signal : new AbortController().signal);
+    const second = auth.detect(caller === "first" ? new AbortController().signal : cancelled.signal);
+    const rejected = assert.rejects(caller === "first" ? first : second, error => error === reason);
+
+    cancelled.abort(reason);
+    await rejected;
+    assert.equal(children.length, 1);
+    assert.equal(auth.status, "unknown");
+    assert.equal(auth.failure, undefined);
+    finish(0);
+    assert.ok((await (caller === "first" ? second : first))?.agyBridge);
+    assert.equal(auth.status, "authenticated");
+  });
+}
+
+for (const loginOutcome of ["success", "failure"] as const) {
+  test(`stale detection cleanup preserves new probe after login ${loginOutcome}`, async (t) => {
+    const { auth, children, finish } = setup(t, async () => {
+      if (loginOutcome === "failure") throw new Error("login failed");
+    });
+    const signal = new AbortController().signal;
+    const stale = assert.rejects(auth.detect(signal), /cancelled/);
+    const login = auth.oauth.login({ signal, notify: () => {}, prompt: async () => "" });
+    await assert.rejects(auth.detect(signal), /replaced by a newer attempt/);
+    if (loginOutcome === "success") {
+      finish(1);
+      await login;
+    } else await assert.rejects(Promise.resolve(login), /login failed/);
+
+    const fresh = auth.detect(signal);
+    const index = children.length - 1;
+    finish(0);
+    await stale;
+    const joined = auth.detect(signal);
+    assert.equal(children.length, index + 1);
+    finish(index);
+    assert.equal(await fresh, await joined);
+    assert.equal(auth.status, "authenticated");
+    assert.equal(auth.failure, undefined);
   });
 }

@@ -42,7 +42,6 @@ function runAuthentication(path: string | undefined, signal: AbortSignal | undef
     let prompt: AbortController | undefined;
     let urlSent = false;
     let progressSent = false;
-    let escalated = false;
     let diagnostics = "";
     let submittedCode: string | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -51,7 +50,7 @@ function runAuthentication(path: string | undefined, signal: AbortSignal | undef
     const probeBytes = { stdout: 0, stderr: 0 };
 
     const kill = (sig: NodeJS.Signals) => {
-      if (sig === "SIGKILL") escalated = true;
+      if (closed || child.exitCode != null || child.signalCode != null) return;
       if (pty) {
         pty.kill(sig);
       } else if (child.pid) {
@@ -146,7 +145,6 @@ function runAuthentication(path: string | undefined, signal: AbortSignal | undef
       prompt?.abort();
       clearTimeout(timer);
       clearTimeout(killTimer);
-      if (!escalated) kill("SIGKILL");
       pty?.dispose();
       signal?.removeEventListener("abort", onAbort);
       child.stdout.off("data", onStdout);

@@ -36,7 +36,7 @@ export class AgyAuthentication {
   public readonly method: ApiKeyAuth;
   public readonly oauth: OAuthAuth;
   private detection: Promise<OAuthCredential | undefined> | undefined;
-  private readonly detectionCancellation = new AbortController();
+  private detectionCancellation = new AbortController();
   private readonly lifecycle = new AbortController();
   private generation = 0;
   private loggingIn = false;
@@ -84,8 +84,10 @@ export class AgyAuthentication {
         if (this.loggingIn) throw new Error("Antigravity CLI authentication is already in progress");
         this.lifecycle.signal.throwIfAborted();
         this.loggingIn = true;
-        this.detectionCancellation.abort(new Error("Antigravity CLI status check was replaced by a newer attempt"));
         const generation = ++this.generation;
+        this.detection = undefined;
+        this.detectionCancellation.abort(new Error("Antigravity CLI status check was replaced by a newer attempt"));
+        this.detectionCancellation = new AbortController();
         this.status = "unknown";
         const signal = AbortSignal.any([interaction.signal, this.lifecycle.signal]);
         try {
@@ -109,15 +111,29 @@ export class AgyAuthentication {
     };
   }
 
-  public detect(signal: AbortSignal): Promise<OAuthCredential | undefined> {
-    if (this.detection) return this.detection;
-    this.detection = this.detectOnce(signal);
-    return this.detection;
+  public async detect(signal: AbortSignal): Promise<OAuthCredential | undefined> {
+    signal.throwIfAborted();
+    this.lifecycle.signal.throwIfAborted();
+    if (this.loggingIn) throw new Error("Antigravity CLI status check was replaced by a newer attempt");
+
+    if (!this.detection) {
+      const detection = this.detectOnce().finally(() => {
+        if (this.detection === detection) this.detection = undefined;
+      });
+      this.detection = detection;
+    }
+
+    const detection = this.detection;
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      detection.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
   }
 
-  private async detectOnce(callerSignal: AbortSignal): Promise<OAuthCredential | undefined> {
+  private async detectOnce(): Promise<OAuthCredential | undefined> {
     const generation = this.generation;
-    const signal = AbortSignal.any([callerSignal, this.lifecycle.signal, this.detectionCancellation.signal]);
+    const signal = AbortSignal.any([this.lifecycle.signal, this.detectionCancellation.signal]);
     try {
       signal.throwIfAborted();
       if (this.loggingIn) throw new Error("Antigravity CLI status check was replaced by a newer attempt");
