@@ -129,7 +129,10 @@ for (const row of [
     mock.method(process, "kill", (pid: number, signal: string) => {
       const entry = roots.get(Math.abs(pid)) ?? targets.get(Math.abs(pid));
       assert.ok(entry, `unexpected kill target ${pid}`);
-      if (roots.has(Math.abs(pid))) assert.equal(entry.closed, false, "must not signal an exited root process");
+      if (roots.has(Math.abs(pid)) && entry.closed) {
+        assert.ok(pid < 0, "must not signal an exited root process directly");
+        throw Object.assign(new Error("Process group no longer exists"), { code: "ESRCH" });
+      }
       signals.push(signal);
       if (roots.has(Math.abs(pid)) && (!("timeout" in row) || signal === "SIGKILL")) queueMicrotask(() => close(entry));
       return true;
