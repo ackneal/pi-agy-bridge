@@ -159,6 +159,8 @@ export class PiToolAdapter {
       return JSON.stringify(this.exposeTerminalHandles(parsed, bindNew));
     }
 
+    if (!this.resources || this.resources.terminals.size === 0) return text;
+
     return text.replace(/[^\s"']+/g, (value) => this.resources?.terminals.toHandle(value) ?? value);
   }
 

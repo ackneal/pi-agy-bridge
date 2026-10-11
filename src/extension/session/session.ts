@@ -10,6 +10,10 @@ export class TerminalRegistry {
   private readonly reverseHandles = new Map<string, string>();
   private nextId = 1;
 
+  public get size(): number {
+    return this.handles.size;
+  }
+
   public bind(piPtyId: string): string {
     const existing = this.reverseHandles.get(piPtyId);
     if (existing) return existing;

@@ -256,6 +256,66 @@ describe("RuntimeSessionSync", () => {
     });
   }
 
+  for (const row of [
+    { name: "live continuation", live: true, mismatch: false, checkpoint: false, action: "continue" },
+    { name: "live mismatch", live: true, mismatch: true, checkpoint: false, action: "rebuild" },
+    { name: "checkpoint resume and recording", live: false, mismatch: false, checkpoint: true, action: "resume" },
+    { name: "checkpoint mismatch and diagnostics", live: false, mismatch: true, checkpoint: true, action: "rebuild" },
+  ]) {
+    it(`serializes each message once per decision: ${row.name}`, async () => {
+      const manager = SessionManager.inMemory("/workspace");
+      const context = new PiContextAdapter();
+      const id = context.bind(manager);
+      const checkpoint = await new RuntimeSessionStore(context).set(id, { conversationId: "agy-conversation" }, input.messages);
+      const sync = new RuntimeSessionSync();
+      const live = row.live ? createSession(true) : new LiveSession(id);
+      if (row.live) sync.record(live, input.messages);
+      let reads = 0;
+      const message = {
+        role: "user",
+        get content() { reads++; return row.mismatch ? "changed" : "question"; },
+      };
+
+      const decision = sync.decide(live, {
+        ...input, messages: [message], ...(row.checkpoint ? { checkpoint } : {}),
+      });
+
+      assert.deepEqual(decision, row.action === "resume"
+        ? { action: "resume", conversationId: "agy-conversation" } : { action: row.action });
+      assert.equal(reads, 1);
+      if (row.action === "resume") {
+        assert.equal(sync.getSyncedMessageCount(live), 1);
+        live.setSession({ isRunning: true } as AgyProcess, input.syncKey, undefined, "agy-conversation");
+        assert.deepEqual(sync.decide(live, { ...input, messages: [message] }), { action: "continue" });
+        assert.equal(reads, 2);
+      }
+    });
+  }
+
+  for (const row of [
+    { name: "in-place content mutation", mutate: true, invalid: false },
+    { name: "invalid appended message", mutate: false, invalid: true },
+  ]) {
+    it(`revalidates reused message identities: ${row.name}`, () => {
+      const sync = new RuntimeSessionSync();
+      const live = createSession(true);
+      const message = { role: "user", content: "question" };
+      const messages: unknown[] = [message];
+      sync.record(live, messages);
+      assert.deepEqual(sync.decide(live, { ...input, messages }), { action: "continue" });
+
+      if (row.mutate) message.content = "changed branch";
+      if (row.invalid) messages.push({ role: "user", content: [{ type: "unsupported" }] });
+
+      if (row.invalid) {
+        assert.throws(() => sync.decide(live, { ...input, messages }), /Unsupported Pi message content block/);
+      } else {
+        assert.deepEqual(sync.decide(live, { ...input, messages }), { action: "rebuild" });
+      }
+      assert.equal(sync.getSyncedMessageCount(live), 1);
+    });
+  }
+
   it("reuses pending mixed continuations when history is compatible", async () => {
     const history = [
       { role: "user", content: "question" },

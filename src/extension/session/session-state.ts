@@ -55,7 +55,7 @@ export class RuntimeSessionStore {
     loginEpoch?: string
   ): Promise<AgyConversationCheckpoint> {
     const sessionManager = this.requireSessionManager(piSessionId);
-    const fingerprint = fingerprintMessages(messages);
+    const fingerprint = fingerprintSerializedMessages(messages.map(serializeMessage));
     const messageCount = messages.length;
     const pendingMetadata = typeof checkpoint.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: checkpoint.hasPendingToolCalls } : {};
     sessionManager.appendCustomEntry(ENTRY_TYPE, {
@@ -85,13 +85,23 @@ export class RuntimeSessionStore {
 }
 
 export function messagesMatch(checkpoint: AgyConversationCheckpoint, messages: readonly unknown[]): boolean {
+  return matchMessages(checkpoint, messages);
+}
+
+function matchMessages(
+  checkpoint: AgyConversationCheckpoint,
+  messages: readonly unknown[],
+  serializedMessages?: readonly string[]
+): boolean {
   if (checkpoint.messageFormat !== MESSAGE_FORMAT) {
     debugLog("session", "Unsupported persisted message format", { format: checkpoint.messageFormat, expected: MESSAGE_FORMAT });
     return false;
   }
   if (checkpoint.fingerprint === undefined || checkpoint.messageCount === undefined) return false;
   if (messages.length < checkpoint.messageCount) return false;
-  const actualFingerprint = fingerprintMessages(messages.slice(0, checkpoint.messageCount));
+  const actualFingerprint = fingerprintSerializedMessages(serializedMessages
+    ? serializedMessages.slice(0, checkpoint.messageCount)
+    : messages.slice(0, checkpoint.messageCount).map(serializeMessage));
   if (actualFingerprint !== checkpoint.fingerprint) {
     debugLog("session", "Persisted messages mismatch", {
       expectedFingerprint: checkpoint.fingerprint,
@@ -103,8 +113,8 @@ export function messagesMatch(checkpoint: AgyConversationCheckpoint, messages: r
   return actualFingerprint === checkpoint.fingerprint;
 }
 
-function fingerprintMessages(messages: readonly unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(messages.map(serializeMessage))).digest("hex");
+function fingerprintSerializedMessages(messages: readonly string[]): string {
+  return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
 }
 
 function isRuntimeSessionEntry(entry: SessionEntry): entry is Extract<SessionEntry, { type: "custom" }> {
@@ -144,13 +154,13 @@ export class RuntimeSessionSync {
 
   public decide(session: LiveSession, input: RuntimeSessionSyncInput): RuntimeSessionDecision {
     // Validate even newly appended messages before continuing an existing runtime.
-    input.messages.forEach(serializeMessage);
+    const serializedMessages = input.messages.map(serializeMessage);
 
     // A dead process cannot receive results for its outstanding MCP calls.
     const deadPendingRuntime = session.activeMcpServer?.hasPendingCalls && !session.activeProcess?.isRunning;
     const syncedCount = this.getSyncedMessageCount(session);
 
-    if (!deadPendingRuntime && this.matchesLiveSession(session, input)) {
+    if (!deadPendingRuntime && this.matchesLiveSession(session, input, serializedMessages)) {
       if (session.activeProcess?.isRunning &&
         (session.syncKey === input.syncKey || session.activeMcpServer?.hasPendingCalls)) {
         return { action: "continue" };
@@ -164,8 +174,8 @@ export class RuntimeSessionSync {
     // An older checkpoint cannot roll back a conversation whose newer live
     // messages are already known. A different branch conversation may still resume.
     if (checkpoint && (checkpoint.conversationId !== session.conversationId || (!deadPendingRuntime && syncedCount === undefined)) &&
-      this.matchesPersistedSession(checkpoint, input)) {
-      this.record(session, input.messages.slice(0, checkpoint.messageCount));
+      this.matchesPersistedSession(checkpoint, input, serializedMessages)) {
+      this.syncedMessages.set(session, serializedMessages.slice(0, checkpoint.messageCount));
       return { action: "resume", conversationId: checkpoint.conversationId };
     }
 
@@ -177,7 +187,7 @@ export class RuntimeSessionSync {
       inputConversationId: input.conversationId,
       processRunning: session.activeProcess?.isRunning ?? false,
       hasCheckpoint: checkpoint !== undefined,
-      checkpointMatches: checkpoint ? this.matchesPersistedSession(checkpoint, input) : false,
+      checkpointMatches: checkpoint ? this.matchesPersistedSession(checkpoint, input, serializedMessages) : false,
     });
 
     return { action: "rebuild" };
@@ -197,7 +207,11 @@ export class RuntimeSessionSync {
     this.syncedMessages.set(session, serializedMessages);
   }
 
-  private matchesLiveSession(session: LiveSession, input: RuntimeSessionSyncInput): boolean {
+  private matchesLiveSession(
+    session: LiveSession,
+    input: RuntimeSessionSyncInput,
+    serializedMessages: readonly string[]
+  ): boolean {
     if (!session.conversationId || !this.matchesConversationId(session.conversationId, input.conversationId)) return false;
 
     const previousMessages = this.syncedMessages.get(session);
@@ -213,13 +227,13 @@ export class RuntimeSessionSync {
     if (this.hasUnsyncedAssistant(input.messages, previousMessages.length)) return false;
 
     const mismatchIndex = previousMessages.findIndex((entry, index) =>
-      entry !== serializeMessage(input.messages[index])
+      entry !== serializedMessages[index]
     );
     if (mismatchIndex < 0) return true;
 
     if (isDebugEnabled()) {
       const expected: unknown = JSON.parse(previousMessages[mismatchIndex]!);
-      const actual: unknown = JSON.parse(serializeMessage(input.messages[mismatchIndex]));
+      const actual: unknown = JSON.parse(serializedMessages[mismatchIndex]!);
       const fields = changedFields(expected, actual);
       debugLog("session", "Live message mismatch", {
         index: mismatchIndex,
@@ -234,13 +248,14 @@ export class RuntimeSessionSync {
 
   private matchesPersistedSession(
     checkpoint: AgyConversationCheckpoint,
-    input: RuntimeSessionSyncInput
+    input: RuntimeSessionSyncInput,
+    serializedMessages: readonly string[]
   ): boolean {
     if (checkpoint.hasPendingToolCalls === true) return false;
 
     return (
       this.matchesConversationId(checkpoint.conversationId, input.conversationId) &&
-      messagesMatch(checkpoint, input.messages) &&
+      matchMessages(checkpoint, input.messages, serializedMessages) &&
       !this.hasUnsyncedAssistant(input.messages, checkpoint.messageCount!)
     );
   }

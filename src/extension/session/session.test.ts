@@ -216,6 +216,45 @@ describe("LiveSession", () => {
     });
   }
 
+  for (const stage of ["mcp", "process"]) {
+    it(`concurrent disposal does not repeat or wait for detached ${stage} cleanup`, async () => {
+      const session = new LiveSession("pi");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const calls: string[] = [];
+      const runtime = createRuntime(async () => {
+        calls.push("process");
+        if (stage === "process") await gate;
+      });
+      const mcp = { close: async () => {
+        calls.push("mcp");
+        if (stage === "mcp") await gate;
+      } } as unknown as AgyMcpServer;
+      const token = session.beginPreparation();
+      session.setSession(runtime.runtime, "key", mcp, "conversation", token);
+      const handle = session.resources.terminals.bind("terminal");
+      const first = session.dispose({ preparationId: token, preserveResources: true, preserveConversation: true });
+      const second = session.dispose({ preparationId: token, preserveResources: true, preserveConversation: true });
+
+      try {
+        await second;
+        assert.deepEqual(calls, stage === "mcp" ? ["mcp"] : ["mcp", "process"]);
+        assert.equal(session.activeProcess, null);
+        assert.equal(session.syncKey, "");
+        assert.equal(session.conversationId, "conversation");
+        assert.equal(session.resources.terminals.resolve(handle), "terminal");
+        assert.equal(session.ownsPreparation(token), true);
+        release();
+        await Promise.all([first, second]);
+        assert.deepEqual(calls, ["mcp", "process"]);
+      } finally {
+        release();
+        await Promise.all([first, second]);
+        await session.dispose();
+      }
+    });
+  }
+
   it("tracks the owning Pi session", () => {
     const session = new LiveSession("pi-session-a");
     assert.equal(session.piSessionId, "pi-session-a");
