@@ -17,7 +17,7 @@ export class BridgeSocketClient {
   waitUntilConnected(): Promise<void>;
   listTools(): readonly McpTool[];
   onDisconnect(listener: (error: Error) => void): () => void;
-  callTool(name: string, args?: Record<string, unknown>): Promise<unknown>;
+  callTool(name: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
   close(): void;
 }
 

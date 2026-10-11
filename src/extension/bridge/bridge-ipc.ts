@@ -98,9 +98,19 @@ export class BridgeIPC {
   }
 
   private async startBroker(): Promise<void> {
-    const runtimeDir = path.join(os.tmpdir(), "pab");
+    if (typeof process.getuid !== "function") {
+      throw new Error("Pi MCP bridge requires a platform with UID support for runtime directory ownership checks");
+    }
+
+    const uid = process.getuid();
+    const runtimeDir = path.join(os.tmpdir(), `pab-${uid}`);
     try {
-      await fs.mkdir(runtimeDir, { recursive: true });
+      await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
+      const runtimeStat = await fs.lstat(runtimeDir);
+      if (!runtimeStat.isDirectory() || runtimeStat.uid !== uid) {
+        throw new Error("Pi MCP runtime directory must be an actual directory owned by the current user");
+      }
+      await fs.chmod(runtimeDir, 0o700);
       await cleanOrphanSockets(runtimeDir);
 
       this.socketPath = path.join(
@@ -204,7 +214,7 @@ export class BridgeIPC {
       buffer += decoder.write(chunk);
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
-        const line = buffer.slice(0, newline);
+        const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
         newline = buffer.indexOf("\n");
         if (!line) continue;

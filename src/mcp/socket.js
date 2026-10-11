@@ -72,18 +72,29 @@ export class BridgeSocketClient {
     this.disconnectListeners.add(listener);
     return () => this.disconnectListeners.delete(listener);
   }
-  callTool(name, args = {}) {
+  callTool(name, args = {}, signal) {
     this.assertOpen();
     validateNonblank(name, "tool name");
     if (!isRecord(args))
       throw new Error("Tool arguments must be an object");
+    if (signal?.aborted) return Promise.reject(signal.reason);
+
     const id = randomUUID();
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const cleanup = () => signal?.removeEventListener("abort", abort);
+      const abort = () => {
+        // Keep the upstream ID until its result arrives; Pi has no per-call abort API.
+        this.pending.set(id, null);
+        cleanup();
+        reject(signal.reason);
+      };
+      this.pending.set(id, { resolve, reject, cleanup });
+      signal?.addEventListener("abort", abort, { once: true });
       try {
         this.write({ type: "call", id, name, arguments: args });
       } catch (error) {
         this.pending.delete(id);
+        cleanup();
         this.fail(toError(error));
         reject(toError(error));
       }
@@ -148,9 +159,12 @@ export class BridgeSocketClient {
     if (this.state !== "open")
       throw new Error("Bridge returned a result before tools");
     const request = this.pending.get(message.id);
-    if (!request)
+    if (request === undefined)
       throw new Error(`Bridge returned an unknown result ID: ${message.id}`);
     this.pending.delete(message.id);
+    if (request === null) return;
+
+    request.cleanup();
     request.resolve(message.result);
   }
   write(message) {
@@ -171,8 +185,11 @@ export class BridgeSocketClient {
     this.connectReject?.(error);
     this.connectResolve = null;
     this.connectReject = null;
-    for (const request of this.pending.values())
+    for (const request of this.pending.values()) {
+      if (request === null) continue;
+      request.cleanup();
       request.reject(error);
+    }
     this.pending.clear();
     if (!this.socket.destroyed)
       this.socket.destroy();

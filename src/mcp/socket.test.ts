@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import net, { type Server, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -205,3 +206,78 @@ describe("BridgeSocketClient", () => {
     });
   });
 });
+
+for (const scenario of ["pre-abort", "pending", "completed", "late result", "disconnect", "unknown result"] as const) {
+  it(`handles cancellation: ${scenario}`, async (t) => {
+    const socket = new net.Socket();
+    const calls: Message[] = [];
+    t.mock.method(socket, "write", (chunk: string) => {
+      const message = JSON.parse(chunk) as Message;
+      if (message.type === "call") calls.push(message);
+      return true;
+    });
+    t.mock.method(net, "createConnection", () => socket);
+    syncBuiltinESMExports();
+    let client: BridgeSocketClient | undefined;
+    t.after(() => {
+      client?.close();
+      socket.destroy();
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
+
+    const connecting = connectBridge({ endpoint: "/mock/bridge.sock", sessionId: "transport-session" });
+    socket.emit("connect");
+    const receive = (message: Message) => socket.emit("data", `${JSON.stringify(message)}\n`);
+    receive({ type: "tools", tools: [] });
+    client = await connecting;
+    const controller = new AbortController();
+    const reason = new Error("cancelled locally");
+    const remove = t.mock.method(controller.signal, "removeEventListener");
+    const disconnected: Error[] = [];
+    client.onDisconnect((error) => disconnected.push(error));
+    if (scenario === "pre-abort") controller.abort(reason);
+
+    const first = client.callTool("echo", {}, controller.signal);
+    if (scenario === "completed") {
+      receive({ type: "result", id: calls[0]!.id, result: "done" });
+      assert.equal(await first, "done");
+      controller.abort(reason);
+    } else {
+      const rejected = assert.rejects(first, (error) => error === reason);
+      controller.abort(reason);
+      await rejected;
+    }
+    assert.equal(calls.length, scenario === "pre-abort" ? 0 : 1);
+    assert.equal(remove.mock.callCount(), scenario === "pre-abort" ? 0 : 1);
+
+    const otherController = new AbortController();
+    const otherRemove = t.mock.method(otherController.signal, "removeEventListener");
+    const other = client.callTool("other", {}, otherController.signal);
+    if (scenario === "disconnect" || scenario === "unknown result") {
+      const rejected = assert.rejects(other, scenario === "disconnect" ? /Bridge socket disconnected/ : /unknown result ID: unknown/);
+      if (scenario === "disconnect") socket.emit("close");
+      else receive({ type: "result", id: "unknown", result: true });
+      await rejected;
+      assert.equal(disconnected.length, 1);
+      assert.equal(socket.destroyed, true);
+      assert.throws(() => client!.callTool("echo"), /disconnected or closed/);
+      client.close();
+      assert.equal(disconnected.length, 1);
+    } else {
+      if (scenario === "late result") {
+        receive({ type: "result", id: calls[0]!.id, result: "late" });
+        assert.equal(disconnected.length, 0);
+      }
+      receive({ type: "result", id: calls.at(-1)!.id, result: "other" });
+      assert.equal(await other, "other");
+      assert.equal(disconnected.length, 0);
+      if (scenario === "late result") {
+        receive({ type: "result", id: calls[0]!.id, result: "duplicate" });
+        assert.match(disconnected[0]!.message, /unknown result ID/);
+      }
+    }
+    assert.equal(otherRemove.mock.callCount(), 1);
+    assert.equal(remove.mock.callCount(), scenario === "pre-abort" ? 0 : 1);
+  });
+}
