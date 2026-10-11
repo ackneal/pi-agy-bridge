@@ -743,6 +743,7 @@ for (const conversionException of [false, true]) {
     const sessionId = bridge.piContextAdapter.bind(manager);
     const session = bridge.liveSessions.getOrCreate(sessionId);
     const toolName = conversionException ? "pty" : "test-tool";
+    if (conversionException) session.resources.terminals.bind("pi-terminal");
     const tools = [{ name: toolName, description: "test", parameters: { type: "object", properties: {} } }];
     t.mock.method(bridge, "getTools", () => tools);
     const gateway = new CapabilityGateway(tools, session.resources);

@@ -270,6 +270,50 @@ describe("CapabilityGateway", () => {
 });
 
 describe("PiToolAdapter", () => {
+  const textHandleCases = [
+    { name: "no resources skips plain-text replacement", resources: false, bound: false, command: "poll", text: "output pi-pty-abc", expected: "output pi-pty-abc", replacements: 0 },
+    { name: "empty registry skips plain-text replacement", resources: true, bound: false, command: "poll", text: "output pi-pty-abc", expected: "output pi-pty-abc", replacements: 0 },
+    { name: "populated registry maps plain-text identifiers", resources: true, bound: true, command: "poll", text: "output 'pi-pty-abc' unknown", expected: "output 'terminal-1' unknown", replacements: 1 },
+    { name: "no resources preserves JSON normalization", resources: false, bound: false, command: "poll", text: ' { "ptyId": "pi-pty-abc" } ', expected: '{"ptyId":"pi-pty-abc"}', replacements: 0 },
+    { name: "empty registry preserves JSON normalization", resources: true, bound: false, command: "poll", text: ' { "ptyId": "pi-pty-abc" } ', expected: '{"ptyId":"pi-pty-abc"}', replacements: 0 },
+    { name: "start JSON binds a new handle in an empty registry", resources: true, bound: false, command: "start", text: ' { "ptyId": "pi-pty-abc" } ', expected: '{"ptyId":"terminal-1"}', replacements: 0 },
+    { name: "populated registry maps JSON identifiers", resources: true, bound: true, command: "poll", text: ' { "ptyId": "pi-pty-abc" } ', expected: '{"ptyId":"terminal-1"}', replacements: 0 },
+  ];
+
+  for (const tc of textHandleCases) {
+    it(tc.name, (t) => {
+      const resources = tc.resources ? new SessionResources() : undefined;
+      if (tc.bound) resources!.terminals.bind("pi-pty-abc");
+      const adapter = new PiToolAdapter([ptyTool], resources);
+      const call = adapter.createCall("pty", { command: tc.command })!;
+      const original = String.prototype.replace;
+      let replacements = 0;
+      t.mock.method(String.prototype, "replace", function (this: string, ...args: Parameters<typeof original>) {
+        if (String(this) === tc.text) replacements++;
+        return original.apply(this, args);
+      });
+
+      const result = adapter.toMcpResult({
+        role: "toolResult",
+        toolCallId: call.id,
+        toolName: "pty",
+        content: [{ type: "text", text: tc.text }],
+        isError: false,
+        timestamp: Date.now(),
+      }, call);
+
+      assert.deepEqual(result.content, [{ type: "text", text: tc.expected }]);
+      assert.equal(replacements, tc.replacements);
+      if (resources) {
+        const mapped = tc.bound || tc.command === "start";
+        assert.equal(resources.terminals.resolve("terminal-1"), mapped ? "pi-pty-abc" : undefined);
+        if (mapped) {
+          assert.equal(adapter.createCall("pty", { command: "poll", ptyId: "terminal-1" })?.arguments.ptyId, "pi-pty-abc");
+        }
+      }
+    });
+  }
+
   it("leaves ordinary identifier fields unchanged", () => {
     const lookupTool: Tool = {
       name: "lookup",
