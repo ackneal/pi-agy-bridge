@@ -13,12 +13,39 @@ import { AgyMcpServer, cleanOrphanSockets } from "./bridge-ipc.ts";
 import { connectBridge, parseBridgeUri } from "../../mcp/socket.js";
 
 describe("AgyMcpServer", () => {
+  it("rejects platforms without UID support before touching the filesystem", async (t) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "getuid");
+    const bridge = new AgyMcpServer([]);
+    t.after(async () => {
+      if (descriptor) Object.defineProperty(process, "getuid", descriptor);
+      else Reflect.deleteProperty(process, "getuid");
+      await bridge.close();
+    });
+    Object.defineProperty(process, "getuid", { configurable: true, value: undefined });
+    t.mock.method(fs, "mkdir", () => assert.fail("Unsupported platforms must not create a runtime directory"));
+
+    await assert.rejects(bridge.start(), /requires a platform with UID support/);
+    assert.throws(() => bridge.bridgeUri, /not been started/);
+  });
+
   for (const phase of ["mkdir", "listen", "chmod", "failure"] as const) {
     it(`serializes concurrent starts and close during ${phase}`, async (t) => {
       const bridge = new AgyMcpServer([]);
-      const exitListeners = process.listeners("exit");
       let release!: () => void;
       const gate = new Promise<void>((resolve) => { release = resolve; });
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pab-serialization-test-"));
+      t.after(async () => {
+        try {
+          release();
+          await bridge.close();
+        } finally {
+          t.mock.restoreAll();
+          syncBuiltinESMExports();
+          await fs.rm(tempDir, { recursive: true, force: true });
+        }
+      });
+      const runtimeStat = await fs.stat(tempDir);
+      const exitListeners = process.listeners("exit");
       let reached!: () => void;
       const entered = new Promise<void>((resolve) => { reached = resolve; });
       let created = 0;
@@ -45,12 +72,6 @@ describe("AgyMcpServer", () => {
         },
       });
 
-      t.after(async () => {
-        release();
-        await bridge.close();
-        t.mock.restoreAll();
-        syncBuiltinESMExports();
-      });
       t.mock.method(net, "createServer", () => { created++; return server; });
       syncBuiltinESMExports();
       t.mock.method(fs, "mkdir", async () => {
@@ -59,8 +80,10 @@ describe("AgyMcpServer", () => {
           await gate;
         }
       });
+      t.mock.method(fs, "lstat", async () => runtimeStat);
       t.mock.method(fs, "readdir", async () => []);
-      t.mock.method(fs, "chmod", async () => {
+      t.mock.method(fs, "chmod", async (target: string) => {
+        if (!target.endsWith(".sock")) return;
         if (phase === "chmod" || phase === "failure") {
           reached();
           await gate;
@@ -87,6 +110,102 @@ describe("AgyMcpServer", () => {
       assert.deepEqual(unlinked, [endpoint]);
       assert.deepEqual(process.listeners("exit"), exitListeners);
       assert.throws(() => bridge.bridgeUri, /not been started/);
+    });
+  }
+
+  for (const kind of ["new", "permissive", "symlink", "file", "foreign-owner", "chmod-failure"] as const) {
+    it(`secures the per-user runtime directory: ${kind}`, async (t) => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pab-runtime-test-"));
+      const runtimeDir = path.join(tempDir, `pab-${process.getuid!()}`);
+      const bridge = new AgyMcpServer([]);
+      t.after(async () => {
+        await bridge.close();
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+        await fs.rm(tempDir, { recursive: true, force: true });
+      });
+      t.mock.method(os, "tmpdir", () => tempDir);
+      const server = Object.assign(new EventEmitter(), {
+        listening: false,
+        listen(endpoint: string, callback: () => void) {
+          void fs.writeFile(endpoint, "").then(() => {
+            server.listening = true;
+            callback();
+          }).catch((error) => server.emit("error", error));
+        },
+        close(callback: () => void) { server.listening = false; callback(); },
+      });
+      t.mock.method(net, "createServer", () => server);
+      syncBuiltinESMExports();
+
+      if (kind === "symlink") {
+        const target = path.join(tempDir, "target");
+        await fs.mkdir(target, { mode: 0o755 });
+        await fs.symlink(target, runtimeDir);
+      } else if (kind === "file") {
+        await fs.writeFile(runtimeDir, "");
+      } else if (kind !== "new") {
+        await fs.mkdir(runtimeDir);
+        await fs.chmod(runtimeDir, 0o755);
+      }
+      if (kind === "foreign-owner") {
+        const stat = await fs.lstat(runtimeDir);
+        stat.uid = process.getuid!() + 1;
+        t.mock.method(fs, "lstat", async () => stat);
+      }
+      if (kind === "chmod-failure") {
+        t.mock.method(fs, "chmod", async () => { throw new Error("runtime chmod failed"); });
+      }
+      const readdir = fs.readdir.bind(fs);
+      let cleaned = false;
+      t.mock.method(fs, "readdir", async (directory: string) => {
+        assert.equal(directory, runtimeDir);
+        const stat = await fs.lstat(directory);
+        assert.ok(stat.isDirectory());
+        assert.equal(stat.uid, process.getuid!());
+        assert.equal(stat.mode & 0o777, 0o700);
+        cleaned = true;
+        return readdir(directory);
+      });
+
+      if (kind === "new" || kind === "permissive") {
+        await bridge.start();
+        assert.equal(path.dirname(parseBridgeUri(bridge.bridgeUri).endpoint), runtimeDir);
+        assert.equal((await fs.lstat(runtimeDir)).mode & 0o777, 0o700);
+        assert.equal(cleaned, true);
+      } else {
+        const expected = kind === "file" ? /EEXIST/ : kind === "chmod-failure"
+          ? /runtime chmod failed/ : /actual directory owned by the current user/;
+        await assert.rejects(bridge.start(), expected);
+        assert.equal(cleaned, false);
+        assert.throws(() => bridge.bridgeUri, /not been started/);
+      }
+    });
+  }
+
+  for (const blank of ["\n", "\r\n", " \t\n", " \t\r\n"] as const) {
+    it(`preserves the connection across blank lines ${JSON.stringify(blank)}`, async (t) => {
+      const bridge = new AgyMcpServer([{ name: "read", description: "Read", parameters: Type.Object({}) }]);
+      t.after(() => bridge.close());
+      const writes: string[] = [];
+      const socket = Object.assign(new EventEmitter(), {
+        destroyed: false,
+        write(data: string) { writes.push(data); return true; },
+        end: () => assert.fail("Rejected message"),
+        destroy() { this.destroyed = true; socket.emit("close"); },
+      });
+      let relayed = false;
+      bridge.setToolCallHandler(() => { relayed = true; });
+      (bridge as unknown as { handleConnection(socket: Socket): void }).handleConnection(socket as unknown as Socket);
+
+      const wire = blank + JSON.stringify({ type: "hello", sessionId: bridge.sessionId }) + "\r\n" + blank +
+        JSON.stringify({ type: "call", id: "1", name: "read", arguments: {} }) + "\r\n" + blank;
+      for (const byte of Buffer.from(wire)) socket.emit("data", Buffer.from([byte]));
+      await waitFor(() => relayed);
+
+      assert.equal(socket.destroyed, false);
+      assert.equal(JSON.parse(writes[0]!).type, "tools");
+      assert.equal(bridge.hasPendingCalls, true);
     });
   }
 

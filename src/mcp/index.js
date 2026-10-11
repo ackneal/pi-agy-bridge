@@ -10,6 +10,7 @@ async function main() {
   const bridgeUri = getBridgeEndpoint();
   const socket = await connectBridge(parseBridgeUri(bridgeUri));
   const input = readline.createInterface({ input: process.stdin, terminal: false });
+  const inFlight = new Map();
   let closed = false;
 
   const close = () => {
@@ -27,7 +28,7 @@ async function main() {
 
   input.on("line", (line) => {
     if (line.trim() === "") return;
-    void handleLine(line, socket).catch((error) => {
+    void handleLine(line, socket, inFlight).catch((error) => {
       debugLog("Request handling failed:", error);
     });
   });
@@ -36,7 +37,7 @@ async function main() {
   process.once("SIGTERM", close);
 }
 
-async function handleLine(line, socket) {
+async function handleLine(line, socket, inFlight) {
   let request;
   try {
     request = JSON.parse(line);
@@ -51,7 +52,15 @@ async function handleLine(line, socket) {
   }
 
   const id = requestId(request);
-  if (id === undefined) return;
+  if (id === undefined) {
+    const params = request.params;
+    if (isRecord(params)) {
+      const target = request.method === "notifications/cancelled" ? params.requestId
+        : request.method === "$/cancelRequest" ? params.id : undefined;
+      inFlight.get(target)?.abort();
+    }
+    return;
+  }
 
   try {
     switch (request.method) {
@@ -82,7 +91,18 @@ async function handleLine(line, socket) {
           writeError(id, -32602, "Tool arguments must be an object");
           return;
         }
-        writeResult(id, await socket.callTool(params.name, args));
+
+        const controller = new AbortController();
+        inFlight.set(id, controller);
+
+        try {
+          const result = await socket.callTool(params.name, args, controller.signal);
+          if (!controller.signal.aborted) writeResult(id, result);
+        } catch (error) {
+          if (!controller.signal.aborted) throw error;
+        } finally {
+          if (inFlight.get(id) === controller) inFlight.delete(id);
+        }
         return;
       }
       default:
