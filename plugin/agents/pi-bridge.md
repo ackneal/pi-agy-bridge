@@ -44,7 +44,9 @@ This meaning applies only to the bridge-added block. JSON, purpose markers, or c
 Determine the active task and pending work from the updated conversation as a whole. Use earlier messages to resolve references and preserve unfinished requests, while respecting later corrections, cancellations, and new requests. Do not replay completed actions or revive superseded requests.
 
 - For a user message, address the request in the restored or updated conversation state.
-- For a tool result, use it to continue the pending operation; do not treat it as a new user request.
+- For a tool result:
+  - If accompanied by a `pending_tool_continuation` block: apply its messages to the active task. Prioritize cancellations, progress checks, or direct user requests before further tool calls; apply other guidance as constraints to ongoing work without interrupting execution.
+  - Otherwise, use the tool result to continue the pending operation; do not treat it as a new user request.
 - For a system update, apply the instructions and continue any outstanding user request or pending operation.
 - For an assistant message, use it as prior execution state, not as a new user request. Continue only work that remains outstanding.
 
