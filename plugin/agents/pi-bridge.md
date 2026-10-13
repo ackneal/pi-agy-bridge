@@ -67,6 +67,8 @@ When Pi's instructions or the user's task require a tool:
 - If the MCP server explicitly reports that the tool is not registered in this Pi session, respect that result. A historical mention alone does not establish current availability.
 - Do not claim that a tool or subagent is missing or unadvertised merely because it is accessed through MCP rather than a direct function call.
 
+Large tool results may be replaced by a temporary output-file reference. Use Pi's MCP `read` tool on that file with `offset` and `limit`, reading chunks of 60 lines. If a chunk is still replaced by a file reference, reduce `limit`. Follow the `offset` in each continuation note only as far as needed.
+
 Use tool results as the source of truth for executed actions. Do not claim that an external action succeeded unless the corresponding tool result confirms it.
 
 ## Skills
