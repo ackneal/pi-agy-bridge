@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { formatDoctorQuotaLines, parseAgyUsageOutput } from "./usage.ts";
+
+const sampleJsonOutput = JSON.stringify({
+  conversation_id: "",
+  status: "SUCCESS",
+  response: "Gemini Models\tWeekly Limit Remaining\t100%\t2026-10-24T04:19:59Z\n",
+  command: {
+    name: "usage",
+    data: {
+      groups: [
+        {
+          name: "Gemini Models",
+          description: "Models within this group: Gemini Flash, Gemini Pro",
+          buckets: [
+            { id: "gemini-weekly", name: "WeeklyLimit Remaining", window: "weekly", remaining_fraction: 1, reset_time: "2026-10-24T04:19:59Z" },
+            { id: "gemini-5h", name: "Five Hour Limit Remaining", window: "5h", remaining_fraction: 1, reset_time: "2026-10-17T09:19:59Z" },
+          ],
+        },
+        {
+          name: "Claude and GPT models",
+          buckets: [
+            { id: "3p-weekly", name: "WeeklyLimit Remaining", window: "weekly", remaining_fraction: 0.833, reset_time: "2026-10-20T13:35:39Z" },
+            { id: "3p-5h", name: "Five Hour Limit Remaining", window: "5h", remaining_fraction: 1, reset_time: "2026-10-17T09:19:59Z" },
+          ],
+        },
+        {
+          name: "Gemini 4 Argon",
+          buckets: [
+            { id: "gemini-argon-wtu-weekly", name: "Gemini 4 Argon Weekly Limit", window: "weekly", remaining_fraction: 0.404, reset_time: "2026-10-24T00:18:14Z" },
+          ],
+        },
+      ],
+    },
+  },
+});
+
+const sampleTextOutput = [
+  "Quota:",
+  "Gemini Models          Weekly Limit Remaining       100%  2026-10-24 12:19 CST",
+  "Gemini Models          Five Hour Limit Remaining    100%  2026-10-17 17:19 CST",
+  "Claude and GPT models  Weekly Limit Remaining       83%   2026-10-20 21:35 CST",
+  "Claude and GPT models  Five Hour Limit Remaining    100%  2026-10-17 17:19 CST",
+  "Gemini 4 Argon         Gemini 4 Argon Weekly Limit  42%   2026-10-24 08:18 CST",
+].join("\n");
+
+test("parseAgyUsageOutput parses JSON, text, and invalid inputs", () => {
+  for (const row of [
+    { name: "JSON command output", input: sampleJsonOutput, expectedGroups: 3, argonFraction: 0.404 },
+    { name: "plain text quota output", input: sampleTextOutput, expectedGroups: 3, argonFraction: 0.42 },
+    { name: "JSON response fallback", input: JSON.stringify({ response: sampleTextOutput }), expectedGroups: 3, argonFraction: 0.42 },
+    { name: "empty output", input: "", expectedGroups: 0 },
+    { name: "unrelated output", input: "Quota", expectedGroups: 0 },
+  ]) {
+    const snapshot = parseAgyUsageOutput(row.input, "2026-10-17T04:19:59Z");
+    if (row.expectedGroups === 0) {
+      assert.equal(snapshot, undefined, row.name);
+      continue;
+    }
+
+    assert.ok(snapshot, row.name);
+    assert.equal(snapshot.groups.length, row.expectedGroups, row.name);
+    const argon = snapshot.groups.find((group) => group.name === "Gemini 4 Argon");
+    assert.equal(argon?.buckets[0]?.remainingFraction, row.argonFraction, row.name);
+  }
+});
+
+test("formatDoctorQuotaLines formats full report", () => {
+  const nowMs = Date.parse("2026-10-17T04:19:59Z");
+  const snapshot = parseAgyUsageOutput(sampleJsonOutput, "2026-10-17T04:19:59Z");
+
+  assert.deepEqual(formatDoctorQuotaLines(snapshot, nowMs), [
+    "",
+    "Quota remaining",
+    "  Gemini Models          5h 100% (5h) · weekly 100% (7d)",
+    "  Claude and GPT models  5h 100% (5h) · weekly 83% (3d 9h)",
+    "  Gemini 4 Argon         weekly 40% (6d 19h)",
+  ]);
+  assert.deepEqual(formatDoctorQuotaLines(undefined, nowMs), []);
+});

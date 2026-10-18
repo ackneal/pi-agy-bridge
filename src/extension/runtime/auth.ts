@@ -5,6 +5,7 @@ import { resolveAgyExecutable } from "./version.ts";
 import { spawnAuthenticationPty, type AuthenticationPty } from "./auth-pty.ts";
 
 import { recordAuthProbeDiagnostics, summarizeAuthOutput } from "./auth-diagnostics.ts";
+import { parseAgyUsageOutput, type AgyUsageSnapshot } from "./usage.ts";
 import { isDebugEnabled } from "../shared/debug.ts";
 
 const args = ["--print", "/usage"];
@@ -13,7 +14,12 @@ const invitation = "Authentication required. Please visit the URL to log in:";
 const manual = "Or, paste the authorization code here and press Enter:";
 const maxBytes = 64 * 1024;
 
-function runAuthentication(path: string | undefined, signal: AbortSignal | undefined, interaction?: ProviderAuthInteraction): Promise<boolean> {
+function runAuthentication(
+  path: string | undefined,
+  signal: AbortSignal | undefined,
+  interaction?: ProviderAuthInteraction,
+  onUsage?: (snapshot: AgyUsageSnapshot) => void
+): Promise<boolean> {
   if (signal?.aborted) return Promise.reject(new Error("Antigravity CLI authentication was cancelled"));
   const executable = resolveAgyExecutable(path);
 
@@ -171,8 +177,10 @@ function runAuthentication(path: string | undefined, signal: AbortSignal | undef
       const text = stripVTControlCharacters(diagnostics);
       // Normalize the accumulated output before excluding fragmented PTY echoes.
       const report = submittedCode === undefined ? text : text.replaceAll(submittedCode, "[authorization code]");
-      const hasQuota = report.includes("Quota") || report.includes("Limit Remaining");
+      const snapshot = parseAgyUsageOutput(report);
+      const hasQuota = snapshot !== undefined || report.includes("Quota") || report.includes("Limit Remaining");
       if (code === 0 && exitSignal === null && hasQuota) {
+        if (snapshot) onUsage?.(snapshot);
         resolve(true);
         return;
       }
@@ -200,11 +208,19 @@ function runAuthentication(path: string | undefined, signal: AbortSignal | undef
   });
 }
 
-export async function probeAgyAuthentication(agyPath?: string, signal?: AbortSignal): Promise<boolean> {
-  return runAuthentication(agyPath, signal);
+export async function probeAgyAuthentication(
+  agyPath?: string,
+  signal?: AbortSignal,
+  onUsage?: (snapshot: AgyUsageSnapshot) => void
+): Promise<boolean> {
+  return runAuthentication(agyPath, signal, undefined, onUsage);
 }
 
-export async function loginAgyAuthentication(interaction: ProviderAuthInteraction, agyPath?: string): Promise<void> {
-  if (await probeAgyAuthentication(agyPath, interaction.signal)) return;
-  await runAuthentication(agyPath, interaction.signal, interaction);
+export async function loginAgyAuthentication(
+  interaction: ProviderAuthInteraction,
+  agyPath?: string,
+  onUsage?: (snapshot: AgyUsageSnapshot) => void
+): Promise<void> {
+  if (await probeAgyAuthentication(agyPath, interaction.signal, onUsage)) return;
+  await runAuthentication(agyPath, interaction.signal, interaction, onUsage);
 }

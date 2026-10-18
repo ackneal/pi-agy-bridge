@@ -22,6 +22,7 @@ import {
 } from "../session/session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
 import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../discovery/plugin-install.ts";
+import { fetchAgyUsage, type AgyUsageSnapshot } from "../runtime/usage.ts";
 import { validateAgyVersion } from "../runtime/version.ts";
 import { discoverAgyModels, restoreStoredAgyModels } from "../discovery/models.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
@@ -463,6 +464,8 @@ export class AgyBridge {
   private readonly config: AgyBridgeConfig | undefined;
   private pluginError: DoctorFailure | undefined;
   private discoveryError: DoctorFailure | undefined;
+  private usageError: DoctorFailure | undefined;
+  private usageRefresh: Promise<AgyUsageSnapshot | undefined> | undefined;
   private readonly authentication: AgyAuthentication;
   private startupAuthenticationStarted = false;
   private runtimeLifetime = new AbortController();
@@ -485,6 +488,38 @@ export class AgyBridge {
       }
       this.runtimeLifetime = new AbortController();
     });
+  }
+
+  private async refreshUsage(signal: AbortSignal): Promise<AgyUsageSnapshot | undefined> {
+    if (signal.aborted) return undefined;
+    if (this.usageRefresh) return this.usageRefresh;
+
+    const task = fetchAgyUsage(this.config?.agyPath, signal)
+      .then((snapshot) => {
+        if (signal.aborted) return undefined;
+        this.authentication.usageSnapshot = snapshot;
+        this.usageError = undefined;
+        this.authentication.status = "authenticated";
+        this.authentication.failure = undefined;
+        return snapshot;
+      })
+      .catch((error) => {
+        if (!signal.aborted) {
+          this.authentication.usageSnapshot = undefined;
+          this.usageError = {
+            time: new Date().toISOString(),
+            message: error instanceof Error ? error.message : String(error),
+          };
+          debugLog("usage", "Antigravity CLI usage check failed:", error);
+        }
+        return undefined;
+      })
+      .finally(() => {
+        if (this.usageRefresh === task) this.usageRefresh = undefined;
+      });
+
+    this.usageRefresh = task;
+    return task;
   }
 
   public async ensureAgyPluginInstalled(pluginDir: string): Promise<void> {
@@ -522,6 +557,7 @@ export class AgyBridge {
     this.pi.registerCommand("agy-bridge:doctor", {
       description: "Check Antigravity CLI CLI, plugin installation, models, and MCP",
       handler: async () => {
+        await this.refreshUsage(this.runtimeLifetime.signal);
         const rawPluginDir = this.config?.pluginDir ?? this.config?.agentDir;
         const report = await collectDoctorReport({
           agyPath: this.config?.agyPath,
@@ -533,6 +569,8 @@ export class AgyBridge {
           discoveryError: this.discoveryError,
           authStatus: this.authentication.status,
           authError: this.authentication.failure,
+          usageSnapshot: this.authentication.usageSnapshot,
+          usageError: this.usageError,
         });
         this.pi.sendMessage({
           customType: "pi-agy-bridge:doctor",
