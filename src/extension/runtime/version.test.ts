@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { resolveAgyExecutable } from "./version.ts";
+import { resolveAgyExecutable, validateAgyVersion } from "./version.ts";
 import { expandHome } from "../shared/paths.ts";
 
 for (const row of [
@@ -17,6 +17,17 @@ for (const row of [
   test(`home expansion preserves path semantics: ${row.input}`, () => {
     assert.equal(expandHome(row.input), row.expected);
     assert.equal(resolveAgyExecutable(row.input), row.expected);
+  });
+}
+
+for (const version of ["0.1.0", "1.4.2", "2.0.0"]) {
+  test(`reads CLI version without a minimum gate: ${version}`, async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "agy-version-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "agy");
+    fs.writeFileSync(executable, `#!/bin/sh\necho 'agy ${version}'\n`, { mode: 0o755 });
+
+    assert.deepEqual(await validateAgyVersion(executable), { version });
   });
 }
 

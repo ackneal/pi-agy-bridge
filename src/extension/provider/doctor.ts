@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { readPluginManifest, resolveMcpEntrypoint } from "../discovery/plugin-install.ts";
 import { formatDoctorQuotaLines, type AgyUsageSnapshot } from "../runtime/usage.ts";
-import { DEFAULT_MIN_AGY_VERSION, resolveAgyExecutable, validateAgyVersion } from "../runtime/version.ts";
+import { resolveAgyExecutable, validateAgyVersion } from "../runtime/version.ts";
 
 export interface DoctorFailure {
   time: string;
@@ -11,7 +11,6 @@ export interface DoctorFailure {
 }
 export interface DoctorOptions {
   agyPath?: string | undefined;
-  minVersion?: string | undefined;
   pluginDir: string;
   models?: readonly unknown[] | undefined;
   catalogModels?: readonly unknown[] | undefined;
@@ -32,9 +31,8 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
   const lines: string[] = ["agy-bridge doctor", "", "Runtime"];
   try {
     const executable = resolveAgyExecutable(options.agyPath);
-    const minimum = options.minVersion ?? DEFAULT_MIN_AGY_VERSION;
     try {
-      const { version } = await validateAgyVersion(executable, minimum);
+      const { version } = await validateAgyVersion(executable);
       lines.push(`  ✓ Antigravity CLI ${version}`);
     } catch (error) {
       lines.push(`  ✗ Antigravity CLI error (${executable}): ${message(error)}`);

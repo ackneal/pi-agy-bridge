@@ -259,7 +259,7 @@ async function prepareRuntime(
     preparationId,
   });
   checkPreparation();
-  await validateAgyVersion(config?.agyPath, config?.minVersion);
+  await validateAgyVersion(config?.agyPath);
   checkPreparation();
 
   const startRuntime = async (conversationId?: string) => {
@@ -555,13 +555,12 @@ export class AgyBridge {
     })) as AnyModel[];
 
     this.pi.registerCommand("agy-bridge:doctor", {
-      description: "Check Antigravity CLI CLI, plugin installation, models, and MCP",
+      description: "Check Antigravity CLI, plugin installation, models, MCP, and quota",
       handler: async () => {
         await this.refreshUsage(this.runtimeLifetime.signal);
         const rawPluginDir = this.config?.pluginDir ?? this.config?.agentDir;
         const report = await collectDoctorReport({
           agyPath: this.config?.agyPath,
-          minVersion: this.config?.minVersion,
           pluginDir: rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR,
           models: this.config?.models,
           catalogModels: models,

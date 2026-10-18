@@ -47,11 +47,11 @@ export class AgyAuthentication {
   constructor(agyPath: string | undefined, beforeLogin: () => Promise<void>) {
     this.agyPath = agyPath;
     this.method = {
-      name: "Antigravity CLI CLI",
+      name: "Antigravity CLI",
       check: async ({ credential, signal }) => {
         signal.throwIfAborted();
         return isAgyBridgeEnabled(credential)
-          ? { type: "api_key", source: "Antigravity CLI CLI" }
+          ? { type: "api_key", source: "Antigravity CLI" }
           : undefined;
       },
       resolve: async ({ credential, signal }) => {
@@ -63,12 +63,12 @@ export class AgyAuthentication {
         return {
           auth: {},
           env: { AGY_BRIDGE_ENABLED: "1", ...(typeof epoch === "string" && epoch.length > 0 ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },
-          source: "Antigravity CLI CLI",
+          source: "Antigravity CLI",
         };
       },
     };
     this.oauth = {
-      name: "Antigravity CLI CLI",
+      name: "Antigravity CLI",
       isSubscription: true,
       refresh: async (credential, signal) => {
         signal.throwIfAborted();
