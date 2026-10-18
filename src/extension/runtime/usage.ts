@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify, stripVTControlCharacters } from "node:util";
 import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "./version.ts";
+import { summarizeAuthOutput } from "./auth-diagnostics.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -190,7 +191,16 @@ export async function fetchAgyUsage(
     output = (stdout || stderr || "").trim();
   } catch (error) {
     if (signal?.aborted) throw error;
-    throw new Error(`Failed to fetch Antigravity CLI usage via "${resolvedPath} --output-format json --print /usage"`, { cause: error });
+    const failure = error as { code?: string | number; killed?: boolean; stdout?: string; stderr?: string };
+    const reason = failure.killed ? "timed out after 30 seconds"
+      : failure.code === "ENOENT" ? "executable not found"
+      : failure.code === "EACCES" ? "permission denied"
+      : `process failed (exit ${failure.code ?? "unknown"})`;
+    const diagnostics = summarizeAuthOutput(String(failure.stderr || failure.stdout || "")).trim();
+    throw new Error(
+      `Antigravity CLI quota query ${reason}${diagnostics ? `: ${diagnostics}` : ""}. Check agy installation and run /login if authentication is required.`,
+      { cause: error }
+    );
   }
 
   const snapshot = parseAgyUsageOutput(output);

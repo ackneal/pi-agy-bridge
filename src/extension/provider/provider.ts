@@ -557,7 +557,10 @@ export class AgyBridge {
     this.pi.registerCommand("agy-bridge:doctor", {
       description: "Check Antigravity CLI, plugin installation, models, MCP, and quota",
       handler: async () => {
-        await this.refreshUsage(this.runtimeLifetime.signal);
+        const lifetime = this.runtimeLifetime.signal;
+        const usageSnapshot = await this.refreshUsage(lifetime);
+        if (lifetime.aborted) return;
+
         const rawPluginDir = this.config?.pluginDir ?? this.config?.agentDir;
         const report = await collectDoctorReport({
           agyPath: this.config?.agyPath,
@@ -568,9 +571,11 @@ export class AgyBridge {
           discoveryError: this.discoveryError,
           authStatus: this.authentication.status,
           authError: this.authentication.failure,
-          usageSnapshot: this.authentication.usageSnapshot,
+          usageSnapshot,
           usageError: this.usageError,
         });
+        if (lifetime.aborted) return;
+
         this.pi.sendMessage({
           customType: "pi-agy-bridge:doctor",
           content: report,
