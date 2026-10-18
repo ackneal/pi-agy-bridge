@@ -17,7 +17,7 @@ The bridge invokes your installed Antigravity CLI directly and uses its authenti
 ## Requirements
 
 - **Pi Coding Agent**: Use a Node.js version supported by Pi. Development checks currently use `@earendil-works/pi-coding-agent` 1.0.2.
-- **Antigravity CLI**: Keep `agy` updated and installed at `~/.local/bin/agy` or available in your `PATH`. The bridge does not enforce a minimum version.
+- **Antigravity CLI**: Installed at `~/.local/bin/agy` or available in your `PATH`. Last tested with `agy` 1.3.3.
 - **Supported platforms**: macOS or Linux with Unix domain socket support. Native Windows is not supported.
 - **CLI authentication**: Valid Antigravity CLI authentication is required to use models.
 
