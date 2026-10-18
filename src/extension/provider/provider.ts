@@ -22,7 +22,7 @@ import {
 } from "../session/session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
 import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../discovery/plugin-install.ts";
-import { fetchAgyUsage, type AgyUsageSnapshot } from "../runtime/usage.ts";
+import { fetchAgyUsage, type AgyUsage } from "../runtime/usage.ts";
 import { validateAgyVersion } from "../runtime/version.ts";
 import { discoverAgyModels, restoreStoredAgyModels } from "../discovery/models.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
@@ -465,7 +465,7 @@ export class AgyBridge {
   private pluginError: DoctorFailure | undefined;
   private discoveryError: DoctorFailure | undefined;
   private usageError: DoctorFailure | undefined;
-  private usageRefresh: Promise<AgyUsageSnapshot | undefined> | undefined;
+  private usageRefresh: Promise<AgyUsage | undefined> | undefined;
   private readonly authentication: AgyAuthentication;
   private startupAuthenticationStarted = false;
   private runtimeLifetime = new AbortController();
@@ -490,22 +490,22 @@ export class AgyBridge {
     });
   }
 
-  private async refreshUsage(signal: AbortSignal): Promise<AgyUsageSnapshot | undefined> {
+  private async refreshUsage(signal: AbortSignal): Promise<AgyUsage | undefined> {
     if (signal.aborted) return undefined;
     if (this.usageRefresh) return this.usageRefresh;
 
     const task = fetchAgyUsage(this.config?.agyPath, signal)
-      .then((snapshot) => {
+      .then((usage) => {
         if (signal.aborted) return undefined;
-        this.authentication.usageSnapshot = snapshot;
+        this.authentication.usage = usage;
         this.usageError = undefined;
         this.authentication.status = "authenticated";
         this.authentication.failure = undefined;
-        return snapshot;
+        return usage;
       })
       .catch((error) => {
         if (!signal.aborted) {
-          this.authentication.usageSnapshot = undefined;
+          this.authentication.usage = undefined;
           this.usageError = {
             time: new Date().toISOString(),
             message: error instanceof Error ? error.message : String(error),
@@ -558,7 +558,7 @@ export class AgyBridge {
       description: "Check Antigravity CLI, plugin installation, models, MCP, and quota",
       handler: async () => {
         const lifetime = this.runtimeLifetime.signal;
-        const usageSnapshot = await this.refreshUsage(lifetime);
+        const usage = await this.refreshUsage(lifetime);
         if (lifetime.aborted) return;
 
         const rawPluginDir = this.config?.pluginDir ?? this.config?.agentDir;
@@ -571,7 +571,7 @@ export class AgyBridge {
           discoveryError: this.discoveryError,
           authStatus: this.authentication.status,
           authError: this.authentication.failure,
-          usageSnapshot,
+          usage,
           usageError: this.usageError,
         });
         if (lifetime.aborted) return;

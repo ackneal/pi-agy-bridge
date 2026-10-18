@@ -5,7 +5,7 @@ import { resolveAgyExecutable } from "./version.ts";
 import { spawnAuthenticationPty, type AuthenticationPty } from "./auth-pty.ts";
 
 import { recordAuthProbeDiagnostics, summarizeAuthOutput } from "./auth-diagnostics.ts";
-import { parseAgyUsageOutput, type AgyUsageSnapshot } from "./usage.ts";
+import { parseAgyUsageOutput, type AgyUsage } from "./usage.ts";
 import { isDebugEnabled } from "../shared/debug.ts";
 
 const args = ["--print", "/usage"];
@@ -18,7 +18,7 @@ function runAuthentication(
   path: string | undefined,
   signal: AbortSignal | undefined,
   interaction?: ProviderAuthInteraction,
-  onUsage?: (snapshot: AgyUsageSnapshot) => void
+  onUsage?: (usage: AgyUsage) => void
 ): Promise<boolean> {
   if (signal?.aborted) return Promise.reject(new Error("Antigravity CLI authentication was cancelled"));
   const executable = resolveAgyExecutable(path);
@@ -177,10 +177,10 @@ function runAuthentication(
       const text = stripVTControlCharacters(diagnostics);
       // Normalize the accumulated output before excluding fragmented PTY echoes.
       const report = submittedCode === undefined ? text : text.replaceAll(submittedCode, "[authorization code]");
-      const snapshot = parseAgyUsageOutput(report);
-      const hasQuota = snapshot !== undefined || report.includes("Quota") || report.includes("Limit Remaining");
+      const usage = parseAgyUsageOutput(report);
+      const hasQuota = usage !== undefined || report.includes("Quota") || report.includes("Limit Remaining");
       if (code === 0 && exitSignal === null && hasQuota) {
-        if (snapshot) onUsage?.(snapshot);
+        if (usage) onUsage?.(usage);
         resolve(true);
         return;
       }
@@ -211,7 +211,7 @@ function runAuthentication(
 export async function probeAgyAuthentication(
   agyPath?: string,
   signal?: AbortSignal,
-  onUsage?: (snapshot: AgyUsageSnapshot) => void
+  onUsage?: (usage: AgyUsage) => void
 ): Promise<boolean> {
   return runAuthentication(agyPath, signal, undefined, onUsage);
 }
@@ -219,7 +219,7 @@ export async function probeAgyAuthentication(
 export async function loginAgyAuthentication(
   interaction: ProviderAuthInteraction,
   agyPath?: string,
-  onUsage?: (snapshot: AgyUsageSnapshot) => void
+  onUsage?: (usage: AgyUsage) => void
 ): Promise<void> {
   if (await probeAgyAuthentication(agyPath, interaction.signal, onUsage)) return;
   await runAuthentication(agyPath, interaction.signal, interaction, onUsage);

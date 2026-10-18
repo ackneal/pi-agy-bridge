@@ -53,24 +53,24 @@ test("parseAgyUsageOutput parses JSON, text, and invalid inputs", () => {
     { name: "empty output", input: "", expectedGroups: 0 },
     { name: "unrelated output", input: "Quota", expectedGroups: 0 },
   ]) {
-    const snapshot = parseAgyUsageOutput(row.input, "2026-10-17T04:19:59Z");
+    const usage = parseAgyUsageOutput(row.input, "2026-10-17T04:19:59Z");
     if (row.expectedGroups === 0) {
-      assert.equal(snapshot, undefined, row.name);
+      assert.equal(usage, undefined, row.name);
       continue;
     }
 
-    assert.ok(snapshot, row.name);
-    assert.equal(snapshot.groups.length, row.expectedGroups, row.name);
-    const argon = snapshot.groups.find((group) => group.name === "Gemini 4 Argon");
+    assert.ok(usage, row.name);
+    assert.equal(usage.groups.length, row.expectedGroups, row.name);
+    const argon = usage.groups.find((group) => group.name === "Gemini 4 Argon");
     assert.equal(argon?.buckets[0]?.remainingFraction, row.argonFraction, row.name);
   }
 });
 
 test("formatDoctorQuotaLines formats full report", () => {
   const nowMs = Date.parse("2026-10-17T04:19:59Z");
-  const snapshot = parseAgyUsageOutput(sampleJsonOutput, "2026-10-17T04:19:59Z");
+  const usage = parseAgyUsageOutput(sampleJsonOutput, "2026-10-17T04:19:59Z");
 
-  assert.deepEqual(formatDoctorQuotaLines(snapshot, nowMs), [
+  assert.deepEqual(formatDoctorQuotaLines(usage, nowMs), [
     "",
     "Quota remaining",
     "  Gemini Models          5h 100% (5h) · weekly 100% (7d)",

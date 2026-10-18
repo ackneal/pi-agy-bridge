@@ -68,7 +68,7 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       discoveryError: { time: "2026-01-02T00:00:00Z", message: "discovery failed" },
       authStatus: "unauthenticated",
       authError: { time: "2026-01-03T00:00:00Z", message: "login failed" },
-      usageSnapshot: {
+      usage: {
         updatedAt: "2026-10-17T04:19:59Z",
         groups: [{ name: "Gemini 4 Argon", buckets: [{ id: "argon", name: "Weekly", window: "weekly", remainingFraction: 0.4 }] }],
       },

@@ -20,7 +20,7 @@ export interface AgyQuotaGroup {
   buckets: AgyQuotaBucket[];
 }
 
-export interface AgyUsageSnapshot {
+export interface AgyUsage {
   updatedAt: string;
   groups: AgyQuotaGroup[];
 }
@@ -32,7 +32,7 @@ function normalizeWindow(name: string, rawWindow?: string): string {
   return name.trim().toLowerCase();
 }
 
-function parseJsonUsage(text: string, updatedAt: string): AgyUsageSnapshot | undefined {
+function parseJsonUsage(text: string, updatedAt: string): AgyUsage | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -90,7 +90,7 @@ function parseJsonUsage(text: string, updatedAt: string): AgyUsageSnapshot | und
   return typeof record.response === "string" ? parseTextUsage(record.response, updatedAt) : undefined;
 }
 
-function parseTextUsage(text: string, updatedAt: string): AgyUsageSnapshot | undefined {
+function parseTextUsage(text: string, updatedAt: string): AgyUsage | undefined {
   const groupsByName = new Map<string, AgyQuotaGroup>();
 
   for (const rawLine of text.split(/[\r\n]+/)) {
@@ -126,7 +126,7 @@ function parseTextUsage(text: string, updatedAt: string): AgyUsageSnapshot | und
   return groupsByName.size > 0 ? { updatedAt, groups: [...groupsByName.values()] } : undefined;
 }
 
-export function parseAgyUsageOutput(output: string, updatedAt: string = new Date().toISOString()): AgyUsageSnapshot | undefined {
+export function parseAgyUsageOutput(output: string, updatedAt: string = new Date().toISOString()): AgyUsage | undefined {
   const cleaned = stripVTControlCharacters(output).trim();
   if (!cleaned) return undefined;
 
@@ -157,14 +157,14 @@ function formatBucketSummary(bucket: AgyQuotaBucket, nowMs: number): string {
   return `${bucket.window} ${formatPercent(bucket.remainingFraction)}${reset ? ` (${reset})` : ""}`;
 }
 
-export function formatDoctorQuotaLines(snapshot: AgyUsageSnapshot | undefined, nowMs: number = Date.now()): string[] {
-  if (!snapshot || snapshot.groups.length === 0) return [];
+export function formatDoctorQuotaLines(usage: AgyUsage | undefined, nowMs: number = Date.now()): string[] {
+  if (!usage || usage.groups.length === 0) return [];
 
   const lines = ["", "Quota remaining"];
   const order = (window: string) => window === "5h" ? 0 : window === "weekly" ? 1 : 2;
-  const width = Math.max(...snapshot.groups.map((group) => group.name.length));
+  const width = Math.max(...usage.groups.map((group) => group.name.length));
 
-  for (const group of snapshot.groups) {
+  for (const group of usage.groups) {
     const buckets = [...group.buckets]
       .sort((a, b) => order(a.window) - order(b.window))
       .map((bucket) => formatBucketSummary(bucket, nowMs));
@@ -177,7 +177,7 @@ export function formatDoctorQuotaLines(snapshot: AgyUsageSnapshot | undefined, n
 export async function fetchAgyUsage(
   agyPath: string = "agy",
   signal?: AbortSignal
-): Promise<AgyUsageSnapshot> {
+): Promise<AgyUsage> {
   const resolvedPath = resolveAgyExecutable(agyPath);
 
   let output = "";
@@ -203,11 +203,11 @@ export async function fetchAgyUsage(
     );
   }
 
-  const snapshot = parseAgyUsageOutput(output);
-  if (!snapshot) {
+  const usage = parseAgyUsageOutput(output);
+  if (!usage) {
     throw new Error(`Antigravity CLI returned no quota data from "${resolvedPath} --output-format json --print /usage"`);
   }
 
-  debugLog("usage", `Fetched ${snapshot.groups.length} quota groups from Antigravity CLI`);
-  return snapshot;
+  debugLog("usage", `Fetched ${usage.groups.length} quota groups from Antigravity CLI`);
+  return usage;
 }

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { readPluginManifest, resolveMcpEntrypoint } from "../discovery/plugin-install.ts";
-import { formatDoctorQuotaLines, type AgyUsageSnapshot } from "../runtime/usage.ts";
+import { formatDoctorQuotaLines, type AgyUsage } from "../runtime/usage.ts";
 import { resolveAgyExecutable, validateAgyVersion } from "../runtime/version.ts";
 
 export interface DoctorFailure {
@@ -18,7 +18,7 @@ export interface DoctorOptions {
   discoveryError?: DoctorFailure | undefined;
   authStatus?: "authenticated" | "unauthenticated" | "unknown" | undefined;
   authError?: DoctorFailure | undefined;
-  usageSnapshot?: AgyUsageSnapshot | undefined;
+  usage?: AgyUsage | undefined;
   usageError?: DoctorFailure | undefined;
 }
 
@@ -88,7 +88,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
   }
 
   const authStatus = options.authStatus === "unknown" || options.authStatus === undefined
-    ? (options.usageSnapshot ? "authenticated" : "unknown")
+    ? (options.usage ? "authenticated" : "unknown")
     : options.authStatus;
   const authMark = authStatus === "authenticated" ? "✓" : "!";
   lines.push(`  ${authMark} Auth: ${authStatus}`);
@@ -97,7 +97,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
     lines.push("  ! Windows: Unix socket support is not verified.");
   }
 
-  lines.push(...formatDoctorQuotaLines(options.usageSnapshot));
+  lines.push(...formatDoctorQuotaLines(options.usage));
 
   const failures = [
     ["plugin", options.pluginError],
