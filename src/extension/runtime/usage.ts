@@ -1,10 +1,21 @@
-import { execFile } from "node:child_process";
+import cp from "node:child_process";
 import { promisify, stripVTControlCharacters } from "node:util";
 import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "./version.ts";
 import { summarizeAuthOutput } from "./auth-diagnostics.ts";
 
-const execFileAsync = promisify(execFile);
+function runExecFile(
+  file: string,
+  args: string[],
+  options: { encoding: "utf-8"; timeout: number; killSignal: NodeJS.Signals; signal?: AbortSignal | undefined }
+): Promise<{ stdout: string; stderr: string }> {
+  const exec = promisify(cp.execFile) as unknown as (
+    file: string,
+    args: string[],
+    options: { encoding: string; timeout: number; killSignal: string; signal?: AbortSignal | undefined }
+  ) => Promise<{ stdout: string; stderr: string }>;
+  return exec(file, args, options);
+}
 
 export interface AgyQuotaBucket {
   id: string;
@@ -182,7 +193,7 @@ export async function fetchAgyUsage(
 
   let output = "";
   try {
-    const { stdout, stderr } = await execFileAsync(resolvedPath, ["--output-format", "json", "--print", "/usage"], {
+    const { stdout, stderr } = await runExecFile(resolvedPath, ["--output-format", "json", "--print", "/usage"], {
       encoding: "utf-8",
       timeout: 30_000,
       killSignal: "SIGKILL",
