@@ -9,8 +9,6 @@ import { debugLog } from "../shared/debug.ts";
 
 const execFileAsync = promisify(execFile);
 
-export const DEFAULT_MIN_AGY_VERSION = "1.1.15";
-
 export function resolveAgyExecutable(customPath?: string): string {
   if (customPath && customPath !== "agy") {
     return expandHome(customPath);
@@ -24,7 +22,7 @@ export function resolveAgyExecutable(customPath?: string): string {
   return "agy";
 }
 
-export function parseSemver(versionStr: string): [number, number, number] {
+function parseSemver(versionStr: string): [number, number, number] {
   const match = versionStr.match(/(\d+)\.(\d+)\.(\d+)/);
   if (!match || !match[1] || !match[2] || !match[3]) {
     throw new CompatibilityError(`Failed to parse version string: "${versionStr}"`, {
@@ -40,23 +38,9 @@ export function parseSemver(versionStr: string): [number, number, number] {
   return [major, minor, patch];
 }
 
-export function compareSemver(v1: string, v2: string): number {
-  const [maj1, min1, pat1] = parseSemver(v1);
-  const [maj2, min2, pat2] = parseSemver(v2);
-
-  if (maj1 !== maj2) return maj1 - maj2;
-  if (min1 !== min2) return min1 - min2;
-  return pat1 - pat2;
-}
-
-export function isVersionSupported(candidate: string, minVersion: string = DEFAULT_MIN_AGY_VERSION): boolean {
-  return compareSemver(candidate, minVersion) >= 0;
-}
-
 export async function validateAgyVersion(
-  agyPath: string = "agy",
-  minVersion: string = DEFAULT_MIN_AGY_VERSION
-): Promise<{ valid: boolean; version: string }> {
+  agyPath: string = "agy"
+): Promise<{ version: string }> {
   const resolvedPath = resolveAgyExecutable(agyPath);
 
   let output: string;
@@ -67,10 +51,6 @@ export async function validateAgyVersion(
     });
     output = (stdout || stderr).trim();
   } catch (err: unknown) {
-    if (err instanceof CompatibilityError) {
-      throw err;
-    }
-
     const nodeErr = err as NodeJS.ErrnoException;
     if (nodeErr.code === "ENOENT") {
       throw new CompatibilityError(
@@ -94,17 +74,5 @@ export async function validateAgyVersion(
   debugLog("version", `Detected Antigravity CLI version output: "${output}"`);
 
   const [major, minor, patch] = parseSemver(output);
-  const parsedVersion = `${major}.${minor}.${patch}`;
-
-  if (!isVersionSupported(parsedVersion, minVersion)) {
-    throw new CompatibilityError(
-      `Antigravity CLI version ${parsedVersion} is unsupported. Minimum required version is ${minVersion}. Please upgrade agy.`,
-      {
-        code: "VERSION_TOO_OLD",
-        details: { currentVersion: parsedVersion, minVersion },
-      }
-    );
-  }
-
-  return { valid: true, version: parsedVersion };
+  return { version: `${major}.${minor}.${patch}` };
 }

@@ -20,11 +20,11 @@ test("doctor reads isolated fixtures without installing or discovering", async (
     await fs.chmod(executable, 0o755);
     const options = { agyPath: executable, pluginDir: source };
     for (const row of [
-      { manifest: undefined, expected: /! Plugin not installed/, followup: /Will install automatically/ },
-      { manifest: '{"name":"example","version":"2.0.0"}', expected: /✓ Plugin installed 2.0.0/, followup: /bundled 2.0.0/ },
-      { manifest: '{"name":"example","version":"1.0.0"}', expected: /installed 1.0.0 -> bundled 2.0.0/, followup: /Will update automatically/ },
-      { manifest: '{broken', expected: /✗ Plugin error/, followup: /Models: 0 cached \(Pi models-store\)/ },
-      { manifest: '{}', expected: /✗ Plugin error/, followup: /Models: 0 cached \(Pi models-store\)/ },
+      { manifest: undefined, expected: /! Plugin example not installed/, followup: /Will install automatically/ },
+      { manifest: '{"name":"example","version":"2.0.0"}', expected: /✓ Plugin 2.0.0/, followup: /✓ MCP entrypoint found/ },
+      { manifest: '{"name":"example","version":"1.0.0"}', expected: /Plugin example 1.0.0 -> bundled 2.0.0/, followup: /Will update automatically/ },
+      { manifest: '{broken', expected: /✗ Plugin error/, followup: /Models: 0 cached/ },
+      { manifest: '{}', expected: /✗ Plugin error/, followup: /Models: 0 cached/ },
     ]) {
       await fs.rm(target, { recursive: true, force: true });
       if (row.manifest !== undefined) {
@@ -34,15 +34,16 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       const report = await collectDoctorReport(options);
       assert.match(report, row.expected);
       assert.match(report, row.followup);
-      assert.match(report, /✓ Antigravity CLI 1.2.0 \(minimum 1.1.15\)/);
-      assert.match(report, /MCP entrypoint exists/);
+      assert.match(report, /✓ Antigravity CLI 1.2.0\n/);
+      assert.doesNotMatch(report, /\(minimum /);
+      assert.match(report, /✓ MCP entrypoint/);
       if (row.manifest === undefined) await assert.rejects(fs.access(target));
       else assert.equal(await fs.readFile(path.join(target, "plugin.json"), "utf8"), row.manifest);
     }
     for (const row of [
-      { catalogModels: undefined, models: undefined, expected: /! Models: 0 cached \(Pi models-store\)/ },
-      { catalogModels: [], models: undefined, expected: /! Models: 0 cached \(Pi models-store\)/ },
-      { catalogModels: [{ id: "a", name: "A" }], models: undefined, expected: /✓ Models: 1 cached \(Pi models-store\)/ },
+      { catalogModels: undefined, models: undefined, expected: /! Models: 0 cached/ },
+      { catalogModels: [], models: undefined, expected: /! Models: 0 cached/ },
+      { catalogModels: [{ id: "a", name: "A" }], models: undefined, expected: /✓ Models: 1 cached/ },
       { catalogModels: [1], models: [], expected: /! Models: 0 configured/ },
       { catalogModels: [], models: [1, 2], expected: /✓ Models: 2 configured/ },
     ]) {
@@ -51,15 +52,14 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       if (row.models !== undefined) assert.doesNotMatch(report, /cached/);
     }
     for (const row of [
-      { authStatus: undefined, expected: /Authentication snapshot: unknown \(not verified\)/ },
-      { authStatus: "unknown", expected: /Authentication snapshot: unknown \(not verified\)/ },
-      { authStatus: "authenticated", expected: /Authentication snapshot: authenticated\n/ },
-      { authStatus: "unauthenticated", expected: /Authentication snapshot: unauthenticated\n/ },
+      { authStatus: undefined, expected: /! Auth: unknown/ },
+      { authStatus: "unknown", expected: /! Auth: unknown/ },
+      { authStatus: "authenticated", expected: /✓ Auth: authenticated/ },
+      { authStatus: "unauthenticated", expected: /! Auth: unauthenticated/ },
     ] as const) {
       const report = await collectDoctorReport({ ...options, authStatus: row.authStatus });
       assert.match(report, row.expected);
-      assert.match(report, /Authentication is a last-known snapshot; live authentication is not tested\./);
-      assert.doesNotMatch(report, /Last authentication error/);
+      assert.doesNotMatch(report, /Errors/);
     }
     await fs.writeFile(path.join(source, "plugin.json"), '{}');
     const report = await collectDoctorReport({
@@ -68,8 +68,26 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       discoveryError: { time: "2026-01-02T00:00:00Z", message: "discovery failed" },
       authStatus: "unauthenticated",
       authError: { time: "2026-01-03T00:00:00Z", message: "login failed" },
+      usage: {
+        updatedAt: "2026-10-17T04:19:59Z",
+        groups: [{ name: "Gemini 4 Argon", buckets: [{ id: "argon", name: "Weekly", window: "weekly", remainingFraction: 0.4 }] }],
+      },
+      usageError: { time: "2026-01-04T00:00:00Z", message: "usage failed" },
     });
-    for (const pattern of [/✗ Antigravity CLI error/, /Resolved Antigravity CLI path:/, /✗ Plugin error/, /2 configured/, /Node version:/, /MCP entrypoint exists/, /Last plugin error at 2026-01-01T00:00:00Z: install failed/, /Last discovery error at 2026-01-02T00:00:00Z: discovery failed/, /Last authentication error at 2026-01-03T00:00:00Z: login failed/, /Authentication snapshot: unauthenticated/, /Authentication is a last-known snapshot; live authentication is not tested\./, /Model execution and Unix socket creation not tested\./]) assert.match(report, pattern);
+    for (const pattern of [
+      /✗ Antigravity CLI error/,
+      /✗ Plugin error/,
+      /✓ Models: 2 configured/,
+      /✓ Node /,
+      /✓ MCP entrypoint/,
+      /! Auth: unauthenticated/,
+      /Quota remaining\n  Gemini 4 Argon  weekly 40%/,
+      /Errors/,
+      /! plugin \(2026-01-01T00:00:00Z\): install failed/,
+      /! discovery \(2026-01-02T00:00:00Z\): discovery failed/,
+      /! authentication \(2026-01-03T00:00:00Z\): login failed/,
+      /! usage \(2026-01-04T00:00:00Z\): usage failed/,
+    ]) assert.match(report, pattern);
     assert.ok((await fs.readFile(calls, "utf8")).trim().split("\n").every(call => call === "--version"));
   } finally {
     if (previous === undefined) delete process.env.HOME;

@@ -433,9 +433,8 @@ export class PiEventAdapter {
     debugLog("usage", "Antigravity CLI result accounting fields:", Object.fromEntries(
       Object.entries(result).filter(([key]) => /usage|token|metric|stat|metadata/i.test(key))
     ));
-    if (result.usage) {
-      if (this.hasStepUsage) this.mergeFinalUsage(result.usage);
-      else this.addUsage(result.usage);
+    if (result.usage && !this.hasStepUsage) {
+      this.addUsage(result.usage);
     }
 
     if (result.conversation_id || result.session_id) {
@@ -513,20 +512,6 @@ export class PiEventAdapter {
         cacheWrite: 0,
         total: 0,
       },
-    };
-  }
-
-  private mergeFinalUsage(agyUsage: AgyUsage): void {
-    // result.usage carries session-cumulative billing totals. Step usage already
-    // captured the latest single-request snapshot; merging cumulative values into
-    // input/cacheRead/totalTokens would trip Pi's silent-overflow check
-    // (usage.input + usage.cacheRead > contextWindow) and force premature compaction.
-    const current = this.partial.usage;
-    const reasoning = Math.max(current.reasoning ?? 0, agyUsage.thinking_tokens ?? 0);
-
-    this.partial.usage = {
-      ...current,
-      ...(reasoning > 0 ? { reasoning } : {}),
     };
   }
 

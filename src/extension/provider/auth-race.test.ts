@@ -17,7 +17,7 @@ function setup(t: TestContext, beforeLogin: () => Promise<void> = async () => {}
   }
   t.mock.method(cp, "spawn", (command: string, args: string[]) => {
     assert.equal(command, "/fake/agy");
-    assert.deepEqual(args, ["--print", "/usage"]);
+    assert.deepEqual(args, ["--output-format", "json", "--print", "/usage"]);
     const child = createChild();
     children.push(child);
     return child;
@@ -34,8 +34,8 @@ function setup(t: TestContext, beforeLogin: () => Promise<void> = async () => {}
     auth, children,
     finish(index: number) {
       const child = children[index]!;
-      assert.equal(child.stdin.writableEnded, true);
-      child.stdout.write('Quota:\n  Limit Remaining 100%\n');
+      assert.equal(child.stdin.writableEnded, false);
+      child.stdout.write('Quota:\nGemini Models  Weekly Limit Remaining 100%\n');
       child.emit("close", 0, null);
     },
   };
@@ -105,9 +105,9 @@ test("successful logins return unique epochs and resolve forwards only nonempty 
     const env = { AGY_BRIDGE_ENABLED: "1", ...(epoch === undefined ? {} : { AGY_BRIDGE_LOGIN_EPOCH: epoch }) };
     const credential = { type: "api_key" as const, env };
     const context = { ctx: defaultProviderAuthContext(), signal, credential };
-    assert.deepEqual(await auth.method.check!(context), { type: "api_key", source: "Antigravity CLI CLI" });
+    assert.deepEqual(await auth.method.check!(context), { type: "api_key", source: "Antigravity CLI" });
     assert.deepEqual(await auth.method.resolve(context), {
-      auth: {}, source: "Antigravity CLI CLI",
+      auth: {}, source: "Antigravity CLI",
       env: { AGY_BRIDGE_ENABLED: "1", ...(epoch ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },
     });
     assert.equal(children.length, 2);
@@ -202,9 +202,9 @@ test("slow detection leaves credential checks and resolution spawn-free", async 
   for (const enabled of [false, true]) {
     const credential = { type: "api_key" as const, env: { AGY_BRIDGE_ENABLED: enabled ? "1" : "0" } };
     const context = { ctx: defaultProviderAuthContext(), signal, credential };
-    assert.deepEqual(await auth.method.check!(context), enabled ? { type: "api_key", source: "Antigravity CLI CLI" } : undefined);
+    assert.deepEqual(await auth.method.check!(context), enabled ? { type: "api_key", source: "Antigravity CLI" } : undefined);
     assert.deepEqual(await auth.method.resolve(context), enabled ? {
-      auth: {}, source: "Antigravity CLI CLI", env: { AGY_BRIDGE_ENABLED: "1" },
+      auth: {}, source: "Antigravity CLI", env: { AGY_BRIDGE_ENABLED: "1" },
     } : undefined);
     assert.equal(children.length, 1);
   }
@@ -218,7 +218,7 @@ for (const output of ["", "Remaining 100%\n"]) {
     const { auth, children } = setup(t);
     const detection = auth.detect(new AbortController().signal);
     const rejected = assert.rejects(detection, (error: Error) => {
-      assert.ok(error.message.startsWith(`Could not determine Antigravity CLI authentication status (exitCode=0, signal=none, stdoutBytes=${Buffer.byteLength(output)}, stderrBytes=0)`));
+      assert.match(error.message, /returned no quota data/);
       return true;
     });
     children[0]!.stdout.write(output);
@@ -257,7 +257,7 @@ for (const loginOutcome of ["success", "failure"] as const) {
       if (loginOutcome === "failure") throw new Error("login failed");
     });
     const signal = new AbortController().signal;
-    const stale = assert.rejects(auth.detect(signal), /cancelled/);
+    const stale = assert.rejects(auth.detect(signal), { name: "AbortError" });
     const login = auth.oauth.login({ signal, notify: () => {}, prompt: async () => "" });
     await assert.rejects(auth.detect(signal), /replaced by a newer attempt/);
     if (loginOutcome === "success") {

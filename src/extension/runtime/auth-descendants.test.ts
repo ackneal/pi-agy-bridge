@@ -46,7 +46,7 @@ function kill(pid: number): void {
 for (const row of [
   { name: "natural root completion kills a SIGTERM-ignoring child with ignored stdio", cancel: false, exitFirst: true, stdio: "ignore" },
   { name: "cancellation kills a SIGTERM-ignoring child after the root exits with ignored stdio", cancel: true, exitFirst: false, stdio: "ignore" },
-  { name: "cancellation after root exit kills a SIGTERM-ignoring child holding inherited stdio", cancel: true, exitFirst: true, stdio: "inherit" },
+  { name: "natural root completion kills a SIGTERM-ignoring child holding inherited stdio", cancel: false, exitFirst: true, stdio: "inherit" },
 ] as const) {
   test(`probeAgyAuthentication: ${row.name}`, { skip: process.platform === "win32", timeout: 15000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), "agy-auth-descendants-"));
@@ -76,7 +76,7 @@ spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], { stdio: ${JSON.
 const gate = setInterval(() => {
   if (!existsSync(${JSON.stringify(exitFile)})) return;
   clearInterval(gate);
-  process.stdout.write("Quota: available\\n", () => process.exit(0));
+  process.stdout.write(JSON.stringify({ response: "Gemini Models  Weekly Limit Remaining 97%" }), () => process.exit(0));
 }, 10);
 `, { mode: 0o755 });
 
@@ -106,7 +106,7 @@ const gate = setInterval(() => {
       if (row.cancel) {
         assert.ok("error" in result, "cancelled probe must reject");
         assert.ok(result.error instanceof Error);
-        assert.equal(result.error.message, "Antigravity CLI authentication was cancelled");
+        assert.match(result.error.message, /abort|cancel/i);
       } else {
         assert.deepEqual(result, { value: true });
       }

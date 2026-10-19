@@ -551,6 +551,7 @@ for (const row of [
   { phase: "starting", failure: "event" },
   { phase: "started", failure: "event" },
   { phase: "started", failure: "callback" },
+  { phase: "started", failure: "process" },
 ] as const) {
   test(`ignores stdin failure during abort: ${row.phase}, ${row.failure}`, { timeout: 5000 }, async (t) => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agy-process-abort-window-"));
@@ -588,16 +589,19 @@ process.stdin.resume();
         return false;
       });
       await assert.rejects(proc.send({ event: "user", message: { content: "test" } }), /Failed to write turn to stdin: abort-window broken pipe/);
+    } else if (row.failure === "process") {
+      assert.doesNotThrow(() => child.emit("error", error));
     } else {
       assert.doesNotThrow(() => child.stdin!.emit("error", error));
     }
 
     assert.deepEqual(kill.mock.calls.map((call) => call.arguments), [["SIGINT"]]);
     assert.deepEqual(received, []);
-    unsubscribe();
     await aborting;
     await rejection;
     await closed;
+    assert.deepEqual(received, []);
+    unsubscribe();
     assert.equal(proc.isRunning, false);
   });
 }

@@ -125,7 +125,7 @@ test("doctor reports installation errors without starting a model turn", async (
   assert.equal(message.customType, "pi-agy-bridge:doctor");
   assert.equal(message.display, true);
   assert.match(message.content, /Antigravity CLI plugin manifest not found/);
-  assert.match(message.content, /Authentication/);
+  assert.match(message.content, /Auth:/);
   assert.deepEqual(options, { triggerTurn: false });
 });
 
@@ -154,15 +154,16 @@ test("doctor clears the recorded installation error after successful installatio
   await assert.rejects(bridge.ensureAgyPluginInstalled(pluginDir), /install denied/);
   assert.ok(handler);
   await handler();
-  assert.match(sendMessage.mock.calls[0]!.arguments[0].content, /Last plugin error.*install denied/s);
+  assert.match(sendMessage.mock.calls[0]!.arguments[0].content, /! plugin .*install denied/s);
 
   await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.2.14; fi\n');
   await bridge.ensureAgyPluginInstalled(pluginDir);
   await handler();
 
   const report = sendMessage.mock.calls[1]!.arguments[0].content;
-  assert.match(report, /Plugin installed 1.0.0/);
-  assert.doesNotMatch(report, /Last plugin error/);
+  assert.match(report, /✓ Plugin 1\.0\.0/);
+  assert.doesNotMatch(report, /! plugin \(/);
+  assert.match(report, /! usage \(/);
 });
 
 test("registers the Antigravity CLI provider and session lifecycle without starting runtime work", async (t) => {

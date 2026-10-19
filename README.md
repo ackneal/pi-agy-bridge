@@ -89,7 +89,9 @@ If a runtime or tool failure makes the conversation unsafe to reuse, the next re
 
 ## Troubleshooting
 
-Run `/agy-bridge:doctor` in Pi to check the Antigravity CLI version, plugin status, and recent errors. The report shows the last known authentication status; use `/login` for a fresh check.
+Run `/agy-bridge:doctor` in Pi to check the Antigravity CLI version, plugin status, models, runtime files, and recent errors. Each run queries the latest quota and waits for the result, which can take a few seconds. The report lists remaining quota and time until reset for each group. A successful quota query also confirms authentication.
+
+Quota is fetched on demand, not polled in the background. If the query fails, the report shows the error instead of old quota data. Use `/login` if you need to sign in again.
 
 - **Missing models**: Run `/login`, select **Antigravity CLI [pi-agy-bridge]**, then reopen `/model`. If models are still missing, run `agy models` in a terminal to check model availability directly.
 - **Sign-in failures**: If authentication expires, run `/login` again. If interactive sign-in fails in Pi, sign in to Antigravity CLI in a terminal using `agy`, then retry `/login` in Pi.
