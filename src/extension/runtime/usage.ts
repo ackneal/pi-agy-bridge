@@ -1,20 +1,86 @@
 import cp from "node:child_process";
-import { promisify, stripVTControlCharacters } from "node:util";
+import { stripVTControlCharacters } from "node:util";
 import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "./version.ts";
-import { summarizeAuthOutput } from "./auth-diagnostics.ts";
+import { recordAuthProbeDiagnostics, summarizeAuthOutput } from "./auth-diagnostics.ts";
 
-function runExecFile(
-  file: string,
-  args: string[],
-  options: { encoding: "utf-8"; timeout: number; killSignal: NodeJS.Signals; signal?: AbortSignal | undefined }
-): Promise<{ stdout: string; stderr: string }> {
-  const exec = promisify(cp.execFile) as unknown as (
-    file: string,
-    args: string[],
-    options: { encoding: string; timeout: number; killSignal: string; signal?: AbortSignal | undefined }
-  ) => Promise<{ stdout: string; stderr: string }>;
-  return exec(file, args, options);
+export class AgyAuthenticationRequiredError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Antigravity CLI authentication required. Run /login to authenticate.", options);
+    this.name = "AgyAuthenticationRequiredError";
+  }
+}
+
+function runUsageQuery(file: string, signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
+  const args = ["--output-format", "json", "--print", "/usage"];
+
+  return new Promise((resolve, reject) => {
+    const child = cp.spawn(file, args, { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const streams = { stdout: "", stderr: "" };
+    const bytes = { stdout: 0, stderr: 0 };
+    const limit = 1024 * 1024;
+    let failure: Error | undefined;
+
+    const kill = () => {
+      if (!child.pid) return;
+      try {
+        if (process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch { /* The owned process group has already exited. */ }
+    };
+    const stop = (error: Error) => {
+      failure ??= error;
+      kill();
+    };
+    const abort = () => {
+      failure = Object.assign(new Error("The operation was aborted", { cause: signal?.reason }), {
+        name: "AbortError", code: "ABORT_ERR",
+      });
+      kill();
+    };
+    const inspect = (stream: keyof typeof streams) => (chunk: string) => {
+      bytes[stream] += Buffer.byteLength(chunk);
+      if (failure) return;
+      const output = streams[stream].slice(-4096) + chunk;
+      if (bytes[stream] <= limit) streams[stream] += chunk;
+      if (/authentication required/i.test(stripVTControlCharacters(output))) {
+        stop(new AgyAuthenticationRequiredError());
+      } else if (bytes[stream] > limit) {
+        stop(Object.assign(new RangeError(`${stream} maxBuffer length exceeded`), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }));
+      }
+    };
+    const stdout = inspect("stdout");
+    const stderr = inspect("stderr");
+    const timer = setTimeout(() => stop(Object.assign(new Error("Command timed out after 30 seconds"), {
+      code: "ETIMEDOUT",
+    })), 30_000);
+
+    child.stdout.setEncoding("utf8").on("data", stdout);
+    child.stderr.setEncoding("utf8").on("data", stderr);
+    child.on("error", stop);
+    child.once("exit", kill);
+    signal?.addEventListener("abort", abort, { once: true });
+    child.once("close", (code, exitSignal) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      child.stdout.off("data", stdout);
+      child.stderr.off("data", stderr);
+      child.off("error", stop);
+      child.off("exit", kill);
+      kill();
+
+      recordAuthProbeDiagnostics(import.meta.url, file, args, code, exitSignal, streams, bytes);
+      if (!failure && (code !== 0 || exitSignal)) failure = new Error(`Command failed: ${file} ${args.join(" ")}`);
+      if (failure) {
+        Object.assign(failure, streams, { signal: exitSignal });
+        if (!("code" in failure)) Object.assign(failure, { code });
+        reject(failure);
+      } else {
+        resolve(streams);
+      }
+    });
+    if (signal?.aborted) abort();
+  });
 }
 
 export interface AgyQuotaBucket {
@@ -189,21 +255,17 @@ export async function fetchAgyUsage(
   agyPath: string = "agy",
   signal?: AbortSignal
 ): Promise<AgyUsage> {
+  signal?.throwIfAborted();
   const resolvedPath = resolveAgyExecutable(agyPath);
 
   let output = "";
   try {
-    const { stdout, stderr } = await runExecFile(resolvedPath, ["--output-format", "json", "--print", "/usage"], {
-      encoding: "utf-8",
-      timeout: 30_000,
-      killSignal: "SIGKILL",
-      signal,
-    });
+    const { stdout, stderr } = await runUsageQuery(resolvedPath, signal);
     output = (stdout || stderr || "").trim();
   } catch (error) {
-    if (signal?.aborted) throw error;
-    const failure = error as { code?: string | number; killed?: boolean; stdout?: string; stderr?: string };
-    const reason = failure.killed ? "timed out after 30 seconds"
+    if (signal?.aborted || error instanceof AgyAuthenticationRequiredError) throw error;
+    const failure = error as { code?: string | number; stdout?: string; stderr?: string };
+    const reason = failure.code === "ETIMEDOUT" ? "timed out after 30 seconds"
       : failure.code === "ENOENT" ? "executable not found"
       : failure.code === "EACCES" ? "permission denied"
       : `process failed (exit ${failure.code ?? "unknown"})`;

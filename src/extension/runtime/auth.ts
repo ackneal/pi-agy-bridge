@@ -1,15 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { stripVTControlCharacters } from "node:util";
 import type { ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import { resolveAgyExecutable } from "./version.ts";
 import { spawnAuthenticationPty, type AuthenticationPty } from "./auth-pty.ts";
-
-import { recordAuthProbeDiagnostics, summarizeAuthOutput } from "./auth-diagnostics.ts";
-import { parseAgyUsageOutput, type AgyUsage } from "./usage.ts";
-import { isDebugEnabled } from "../shared/debug.ts";
+import { AgyAuthenticationRequiredError, fetchAgyUsage, parseAgyUsageOutput, type AgyUsage } from "./usage.ts";
 
 const args = ["--print", "/usage"];
-const required = /authentication required/i;
 const invitation = "Authentication required. Please visit the URL to log in:";
 const manual = "Or, paste the authorization code here and press Enter:";
 const maxBytes = 64 * 1024;
@@ -17,89 +12,57 @@ const maxBytes = 64 * 1024;
 function runAuthentication(
   path: string | undefined,
   signal: AbortSignal | undefined,
-  interaction?: ProviderAuthInteraction,
+  interaction: ProviderAuthInteraction,
   onUsage?: (usage: AgyUsage) => void
-): Promise<boolean> {
+): Promise<void> {
   if (signal?.aborted) return Promise.reject(new Error("Antigravity CLI authentication was cancelled"));
   const executable = resolveAgyExecutable(path);
 
   return new Promise((resolve, reject) => {
-    let child: ChildProcessWithoutNullStreams;
-    let pty: AuthenticationPty | undefined;
+    let pty: AuthenticationPty;
     let setupFailed = false;
     try {
-      if (interaction) {
-        pty = spawnAuthenticationPty(executable, args, (message) => {
-          queueMicrotask(() => {
-            if (!setupFailed) finish(new Error(message));
-          });
+      pty = spawnAuthenticationPty(executable, args, (message) => {
+        queueMicrotask(() => {
+          if (!setupFailed) finish(new Error(message));
         });
-        child = pty.child;
-      } else {
-        child = spawn(executable, args, { detached: true, stdio: "pipe" });
-      }
+      });
     } catch {
       setupFailed = true;
       reject(new Error("Could not start the Antigravity CLI authentication process"));
       return;
     }
-    let outcome: boolean | Error | undefined;
+    const child = pty.child;
+    let failure: Error | undefined;
     let closed = false;
     let prompt: AbortController | undefined;
     let urlSent = false;
     let progressSent = false;
-    let escalated = false;
     let diagnostics = "";
     let submittedCode: string | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
-    const buffers = { stdout: "", stderr: "" };
-    const probeDiagnostics = !interaction && isDebugEnabled() ? { stdout: "", stderr: "" } : undefined;
-    const probeBytes = { stdout: 0, stderr: 0 };
+    const bytes = { stdout: 0, stderr: 0 };
 
-    const kill = (sig: NodeJS.Signals) => {
-      if (sig === "SIGKILL") escalated = true;
-      if (pty) {
-        pty.kill(sig);
-      } else if (child.pid) {
-        // Descendants can outlive the root and keep its stdio open.
-        try {
-          process.kill(-child.pid, sig);
-        } catch {
-          if (!closed && child.exitCode == null && child.signalCode == null) child.kill(sig);
-        }
-      }
-    };
-    const finish = (result: boolean | Error) => {
-      if (outcome !== undefined || closed) return;
-      outcome = result;
+    const finish = (error: Error) => {
+      if (failure || closed) return;
+      failure = error;
       prompt?.abort();
       clearTimeout(timer);
-      kill("SIGTERM");
-      killTimer = setTimeout(() => kill("SIGKILL"), 500);
+      pty.kill("SIGTERM");
+      killTimer = setTimeout(() => pty.kill("SIGKILL"), 500);
     };
     const onAbort = () => finish(new Error("Antigravity CLI authentication was cancelled"));
-    const timer = setTimeout(() => finish(new Error(interaction ? "Timed out waiting for Antigravity CLI authorization" : "Antigravity CLI authentication check timed out")), interaction ? 180_000 : 30_000);
+    const timer = setTimeout(() => finish(new Error("Timed out waiting for Antigravity CLI authorization")), 180_000);
 
-    const observe = (stream: keyof typeof buffers, chunk: string) => {
-      if (probeDiagnostics) {
-        probeBytes[stream] += Buffer.byteLength(chunk);
-        const captured = probeDiagnostics[stream] + chunk;
-        probeDiagnostics[stream] = captured.length > maxBytes
-          ? captured.slice(0, maxBytes).replace(/\S*$/, "[redacted]")
-          : captured;
-      }
-      if (outcome !== undefined) return;
-      buffers[stream] += chunk;
+    const observe = (stream: keyof typeof bytes, chunk: string) => {
+      if (failure) return;
+      bytes[stream] += Buffer.byteLength(chunk);
       diagnostics += chunk;
-      if (Buffer.byteLength(diagnostics) > maxBytes) {
+      if (bytes.stdout + bytes.stderr > maxBytes) {
         finish(new Error("Antigravity CLI authentication output exceeded the allowed limit"));
         return;
       }
       const text = stripVTControlCharacters(diagnostics);
-      if (!interaction) {
-        if (required.test(text)) finish(false);
-        return;
-      }
 
       try {
         const start = text.indexOf(invitation);
@@ -127,7 +90,7 @@ function runAuthentication(
           prompt = new AbortController();
           const promptSignal = prompt.signal;
           void interaction.prompt({ type: "manual_code", message: "Paste the authorization code from your browser", signal: promptSignal }).then((code) => {
-            if (outcome !== undefined || closed || promptSignal.aborted) return;
+            if (failure || closed || promptSignal.aborted) return;
             // Keep control characters and forged report lines out of PTY input.
             if (code.length > 8192 || !/^[A-Za-z0-9._~+/%=-]+$/.test(code)) {
               finish(new Error("Invalid authorization code"));
@@ -153,24 +116,18 @@ function runAuthentication(
     const onInputError = () => finish(new Error("Could not send input to the Antigravity CLI authentication process"));
     const onClose = (code: number | null, exitSignal: NodeJS.Signals | null) => {
       closed = true;
-      if (probeDiagnostics) recordAuthProbeDiagnostics(import.meta.url, executable, args, code, exitSignal, probeDiagnostics, probeBytes);
       prompt?.abort();
       clearTimeout(timer);
       clearTimeout(killTimer);
-      if (!pty && !escalated) kill("SIGKILL");
-      pty?.dispose();
+      pty.dispose();
       signal?.removeEventListener("abort", onAbort);
       child.stdout.off("data", onStdout);
       child.stderr.off("data", onStderr);
       child.stdin.off("error", onInputError);
       child.off("error", onError);
       child.off("close", onClose);
-      if (typeof outcome === "boolean") {
-        resolve(outcome);
-        return;
-      }
-      if (outcome instanceof Error) {
-        reject(outcome);
+      if (failure) {
+        reject(failure);
         return;
       }
 
@@ -181,18 +138,15 @@ function runAuthentication(
       const hasQuota = usage !== undefined || report.includes("Quota") || report.includes("Limit Remaining");
       if (code === 0 && exitSignal === null && hasQuota) {
         if (usage) onUsage?.(usage);
-        resolve(true);
+        resolve();
         return;
       }
 
       const ttyFailure = /script:\s+(?:tcgetattr(?:\/ioctl)?|openpty)/i.test(text);
       const message = ttyFailure
         ? "Could not start an interactive terminal for Antigravity CLI authentication. Check your terminal permissions, or run `agy` in a terminal to authenticate, then retry `/login`."
-        : `Could not determine Antigravity CLI authentication status (exitCode=${code ?? "none"}, signal=${exitSignal ?? "none"}, stdoutBytes=${Buffer.byteLength(buffers.stdout)}, stderrBytes=${Buffer.byteLength(buffers.stderr)})`;
-      const response = !interaction
-        ? `\nAntigravity CLI response (redacted): stdout=${JSON.stringify(summarizeAuthOutput(buffers.stdout))} stderr=${JSON.stringify(summarizeAuthOutput(buffers.stderr))}`
-        : "";
-      reject(new Error(message + response));
+        : `Could not determine Antigravity CLI authentication status (exitCode=${code ?? "none"}, signal=${exitSignal ?? "none"}, stdoutBytes=${bytes.stdout}, stderrBytes=${bytes.stderr})`;
+      reject(new Error(message));
     };
 
     child.stdout.setEncoding("utf8");
@@ -204,7 +158,6 @@ function runAuthentication(
     child.on("close", onClose);
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) onAbort();
-    if (!pty) child.stdin.end();
   });
 }
 
@@ -213,7 +166,16 @@ export async function probeAgyAuthentication(
   signal?: AbortSignal,
   onUsage?: (usage: AgyUsage) => void
 ): Promise<boolean> {
-  return runAuthentication(agyPath, signal, undefined, onUsage);
+  let usage: AgyUsage;
+  try {
+    usage = await fetchAgyUsage(agyPath, signal);
+  } catch (error) {
+    if (error instanceof AgyAuthenticationRequiredError) return false;
+    throw error;
+  }
+
+  onUsage?.(usage);
+  return true;
 }
 
 export async function loginAgyAuthentication(

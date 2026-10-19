@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import test from "node:test";
-import { promisify } from "node:util";
-import { formatDoctorQuotaLines, parseAgyUsageOutput } from "./usage.ts";
+import { mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { AgyAuthenticationRequiredError, fetchAgyUsage, formatDoctorQuotaLines, parseAgyUsageOutput } from "./usage.ts";
 
 const sampleJsonOutput = JSON.stringify({
   conversation_id: "",
@@ -55,6 +59,10 @@ test("parseAgyUsageOutput parses JSON, text, and invalid inputs", () => {
     { name: "JSON response fallback", input: JSON.stringify({ response: sampleTextOutput }), expectedGroups: 3, argonFraction: 0.42 },
     { name: "empty output", input: "", expectedGroups: 0 },
     { name: "unrelated output", input: "Quota", expectedGroups: 0 },
+    { name: "marker without percentage", input: "Quota\nLimit Remaining", expectedGroups: 0 },
+    { name: "init is not quota", input: '{"event":"init"}', expectedGroups: 0 },
+    { name: "invalid text percentage", input: "Pro  Five Hour  101%", expectedGroups: 0 },
+    { name: "invalid JSON fraction", input: JSON.stringify({ command: { data: { groups: [{ name: "Pro", buckets: [{ remaining_fraction: 2 }] }] } } }), expectedGroups: 0 },
   ]) {
     const usage = parseAgyUsageOutput(row.input, "2026-10-17T04:19:59Z");
     if (row.expectedGroups === 0) {
@@ -84,35 +92,69 @@ test("formatDoctorQuotaLines formats full report", () => {
 });
 
 test("fetchAgyUsage classifies subprocess failures and sanitizes diagnostics", async (t) => {
-  let failure: Error;
-  const replacement = Object.assign(() => {}, {
-    [promisify.custom]: async (file: string, args: string[], options: { timeout: number; killSignal: string; encoding: string }) => {
-      assert.equal(file, "/fake/agy");
-      assert.deepEqual(args, ["--output-format", "json", "--print", "/usage"]);
-      assert.equal(options.timeout, 30_000);
-      assert.equal(options.killSignal, "SIGKILL");
-      assert.equal(options.encoding, "utf-8");
-      throw failure;
-    },
-  });
-  const original = cp.execFile;
-  cp.execFile = replacement as unknown as typeof cp.execFile;
-  syncBuiltinESMExports();
-  t.after(() => { cp.execFile = original; syncBuiltinESMExports(); });
-  const { fetchAgyUsage } = await import("./usage.ts");
-
   for (const row of [
     { name: "failed authentication stderr", code: 1, stderr: "\u001b[31mAuthentication required\u001b[0m https://example.test/?token=secret-token authorization-code", stdout: "stdout-secret", reason: "process failed (exit 1)", diagnostic: "authentication required [redacted] [redacted]" },
     { name: "failed authentication stdout fallback", code: 2, stderr: "", stdout: "Please run login secret-token", reason: "process failed (exit 2)", diagnostic: "please run login [redacted]" },
+    { name: "nonzero exit with valid quota", code: 7, stderr: "", stdout: sampleTextOutput, reason: "process failed (exit 7)", diagnostic: "" },
+    ...(["stdout", "stderr"] as const).map((stream) => ({ name: `${stream} output bound`, code: 0, stderr: "", stdout: "", stream, reason: "process failed (exit ERR_CHILD_PROCESS_STDIO_MAXBUFFER)", diagnostic: "" })),
     { name: "missing executable", code: "ENOENT", stderr: "", stdout: "", reason: "executable not found", diagnostic: "" },
     { name: "timeout", code: "ETIMEDOUT", killed: true, stderr: "", stdout: "", reason: "timed out after 30 seconds", diagnostic: "" },
   ]) {
-    await t.test(row.name, async () => {
-      failure = Object.assign(new Error("raw subprocess secret-token"), row);
-
-      await assert.rejects(fetchAgyUsage("/fake/agy"), (error: unknown) => {
+    await t.test(row.name, async (sub) => {
+      const original = cp.spawn;
+      sub.after(() => { cp.spawn = original; syncBuiltinESMExports(); });
+      cp.spawn = ((file: string, args: string[]) => {
+        assert.equal(file, "/fake/agy");
+        assert.deepEqual(args, ["--output-format", "json", "--print", "/usage"]);
+        const child = Object.assign(new EventEmitter(), {
+          pid: 123456789,
+          stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+          exitCode: null, signalCode: null,
+          kill() { queueMicrotask(() => child.emit("close", null, "SIGKILL")); return true; },
+        });
+        sub.mock.method(process, "kill", () => {
+          queueMicrotask(() => child.emit("close", null, "SIGKILL"));
+          return true;
+        });
+        queueMicrotask(() => {
+          if (row.code === "ENOENT") {
+            child.emit("error", Object.assign(new Error("raw subprocess secret-token"), { code: row.code }));
+            child.emit("close", -2, null);
+          }
+          else if (!("killed" in row)) {
+            if ("stream" in row) {
+              child[row.stream].write(Buffer.alloc(1024 * 1024 + 1, 120));
+              return;
+            }
+            child.stdout.write(row.stdout);
+            child.stderr.write(row.stderr);
+            child.emit("close", row.code, null);
+          }
+        });
+        return child;
+      }) as unknown as typeof cp.spawn;
+      syncBuiltinESMExports();
+      if ("killed" in row) sub.mock.timers.enable({ apis: ["setTimeout"] });
+      const query = fetchAgyUsage("/fake/agy");
+      if ("killed" in row) sub.mock.timers.tick(30_000);
+      await assert.rejects(query, (error: unknown) => {
         assert.ok(error instanceof Error);
-        assert.equal(error.cause, failure);
+        if (row.name === "failed authentication stderr") {
+          assert.ok(error instanceof AgyAuthenticationRequiredError);
+          return true;
+        }
+        assert.ok(!(error instanceof AgyAuthenticationRequiredError));
+        if ("stream" in row) {
+          const cause = error.cause as NodeJS.ErrnoException & { stdout: string; stderr: string };
+          assert.equal(cause.code, "ERR_CHILD_PROCESS_STDIO_MAXBUFFER");
+          assert.ok(Buffer.byteLength(cause[row.stream]) <= 1024 * 1024);
+          assert.doesNotMatch(error.message, /timed out/);
+          return true;
+        }
+        if (row.name === "nonzero exit with valid quota") {
+          assert.match(error.message, /process failed \(exit 7\)/);
+          return true;
+        }
         assert.equal(error.message, `Antigravity CLI quota query ${row.reason}${row.diagnostic ? `: ${row.diagnostic}` : ""}. Check agy installation and run /login if authentication is required.`);
         assert.doesNotMatch(error.message, /secret-token|stdout-secret|authorization-code|https|\u001b/);
         return true;
@@ -120,3 +162,20 @@ test("fetchAgyUsage classifies subprocess failures and sanitizes diagnostics", a
     });
   }
 });
+
+for (const stream of ["stdout", "stderr"]) {
+  test(`fetchAgyUsage stops a hanging split ${stream} authentication prompt`, async (t) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "agy-usage-"));
+    t.after(() => rm(dir, { recursive: true, force: true }));
+    const file = path.join(dir, "agy");
+    await writeFile(file, `#!${process.execPath}
+process.${stream}.write("Authentication req");
+setTimeout(() => process.${stream}.write("uired: login"), 50);
+setInterval(() => {}, 1000);
+`);
+    await chmod(file, 0o755);
+    const start = Date.now();
+    await assert.rejects(fetchAgyUsage(file, AbortSignal.timeout(2500)), AgyAuthenticationRequiredError);
+    assert.ok(Date.now() - start < 3000);
+  });
+}

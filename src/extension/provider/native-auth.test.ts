@@ -35,7 +35,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     const processClosed = new Promise<void>((resolve) => { closed = resolve; });
     t.mock.method(cp, "spawn", (command: string, args: string[]) => {
       assert.ok(command === executable || command === "/bin/sh");
-      if (command === executable) assert.deepEqual(args, ["--print", "/usage"]);
+      if (command === executable) assert.deepEqual(args, ["--output-format", "json", "--print", "/usage"]);
       else {
         const invocation = args.join(" ");
         assert.match(invocation, /--print[' ]+[' ]*\/usage/);
@@ -56,7 +56,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
       children.set(pid, child);
       child.once("close", () => { children.delete(pid); });
       const finish = () => {
-        output.write(scenario === "headless unknown never retries" ? "  Quota:  \r\n  Limit Remaining 100%\r\n" : "Quota:\n  Limit Remaining 100%\n");
+        output.write(scenario === "headless unknown never retries" ? "  Quota:  \r\n  Limit Remaining 100%\r\n" : "Quota:\nGemini Models  Weekly Limit Remaining 100%\n");
         children.delete(pid);
         child.emit("close", 0, null);
       };
@@ -84,7 +84,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
           errors.write("Authentication required\n");
           return;
         }
-        assert.equal(input.writableEnded, true, "probes close stdin without a model request");
+        assert.equal(input.writableEnded, false, "ignored probe stdin needs no writes");
         if (scenario === "headless unknown never retries") {
           child.emit("close", 0, null);
           return;
@@ -163,7 +163,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     }
 
     if (scenario === "headless unknown never retries") {
-      await assert.rejects(login, /Could not determine Antigravity CLI authentication status \(exitCode=0, signal=none, stdoutBytes=0, stderrBytes=0\)/);
+      await assert.rejects(login, /returned no quota data/);
       assert.equal(processCount, 1, "unknown status must not launch a PTY retry");
       assert.deepEqual(await runtime.listCredentials(), []);
       assert.deepEqual(await runtime.getAvailable("agy"), []);
