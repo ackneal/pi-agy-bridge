@@ -184,7 +184,7 @@ export class AgyRuntime {
           return;
         }
 
-        if (this.hasTurnResult) return;
+        if (this.hasTurnResult || this.child?.killed) return;
 
         debugLog("process", `Process exited post-init with code ${code}, signal ${signal}`);
         const recentStderr = this.stderrBuffer.trim();
@@ -214,6 +214,8 @@ export class AgyRuntime {
           );
           return;
         }
+
+        if (this.child?.killed) return;
 
         debugLog("process", `Process error post-init: ${err.message}`);
         this.dispatchEvent({

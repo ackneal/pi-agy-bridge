@@ -215,9 +215,9 @@ function formatPercent(fraction: number): string {
 }
 
 function formatResetCountdown(resetTime: string | undefined, nowMs: number): string | undefined {
-  if (!resetTime) return undefined;
+  if (!resetTime || !/(?:Z|[+-]\d{2}:\d{2})$/.test(resetTime)) return undefined;
   const targetMs = Date.parse(resetTime);
-  if (!Number.isFinite(targetMs)) return resetTime;
+  if (!Number.isFinite(targetMs)) return undefined;
 
   const diffMinutes = Math.max(0, Math.round((targetMs - nowMs) / 60_000));
   const days = Math.floor(diffMinutes / (60 * 24));

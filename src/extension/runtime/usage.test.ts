@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import test from "node:test";
-import { mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, chmod, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
@@ -91,6 +91,34 @@ test("formatDoctorQuotaLines formats full report", () => {
   assert.deepEqual(formatDoctorQuotaLines(undefined, nowMs), []);
 });
 
+test("formatDoctorQuotaLines only counts down timestamps with explicit ISO timezones", () => {
+  const nowMs = Date.parse("2026-10-17T04:19:59Z");
+  for (const row of [
+    { resetTime: "2026-10-17T09:19:59Z", expected: "5h" },
+    { resetTime: "2026-10-17T17:19:59+08:00", expected: "5h" },
+    { resetTime: "2026-10-17T03:19:59Z", expected: "0m" },
+    { resetTime: "2026-10-17 17:19 CST", expected: undefined },
+    { resetTime: "2026-10-17 17:19 PST", expected: undefined },
+    { resetTime: "2026-10-17T09:19:59", expected: undefined },
+    { resetTime: "2026-99-17T09:19:59Z", expected: undefined },
+    { resetTime: "unknown", expected: undefined },
+    { resetTime: undefined, expected: undefined },
+  ]) {
+    const usage = { updatedAt: new Date(nowMs).toISOString(), groups: [{ name: "Pro", buckets: [
+      { id: "pro", name: "Five Hour", window: "5h", remainingFraction: 1, resetTime: row.resetTime },
+    ] }] };
+    assert.equal(formatDoctorQuotaLines(usage, nowMs)[2], `  Pro  5h 100%${row.expected ? ` (${row.expected})` : ""}`, String(row.resetTime));
+  }
+});
+
+test("structured JSON reset time takes precedence over ambiguous response text", () => {
+  const json = JSON.parse(sampleJsonOutput);
+  json.response = sampleTextOutput;
+  const usage = parseAgyUsageOutput(JSON.stringify(json));
+  assert.equal(usage?.groups[0]?.buckets[0]?.resetTime, "2026-10-24T04:19:59Z");
+  assert.match(formatDoctorQuotaLines(usage, Date.parse("2026-10-17T04:19:59Z"))[2]!, /weekly 100% \(7d\)/);
+});
+
 test("fetchAgyUsage classifies subprocess failures and sanitizes diagnostics", async (t) => {
   for (const row of [
     { name: "failed authentication stderr", code: 1, stderr: "\u001b[31mAuthentication required\u001b[0m https://example.test/?token=secret-token authorization-code", stdout: "stdout-secret", reason: "process failed (exit 1)", diagnostic: "authentication required [redacted] [redacted]" },
@@ -168,14 +196,18 @@ for (const stream of ["stdout", "stderr"]) {
     const dir = await mkdtemp(path.join(os.tmpdir(), "agy-usage-"));
     t.after(() => rm(dir, { recursive: true, force: true }));
     const file = path.join(dir, "agy");
+    const pidFile = path.join(dir, "pid");
     await writeFile(file, `#!${process.execPath}
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
 process.${stream}.write("Authentication req");
-setTimeout(() => process.${stream}.write("uired: login"), 50);
+setTimeout(() => process.${stream}.write("uired\\nOpen https://example.test/oauth and enter authorization code: "), 50);
 setInterval(() => {}, 1000);
 `);
     await chmod(file, 0o755);
     const start = Date.now();
     await assert.rejects(fetchAgyUsage(file, AbortSignal.timeout(2500)), AgyAuthenticationRequiredError);
     assert.ok(Date.now() - start < 3000);
+    const pid = Number(await readFile(pidFile, "utf8"));
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
   });
 }
