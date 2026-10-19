@@ -12,7 +12,7 @@ interface Case {
   isReused: boolean;
   syncedMessageCount?: number;
   exact?: string;
-  expected?: unknown;
+  expected?: string;
 }
 
 const cases: Case[] = [
@@ -36,34 +36,27 @@ const cases: Case[] = [
       { role: "user", content: "second & new", timestamp: 3 },
     ] },
     isReused: true, syncedMessageCount: 1,
-    expected: { purpose: "incremental_conversation", messages: [
-      { role: "user", content: "first <new>" },
-      { role: "user", content: "second & new" },
-    ] },
+    expected: "# Conversation updates\n\n## User\n\n> first <new>\n\n## User\n\n> second & new",
   },
   {
     name: "zero synced messages includes the entire new slice",
     context: { messages: [{ role: "system", content: "new rules", timestamp: 1 }, { role: "user", content: "request", timestamp: 2 }] },
     isReused: true, syncedMessageCount: 0,
-    expected: { purpose: "incremental_conversation", messages: [
-      { role: "system", content: "new rules" },
-      { role: "user", content: "request" },
-    ] },
+    expected: "# Conversation updates\n\n## System\n\n> new rules\n\n## User\n\n> request",
   },
   {
-    name: "formats a single new system message as incremental JSON",
+    name: "formats a single new system message as quoted Markdown",
     context: { messages: [oldMessage, { role: "system", content: "rules & policy", timestamp: 2 }] },
     isReused: true, syncedMessageCount: 1,
-    expected: { purpose: "incremental_conversation", messages: [{ role: "system", content: "rules & policy" }] },
+    expected: "# Conversation updates\n\n## System\n\n> rules & policy",
   },
   ...[true, false].map((isReused): Case => ({
-    name: `preserves exact image bytes in ${isReused ? "incremental JSON" : "rebuilt JSON"}`,
+    name: `preserves exact image bytes in ${isReused ? "incremental Markdown" : "rebuilt Markdown"}`,
     context: { messages: [oldMessage, { role: "user", content: [{ type: "text", text: "look" }, image], timestamp: 2 }] },
     isReused, syncedMessageCount: 1,
     expected: isReused
-      ? { purpose: "incremental_conversation", messages: [{ role: "user", content: [{ type: "text", text: "look" }, image] }] }
-      : { purpose: "reconstructed_conversation", history: [{ role: "user", content: "OLD_HISTORY_SENTINEL" }],
-        currentMessage: { role: "user", content: [{ type: "text", text: "look" }, image] } },
+      ? "# Conversation updates\n\n## User\n\n> look\n> ![Image](data:image/png;base64,AAECA/8=)"
+      : "# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations.\n\n## User\n\n> OLD_HISTORY_SENTINEL\n\n## User\n\n> look\n> ![Image](data:image/png;base64,AAECA/8=)",
   })),
   ...[
     { name: "fully synced history", messages: [oldMessage], syncedMessageCount: 1 },
@@ -80,7 +73,7 @@ describe("formatContextPrompt context updates", () => {
       const prompt = format(context, isReused, syncedMessageCount);
 
       if (exact !== undefined) assert.equal(prompt, exact);
-      if (expected !== undefined) assert.deepEqual(JSON.parse(prompt), expected);
+      if (expected !== undefined) assert.equal(prompt, expected);
     });
   }
 });

@@ -450,16 +450,14 @@ for (const row of laterFailureCases) {
     assert.equal(retry.stopReason, "stop");
     assert.equal(processes.length, 2);
     assert.equal(processes[1]!.options.conversationId, undefined);
-    const reconstructed = JSON.parse(send.mock.calls.at(-1)!.arguments[0].message.content);
-    assert.equal(reconstructed.purpose, "reconstructed_conversation");
-    assert.deepEqual(reconstructed.history.filter((message: { role: string }) => message.role === "user"), [
-      { role: "user", content: "successful request" },
-      { role: "user", content: "failed request" },
-    ], "retry must include the original undelivered request");
-    assert.deepEqual(reconstructed.history.at(-1), {
-      role: "assistant", content: failed.content, stopReason: "error", errorMessage: "genuine failure",
-    });
-    assert.deepEqual(reconstructed.currentMessage, { role: "user", content: "retry request" });
+    const reconstructed = send.mock.calls.at(-1)!.arguments[0].message.content;
+    assert.ok(reconstructed.startsWith("# System prompt\n\n> Keep Pi history\n\n# Conversation history\n\n"));
+    assert.deepEqual(reconstructed.match(/^## .+$/gm), [
+      "## User", "## User", "## Assistant (status: error)", "## User",
+    ]);
+    assert.ok(reconstructed.indexOf("> successful request") < reconstructed.indexOf("> failed request"), "retry includes the original undelivered request in order");
+    assert.ok(reconstructed.includes(`## Assistant (status: error)\n\n${row.text ? "> Partial answer" : ""}\n\nError:\n\n> genuine failure`));
+    assert.ok(reconstructed.endsWith("## User\n\n> retry request"));
   });
 }
 
@@ -667,10 +665,10 @@ for (const row of pendingGapCases) {
     assert.equal(processes.length, 2);
     assert.equal(processes[1]!.options.conversationId, undefined);
     assert.equal(session.activeProcess, processes[1]);
-    const reconstructed = JSON.parse(send.mock.calls.at(-1)!.arguments[0].message.content);
-    assert.equal(reconstructed.purpose, "reconstructed_conversation");
-    assert.equal(reconstructed.history.at(-1).role, "toolResult");
-    assert.deepEqual(reconstructed.currentMessage, { role: "user", content: "retry request" });
+    const reconstructed = send.mock.calls.at(-1)!.arguments[0].message.content;
+    assert.ok(reconstructed.startsWith("# System prompt\n\n> Keep Pi history\n\n# Conversation history\n\n"));
+    assert.match(reconstructed, /## Tool result: .*\n\n> late Pi result\n\n## User\n\n> retry request$/);
+    assert.ok(reconstructed.indexOf("### Tool call:") < reconstructed.indexOf("## Tool result:"));
     assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch))?.conversationId, "conversation-2");
     assert.equal(listeners.size, 0);
   });
@@ -792,7 +790,7 @@ for (const { terminal, aborted } of [
     assert.equal(recovered.stopReason, "stop");
     assert.equal(processes.length, 2);
     assert.equal(processes[1]!.options.conversationId, undefined);
-    assert.equal(JSON.parse(send.mock.calls.at(-1)!.arguments[0].message.content).purpose, "reconstructed_conversation");
+    assert.match(send.mock.calls.at(-1)!.arguments[0].message.content, /^# System prompt\n\n> Keep Pi history\n\n# Conversation history\n\n[\s\S]*## User\n\n> retry request$/);
   });
 }
 

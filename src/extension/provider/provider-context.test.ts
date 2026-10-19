@@ -60,76 +60,95 @@ const context: Context = {
   ],
 };
 
-describe("formatContextPrompt", () => {
-  it("compacts prior tool results and serializes rebuilt context as minified JSON", () => {
-    const prompt = formatContextPrompt(context, false);
+const historyHeading = "# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations.";
+const call = (id: string, path: string): AssistantMessage => ({ ...assistantMetadata, role: "assistant", content: [{ type: "toolCall", id, name: "read", arguments: { path } }], stopReason: "toolUse", timestamp: 1 });
+const result = (id: string, body: string, isError = false): Context["messages"][number] => ({ role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text: body }], isError, timestamp: 2 });
+const completed: AssistantMessage = { ...assistantMetadata, role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop", timestamp: 3 };
 
-    assert.equal(prompt.includes("file contents"), false);
-    assert.equal(prompt.includes("\n"), false);
-    assert.deepEqual(JSON.parse(prompt), {
-      purpose: "reconstructed_conversation",
-      systemInstructions: "Follow <policy> & safety.",
-      history: [
-        { role: "user", content: "old <question>" },
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "README.md" } }],
-          stopReason: "toolUse",
-        },
-        { role: "toolResult", toolCallId: "call-1", toolName: "read", isError: false, contentOmitted: true },
-        { role: "assistant", content: [{ type: "text", text: "read complete" }], stopReason: "stop" },
-      ],
-      currentMessage: {
-        role: "user",
-        content: [
-          { type: "text", text: "next & now" },
-          { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
-        ],
-      },
-    });
+describe("formatContextPrompt reconstruction", () => {
+  it("quotes history, preserves images and omits completed result bodies", () => {
+    assert.equal(formatContextPrompt(context, false), [
+      "# System prompt\n\n> Follow <policy> & safety.", historyHeading,
+      "## User\n\n> old <question>",
+      '## Assistant (status: toolUse)\n\n### Tool call: read (id: call-1)\n\n> {"path":"README.md"}',
+      "## Tool result: read (id: call-1, status: success)\n\n> [Body omitted: completed run]",
+      "## Assistant (status: stop)\n\n> read complete",
+      "## User\n\n> next & now\n> ![Image](data:image/png;base64,aW1hZ2U=)",
+    ].join("\n\n"));
   });
 
-  it("omits completed result bodies but preserves their call metadata", () => {
-    const context: Context = {
-      messages: [
-        { role: "user", content: "old request", timestamp: 1 },
-        { role: "assistant", ...assistantMetadata, content: [{ type: "toolCall", id: "old", name: "read", arguments: {} }], stopReason: "toolUse", timestamp: 2 },
-        { role: "toolResult", toolCallId: "old", toolName: "read", content: [{ type: "text", text: "old result" }], isError: false, timestamp: 3 },
-        { role: "assistant", ...assistantMetadata, content: [{ type: "text", text: "old answer" }], stopReason: "stop", timestamp: 4 },
-        { role: "user", content: "current request", timestamp: 5 },
-        { role: "assistant", ...assistantMetadata, content: [{ type: "toolCall", id: "current", name: "read", arguments: {} }], stopReason: "toolUse", timestamp: 6 },
-        { role: "toolResult", toolCallId: "current", toolName: "read", content: [{ type: "text", text: "current result" }], isError: false, timestamp: 7 },
-        { role: "user", content: "appended request", timestamp: 8 },
-      ],
-    };
+  it("keeps unfinished results even after an appended user request", () => {
+    const prompt = formatContextPrompt({ messages: [call("old", "old"), result("old", "OLD_BODY"), completed,
+      call("current", "current"), result("current", "CURRENT_BODY"), { role: "user", content: "appended", timestamp: 4 }] }, false);
 
-    const prompt = formatContextPrompt(context, false);
-
-    assert.deepEqual(JSON.parse(prompt), {
-      purpose: "reconstructed_conversation",
-      history: [
-        { role: "user", content: "old request" },
-        { role: "assistant", content: [{ type: "toolCall", id: "old", name: "read", arguments: {} }], stopReason: "toolUse" },
-        { role: "toolResult", toolCallId: "old", toolName: "read", isError: false, contentOmitted: true },
-        { role: "assistant", content: [{ type: "text", text: "old answer" }], stopReason: "stop" },
-        { role: "user", content: "current request" },
-        { role: "assistant", content: [{ type: "toolCall", id: "current", name: "read", arguments: {} }], stopReason: "toolUse" },
-        { role: "toolResult", toolCallId: "current", toolName: "read", isError: false, content: [{ type: "text", text: "current result" }] },
-      ],
-      currentMessage: { role: "user", content: "appended request" },
-    });
+    assert.ok(prompt.includes("id: old, status: success)\n\n> [Body omitted: completed run]"));
+    assert.ok(!prompt.includes("OLD_BODY"));
+    assert.ok(prompt.includes("id: current, status: success)\n\n> CURRENT_BODY\n\n## User\n\n> appended"));
   });
 
-  it("preserves images and unescaped text in incremental JSON context", () => {
-    assert.deepEqual(JSON.parse(formatContextPrompt(context, true, 4)), {
-      purpose: "incremental_conversation",
-      messages: [{
-        role: "user",
-        content: [
-          { type: "text", text: "next & now" },
-          { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
-        ],
-      }],
+  for (const old of [false, true]) {
+    for (const { path, removed } of [
+      { path: "/any/root/.gemini/antigravity-cli/brain/session/.system_generated/file", removed: true },
+      { path: ".gemini/antigravity-cli/brain/session/.system_generated/chunk", removed: true },
+      { path: "C:\\other\\.gemini\\antigravity-cli\\brain\\session\\.system_generated\\file", removed: true },
+      { path: "/root/.gemini/antigravity-cli/brain/session/other/../.system_generated/file", removed: true },
+      { path: "/root/.gemini/antigravity-cli/brain/session/.system_generated-other/file", removed: false },
+      { path: "/root/.gemini/antigravity-cli/brain/session/notes/file", removed: false },
+      { path: "/root/.gemini/antigravity-cli/brain/session/.system_generated/../../safe", removed: false },
+      { path: "/root/.gemini/antigravity-cli/brain/session/.system_generated/file\0", removed: false },
+    ]) {
+      it(`filters paired chunk reads in mixed assistants (${old ? "old" : "current"}, ${JSON.stringify(path)})`, () => {
+        const hidden = call("hidden", path);
+        const mixed: AssistantMessage = { ...hidden, content: [{ type: "text", text: "retained explanation" }, ...hidden.content,
+          ...call("chunk", path).content, ...call("visible", "README.md").content] };
+        const prompt = formatContextPrompt({ messages: [mixed, result("hidden", "SECRET_ONE"), result("chunk", "SECRET_TWO"),
+          result("visible", "VISIBLE_BODY"), ...(old ? [completed] : [])] }, false);
+
+        assert.equal(prompt.includes("### Tool call: read (id: hidden)"), !removed);
+        assert.equal(prompt.includes("### Tool call: read (id: chunk)"), !removed);
+        assert.equal(prompt.includes("## Tool result: read (id: hidden,"), !removed);
+        assert.equal(prompt.includes("## Tool result: read (id: chunk,"), !removed);
+        assert.ok(prompt.includes("> retained explanation\n### Tool call:"));
+        assert.ok(prompt.includes("### Tool call: read (id: visible)"));
+        assert.equal(prompt.includes("VISIBLE_BODY"), !old);
+        assert.equal(prompt.includes("SECRET_ONE"), !removed && !old);
+      });
+    }
+  }
+
+  for (const { name, body, count, capped } of [
+    { name: "exact rendered budget", body: "x".repeat(7998), count: 3, capped: false },
+    { name: "quote markers push raw text over budget", body: "x".repeat(7999), count: 3, capped: true },
+    { name: "multiline quote markers count", body: "x\n".repeat(3000), count: 3, capped: true },
+    { name: "large results", body: "x".repeat(30000), count: 5, capped: true },
+  ]) {
+    it(`budgets current results: ${name}`, () => {
+      const messages = Array.from({ length: count }, (_, i) => result(`r${i}`, body, i === 0));
+      const prompt = formatContextPrompt({ messages }, false);
+      const bodies = prompt.split(/## Tool result:[^\n]+\n\n/).slice(1).map((part) => part.replace(/\n\n$/, ""));
+
+      assert.equal(bodies.length, count);
+      assert.ok(bodies.reduce((sum, value) => sum + value.length, 0) <= 24000);
+      if (capped) {
+        assert.ok(bodies.every((value) => value.length <= 8000));
+        assert.ok(bodies[0]!.includes("[Truncated:"));
+        assert.ok(bodies.at(-1)!.includes("[Truncated:"));
+        assert.ok(bodies[0]!.length >= bodies[1]!.length);
+      } else {
+        assert.deepEqual(bodies, Array(count).fill(`> ${body}`));
+      }
     });
-  });
+  }
+
+  for (const old of [false, true]) {
+    it(`limits only old call arguments to 1000 rendered characters (${old})`, () => {
+      const args = "x".repeat(2000);
+      const prompt = formatContextPrompt({ messages: [call("args", args), ...(old ? [completed] : [])] }, false);
+      const body = prompt.split("### Tool call: read (id: args)\n\n")[1]!.split("\n\n## Assistant")[0]!;
+
+      assert.equal(body.includes("[Truncated:"), old);
+      if (old) assert.equal(body.length, 1000);
+      else assert.equal(body, `> ${JSON.stringify({ path: args })}`);
+    });
+  }
 });
