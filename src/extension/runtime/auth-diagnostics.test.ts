@@ -32,7 +32,7 @@ for (const enabled of [false, true]) {
     });
     process.env.AGY_BRIDGE_DEBUG = enabled ? "1" : "0";
     process.env.AGY_BRIDGE_DEBUG_DIR = directory;
-    const stdout = "Quota:\nLimit Remaining 97%\n";
+    const stdout = "Quota:\nGemini Models  Weekly Limit Remaining 97%\n";
     const stderr = "Error: unknown command --secret-option\nhttps://accounts.google.com/o/oauth2/auth?code=manual-code&token=secret-token&error=invalid\nmanual-code arbitrary-token SECRET_ENV_VALUE login=secret-token 4/authorization-code\nhttps://example.test/\n?token=hidden-value\n";
     mock.method(cp, "spawn", () => {
       const child = Object.assign(new EventEmitter(), {
@@ -54,14 +54,14 @@ for (const enabled of [false, true]) {
 
     const text = await readFile(join(directory, files[0]!), "utf8");
     const artifact = JSON.parse(text);
-    assert.equal(artifact.source, new URL("./auth.ts", import.meta.url).href);
+    assert.equal(artifact.source, new URL("./usage.ts", import.meta.url).href);
     assert.equal(artifact.executable, "/fake/agy");
-    assert.deepEqual(artifact.args, ["--print", "/usage"]);
+    assert.deepEqual(artifact.args, ["--output-format", "json", "--print", "/usage"]);
     assert.equal(artifact.exitCode, 0);
     assert.equal(artifact.exitSignal, null);
     assert.equal(artifact.stdoutBytes, Buffer.byteLength(stdout));
     assert.equal(artifact.stderrBytes, Buffer.byteLength(stderr));
-    assert.equal(artifact.stdoutSummary, "[redacted]\nlimit remaining 97%\n");
+    assert.equal(artifact.stdoutSummary, "[redacted]\n[redacted] [redacted] [redacted] limit remaining 97%\n");
     assert.match(artifact.stderrSummary, /^error unknown command \[redacted\]/);
     for (const secret of ["https", "accounts.google", "manual-code", "secret-token", "arbitrary-token", "SECRET_ENV_VALUE", "authorization-code", "hidden-value", "--secret-option"]) {
       assert.ok(!text.includes(secret), secret);

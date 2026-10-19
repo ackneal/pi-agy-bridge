@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ApiKeyAuth, Credential, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import { loginAgyAuthentication, probeAgyAuthentication } from "../runtime/auth.ts";
+import type { AgyUsage } from "../runtime/usage.ts";
 import type { DoctorFailure } from "./doctor.ts";
 
 const year = 365 * 24 * 60 * 60 * 1000;
@@ -33,6 +34,7 @@ export function getAgyBridgeAuthEnvironment(apiKey?: string): Record<string, str
 export class AgyAuthentication {
   public status: "authenticated" | "unauthenticated" | "unknown" = "unknown";
   public failure: DoctorFailure | undefined;
+  public usage: AgyUsage | undefined;
   public readonly method: ApiKeyAuth;
   public readonly oauth: OAuthAuth;
   private detection: Promise<OAuthCredential | undefined> | undefined;
@@ -45,11 +47,11 @@ export class AgyAuthentication {
   constructor(agyPath: string | undefined, beforeLogin: () => Promise<void>) {
     this.agyPath = agyPath;
     this.method = {
-      name: "Antigravity CLI CLI",
+      name: "Antigravity CLI",
       check: async ({ credential, signal }) => {
         signal.throwIfAborted();
         return isAgyBridgeEnabled(credential)
-          ? { type: "api_key", source: "Antigravity CLI CLI" }
+          ? { type: "api_key", source: "Antigravity CLI" }
           : undefined;
       },
       resolve: async ({ credential, signal }) => {
@@ -61,12 +63,12 @@ export class AgyAuthentication {
         return {
           auth: {},
           env: { AGY_BRIDGE_ENABLED: "1", ...(typeof epoch === "string" && epoch.length > 0 ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },
-          source: "Antigravity CLI CLI",
+          source: "Antigravity CLI",
         };
       },
     };
     this.oauth = {
-      name: "Antigravity CLI CLI",
+      name: "Antigravity CLI",
       isSubscription: true,
       refresh: async (credential, signal) => {
         signal.throwIfAborted();
@@ -95,11 +97,19 @@ export class AgyAuthentication {
           await beforeLogin();
           signal.throwIfAborted();
           interaction.notify({ type: "progress", message: "Checking Antigravity CLI authentication status" });
-          await loginAgyAuthentication({ ...interaction, signal } satisfies ProviderAuthInteraction, this.agyPath);
+          let capturedUsage: AgyUsage | undefined;
+          await loginAgyAuthentication(
+            { ...interaction, signal } satisfies ProviderAuthInteraction,
+            this.agyPath,
+            (usage) => { capturedUsage = usage; }
+          );
           signal.throwIfAborted();
           if (generation !== this.generation) throw new Error("Antigravity CLI authentication was replaced by a newer attempt");
           this.status = "authenticated";
           this.failure = undefined;
+          if (capturedUsage) {
+            this.usage = capturedUsage;
+          }
           return createAgyBridgeCredential();
         } catch (error) {
           if (generation === this.generation) this.recordFailure(error);
@@ -137,11 +147,19 @@ export class AgyAuthentication {
     try {
       signal.throwIfAborted();
       if (this.loggingIn) throw new Error("Antigravity CLI status check was replaced by a newer attempt");
-      const authenticated = await probeAgyAuthentication(this.agyPath, signal);
+      let capturedUsage: AgyUsage | undefined;
+      const authenticated = await probeAgyAuthentication(
+        this.agyPath,
+        signal,
+        (usage) => { capturedUsage = usage; }
+      );
       signal.throwIfAborted();
       if (generation !== this.generation || this.loggingIn) throw new Error("Antigravity CLI status check was replaced by a newer attempt");
       this.status = authenticated ? "authenticated" : "unauthenticated";
       this.failure = undefined;
+      if (authenticated && capturedUsage) {
+        this.usage = capturedUsage;
+      }
       return authenticated ? createAgyBridgeCredential() : undefined;
     } catch (error) {
       if (generation === this.generation) this.recordFailure(error);

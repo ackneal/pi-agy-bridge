@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { readPluginManifest, resolveMcpEntrypoint } from "../discovery/plugin-install.ts";
-import { DEFAULT_MIN_AGY_VERSION, resolveAgyExecutable, validateAgyVersion } from "../runtime/version.ts";
+import { formatDoctorQuotaLines, type AgyUsage } from "../runtime/usage.ts";
+import { resolveAgyExecutable, validateAgyVersion } from "../runtime/version.ts";
 
 export interface DoctorFailure {
   time: string;
@@ -10,7 +11,6 @@ export interface DoctorFailure {
 }
 export interface DoctorOptions {
   agyPath?: string | undefined;
-  minVersion?: string | undefined;
   pluginDir: string;
   models?: readonly unknown[] | undefined;
   catalogModels?: readonly unknown[] | undefined;
@@ -18,6 +18,8 @@ export interface DoctorOptions {
   discoveryError?: DoctorFailure | undefined;
   authStatus?: "authenticated" | "unauthenticated" | "unknown" | undefined;
   authError?: DoctorFailure | undefined;
+  usage?: AgyUsage | undefined;
+  usageError?: DoctorFailure | undefined;
 }
 
 function message(error: unknown): string {
@@ -26,62 +28,90 @@ function message(error: unknown): string {
 
 /** Read-only checks; the only subprocess is Antigravity CLI --version. */
 export async function collectDoctorReport(options: DoctorOptions): Promise<string> {
-  const lines: string[] = ["agy-bridge doctor (read-only)"];
+  const lines: string[] = ["agy-bridge doctor", "", "Runtime"];
   try {
     const executable = resolveAgyExecutable(options.agyPath);
-    lines.push(`Resolved Antigravity CLI path: ${executable}`);
-    const minimum = options.minVersion ?? DEFAULT_MIN_AGY_VERSION;
-    const { version } = await validateAgyVersion(executable, minimum);
-    lines.push(`✓ Antigravity CLI ${version} (minimum ${minimum})`);
+    try {
+      const { version } = await validateAgyVersion(executable);
+      lines.push(`  ✓ Antigravity CLI ${version}`);
+    } catch (error) {
+      lines.push(`  ✗ Antigravity CLI error (${executable}): ${message(error)}`);
+    }
   } catch (error) {
-    lines.push(`✗ Antigravity CLI error: ${message(error)}`);
+    lines.push(`  ✗ Antigravity CLI error: ${message(error)}`);
   }
 
   try {
     const source = await readPluginManifest(path.join(path.resolve(options.pluginDir), "plugin.json"));
     if (!source) throw new Error(`Bundled plugin manifest not found: ${options.pluginDir}`);
     const target = path.join(os.homedir(), ".gemini", "config", "plugins", source.name);
-    lines.push(`Plugin: ${source.name}; target: ${target}`);
     const installed = await readPluginManifest(path.join(target, "plugin.json"));
     if (!installed) {
-      lines.push(`! Plugin not installed (bundled ${source.version})`, "Will install automatically on next Antigravity CLI use.");
+      lines.push(
+        `  ! Plugin ${source.name} not installed (bundled ${source.version}) — ${target}`,
+        "    Will install automatically on next Antigravity CLI use."
+      );
     } else if (installed.version === source.version) {
-      lines.push(`✓ Plugin installed ${installed.version} (bundled ${source.version})`);
+      lines.push(`  ✓ Plugin ${installed.version}`);
     } else {
-      lines.push(`! Plugin installed ${installed.version} -> bundled ${source.version}`, "Will update automatically on next Antigravity CLI use.");
+      lines.push(
+        `  ! Plugin ${source.name} ${installed.version} -> bundled ${source.version} — ${target}`,
+        "    Will update automatically on next Antigravity CLI use."
+      );
     }
   } catch (error) {
-    lines.push(`✗ Plugin error: ${message(error)}`);
+    lines.push(`  ✗ Plugin error: ${message(error)}`);
   }
 
-  if (options.models !== undefined) {
-    lines.push(`${options.models.length > 0 ? "✓" : "!"} Models: ${options.models.length} configured`);
-  } else {
-    const count = options.catalogModels?.length ?? 0;
-    lines.push(`${count > 0 ? "✓" : "!"} Models: ${count} cached (Pi models-store)`);
-  }
-
-  const authStatus = options.authStatus ?? "unknown";
-  lines.push(`Authentication snapshot: ${authStatus}${authStatus === "unknown" ? " (not verified)" : ""}`);
-
-  lines.push(`Node version: ${process.version}`);
   try {
     const { nodePath, entrypointPath } = resolveMcpEntrypoint();
-    for (const [label, file] of [["Node executable", nodePath], ["MCP entrypoint", entrypointPath]] as const) {
+    for (const [label, file] of [
+      [`Node ${process.version}`, nodePath],
+      ["MCP entrypoint", entrypointPath],
+    ] as const) {
       try {
         await fs.access(file);
-        lines.push(`✓ ${label} exists: ${file} (existence only; spawning not tested)`);
+        lines.push(`  ✓ ${label}${label === "MCP entrypoint" ? " found" : ""}`);
       } catch (error) {
-        lines.push(`✗ ${label} error: ${file}: ${message(error)}`);
+        lines.push(`  ✗ ${label} error (${file}): ${message(error)}`);
       }
     }
   } catch (error) {
-    lines.push(`✗ MCP error: ${message(error)}`);
+    lines.push(`  ✗ MCP error: ${message(error)}`);
   }
-  if (process.platform === "win32") lines.push("! Windows: Unix socket support is not verified.");
-  for (const [label, failure] of [["plugin", options.pluginError], ["discovery", options.discoveryError], ["authentication", options.authError]] as const) {
-    if (failure) lines.push(`Last ${label} error at ${failure.time}: ${failure.message}`);
+
+  if (options.models !== undefined) {
+    lines.push(`  ${options.models.length > 0 ? "✓" : "!"} Models: ${options.models.length} configured`);
+  } else {
+    const count = options.catalogModels?.length ?? 0;
+    lines.push(`  ${count > 0 ? "✓" : "!"} Models: ${count} cached`);
   }
-  lines.push("Authentication is a last-known snapshot; live authentication is not tested. Model execution and Unix socket creation not tested.");
+
+  const authStatus = options.authStatus === "unknown" || options.authStatus === undefined
+    ? (options.usage ? "authenticated" : "unknown")
+    : options.authStatus;
+  const authMark = authStatus === "authenticated" ? "✓" : "!";
+  lines.push(`  ${authMark} Auth: ${authStatus}`);
+
+  if (process.platform === "win32") {
+    lines.push("  ! Windows: Unix socket support is not verified.");
+  }
+
+  lines.push(...formatDoctorQuotaLines(options.usage));
+
+  const failures = [
+    ["plugin", options.pluginError],
+    ["discovery", options.discoveryError],
+    ["authentication", options.authError],
+    ["usage", options.usageError],
+  ] as const;
+  const activeFailures = failures.filter((entry): entry is [typeof entry[0], DoctorFailure] => entry[1] !== undefined);
+  if (activeFailures.length > 0) {
+    lines.push("", "Errors");
+    for (const [label, failure] of activeFailures) {
+      lines.push(`  ! ${label} (${failure.time}): ${failure.message}`);
+    }
+  }
+
   return lines.join("\n");
 }

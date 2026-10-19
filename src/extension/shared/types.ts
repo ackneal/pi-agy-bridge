@@ -121,7 +121,6 @@ export interface AgyBridgeConfig {
   agyPath?: string;
   /** Pi credential path for startup auto-configuration. Defaults to getAgentDir()/auth.json. */
   authPath?: string;
-  minVersion?: string;
   agentName?: string;
   /** @deprecated Use pluginDir. */
   agentDir?: string;

@@ -647,7 +647,7 @@ describe("AgyEventAdapter", () => {
     assert.equal(done.message.content[0].name, "read");
   });
 
-  it("accumulates step usage while preserving the latest context and final cache statistics", async () => {
+  it("keeps the latest step usage when final usage is also present", async () => {
     const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
     adapter.handleEvent({
       event: "step_update",
@@ -710,6 +710,7 @@ describe("AgyEventAdapter", () => {
     assert.equal(doneEvent.reason, "stop");
     assert.equal(doneEvent.message.usage.input, 7741);
     assert.equal(doneEvent.message.usage.cacheRead, 0);
+    assert.equal(doneEvent.message.usage.reasoning, 610);
     assert.equal(doneEvent.message.usage.totalTokens, 9025);
   });
 
