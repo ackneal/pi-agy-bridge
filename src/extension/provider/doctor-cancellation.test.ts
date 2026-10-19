@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { promisify } from "node:util";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Provider } from "@earendil-works/pi-ai";
 
 test("doctor suppresses reports after shutdown at each await boundary", async (t) => {
   let execute: (args: readonly string[], signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
@@ -103,5 +104,92 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
         : [["--output-format", "json", "--print", "/usage"], ["--version"]]);
       assert.equal(sendMessage.mock.callCount(), 0);
     });
+  }
+});
+
+test("doctor starts a fresh query after login while the cancelled query is still closing", async (t) => {
+  const { AgyBridge } = await import("./provider.ts");
+  const controller = new AbortController();
+  const pending: Promise<unknown>[] = [];
+  const children: ReturnType<typeof createChild>[] = [];
+  function createChild(pid: number) {
+    return Object.assign(new EventEmitter(), {
+      pid,
+      stdout: new PassThrough(), stderr: new PassThrough(), closed: false,
+    });
+  }
+  const close = (child: typeof children[number], quota?: string) => {
+    if (child.closed) return;
+    if (quota) child.stdout.write(`Claude  Five hour  ${quota}%`);
+    child.closed = true;
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("exit", quota ? 0 : null, quota ? null : "SIGKILL");
+    child.emit("close", quota ? 0 : null, quota ? null : "SIGKILL");
+  };
+  t.after(async () => {
+    controller.abort();
+    for (const child of children) close(child);
+    await Promise.allSettled(pending);
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  let loginQueryStarted!: () => void;
+  const loginQuery = new Promise<void>((resolve) => { loginQueryStarted = resolve; });
+  t.mock.method(cp, "spawn", () => {
+    const child = createChild(123456 + children.length);
+    children.push(child);
+    if (children.length === 2) loginQueryStarted();
+    return child;
+  });
+  const killed: number[] = [];
+  t.mock.method(process, "kill", (pid: number) => {
+    killed.push(pid);
+    return true;
+  });
+  const exec = Object.assign(() => {}, {
+    [promisify.custom]: async () => ({ stdout: "agy 1.0.0", stderr: "" }),
+  });
+  t.mock.method(cp, "execFile", exec as unknown as typeof cp.execFile);
+  syncBuiltinESMExports();
+  let doctor!: () => Promise<void>;
+  let provider!: Provider;
+  const sendMessage = t.mock.fn();
+  const bridge = new AgyBridge({
+    registerCommand: (_name: string, command: { handler: () => Promise<void> }) => { doctor = command.handler; },
+    registerProvider: (registered: Provider) => { provider = registered; },
+    on: () => {}, sendMessage,
+  } as unknown as ExtensionAPI, { models: [], agyPath: "/fake/agy", pluginDir: "/missing/doctor-plugin" });
+  bridge.start();
+
+  const oldDoctor = doctor();
+  pending.push(oldDoctor);
+  const login = Promise.resolve(provider.auth.oauth!.login({
+    signal: controller.signal,
+    notify: () => {},
+    prompt: async () => { assert.fail("cached login must not prompt"); },
+  }));
+  pending.push(login);
+  await loginQuery;
+  assert.ok(killed.includes(-children[0]!.pid), "login must cancel the old query");
+  assert.equal(children[0]!.closed, false, "cancelled query has not finished closing");
+  close(children[1]!, "10");
+  await login;
+
+  const freshDoctor = doctor();
+  pending.push(freshDoctor);
+  assert.equal(children.length, 3, "new doctor must launch its own query");
+  close(children[0]!);
+  await oldDoctor;
+  assert.equal(sendMessage.mock.callCount(), 0, "cancelled doctor must not publish");
+  const joinedDoctor = doctor();
+  pending.push(joinedDoctor);
+  assert.equal(children.length, 3, "old cleanup must not discard the new shared query");
+  close(children[2]!, "75");
+  await Promise.all([freshDoctor, joinedDoctor]);
+
+  assert.equal(sendMessage.mock.callCount(), 2);
+  for (const call of sendMessage.mock.calls) {
+    assert.match((call.arguments[0] as { content: string }).content, /5h 75%/);
   }
 });

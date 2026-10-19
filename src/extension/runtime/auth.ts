@@ -12,9 +12,8 @@ const maxBytes = 64 * 1024;
 function runAuthentication(
   path: string | undefined,
   signal: AbortSignal | undefined,
-  interaction: ProviderAuthInteraction,
-  onUsage?: (usage: AgyUsage) => void
-): Promise<void> {
+  interaction: ProviderAuthInteraction
+): Promise<AgyUsage | undefined> {
   if (signal?.aborted) return Promise.reject(new Error("Antigravity CLI authentication was cancelled"));
   const executable = resolveAgyExecutable(path);
 
@@ -137,8 +136,7 @@ function runAuthentication(
       const usage = parseAgyUsageOutput(report);
       const hasQuota = usage !== undefined || report.includes("Quota") || report.includes("Limit Remaining");
       if (code === 0 && exitSignal === null && hasQuota) {
-        if (usage) onUsage?.(usage);
-        resolve();
+        resolve(usage);
         return;
       }
 
@@ -184,5 +182,6 @@ export async function loginAgyAuthentication(
   onUsage?: (usage: AgyUsage) => void
 ): Promise<void> {
   if (await probeAgyAuthentication(agyPath, interaction.signal, onUsage)) return;
-  await runAuthentication(agyPath, interaction.signal, interaction, onUsage);
+  const usage = await runAuthentication(agyPath, interaction.signal, interaction);
+  if (usage) onUsage?.(usage);
 }

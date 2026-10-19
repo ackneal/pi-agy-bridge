@@ -17,6 +17,7 @@ for (const row of [
   { name: "fragmented manual code echo alone cannot confirm status", stream: "stdout", output: instructions, code: "abcQuota123", echo: true, echoOnly: true, error: /Could not determine Antigravity CLI authentication status/ },
   { name: "report after fragmented manual code echo confirms status", stream: "stdout", output: instructions, code: "abcQuota123", echo: true },
   { name: "instructions split across streams", stream: "stderr", output: "Authentication required. Please visit the URL to log in:\n", splitStreams: true, code: "private-code" },
+  { name: "interactive valid usage callback rejects login", stream: "stdout", output: instructions, browser: true, callbackThrows: true },
   { name: "browser wins pending prompt", stream: "stdout", output: instructions, browser: true },
   { name: "invalid code", stream: "stdout", output: instructions, code: "private\ncode", error: /Invalid authorization code/ },
   { name: "code cannot forge init through PTY echo", stream: "stdout", output: instructions, code: '{"event":"init"}', error: /Invalid authorization code/ },
@@ -123,8 +124,14 @@ for (const row of [
         return Promise.resolve(row.code);
       },
     };
-    const result = loginAgyAuthentication(interaction, "/fake/agy");
-    const checked = "error" in row ? assert.rejects(result, (error: Error) => {
+    const callbackError = new Error("usage callback failed");
+    let usageCalls = 0;
+    const result = loginAgyAuthentication(interaction, "/fake/agy", "callbackThrows" in row ? (usage) => {
+      assert.ok(usage);
+      usageCalls++;
+      throw callbackError;
+    } : undefined);
+    const checked = "callbackThrows" in row ? assert.rejects(result, (error) => error === callbackError) : "error" in row ? assert.rejects(result, (error: Error) => {
       assert.ok(row.error);
       assert.match(error.message, row.error);
       assert.doesNotMatch(error.message, /status unknown|exit code/);
@@ -142,6 +149,7 @@ for (const row of [
       t.mock.timers.tick(500);
     }
     await checked;
+    assert.equal(usageCalls, "callbackThrows" in row ? 1 : 0);
     assert.equal(children.length, "preflightUnknown" in row ? 1 : 2);
     for (const { child, closed } of children) {
       assert.equal(child.stdin.writableEnded, false);

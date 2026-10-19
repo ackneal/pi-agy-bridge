@@ -480,6 +480,7 @@ export class AgyBridge {
     this.config = config;
     this.authentication = new AgyAuthentication(config?.agyPath, async () => {
       this.runtimeLifetime.abort(new Error("Antigravity CLI login changed the bridge session"));
+      this.usageRefresh = undefined;
       await this.liveSessions.disposeAll();
       for (const sessionId of this.sessionIds) {
         if (this.piContextAdapter.getSessionManager(sessionId)) {
