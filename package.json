@@ -1,6 +1,6 @@
 {
   "name": "@ackneal/pi-agy-bridge",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Use Antigravity CLI models in Pi while keeping your existing tools and extensions.",
   "keywords": [
     "pi-package",
