@@ -62,7 +62,7 @@ const context: Context = {
 
 const historyHeading = "# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations.";
 const call = (id: string, path: string): AssistantMessage => ({ ...assistantMetadata, role: "assistant", content: [{ type: "toolCall", id, name: "read", arguments: { path } }], stopReason: "toolUse", timestamp: 1 });
-const result = (id: string, body: string, isError = false): Context["messages"][number] => ({ role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text: body }], isError, timestamp: 2 });
+const result = (id: string, body: string, isError = false): Extract<Context["messages"][number], { role: "toolResult" }> => ({ role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text: body }], isError, timestamp: 2 });
 const completed: AssistantMessage = { ...assistantMetadata, role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop", timestamp: 3 };
 
 describe("formatContextPrompt reconstruction", () => {
@@ -114,6 +114,71 @@ describe("formatContextPrompt reconstruction", () => {
         assert.equal(prompt.includes("SECRET_ONE"), !removed && !old);
       });
     }
+  }
+
+  for (const { name, messages, calls, results, kept, removed } of [
+    {
+      name: "generated read before ID reuse in a later run",
+      messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"), result("shared", "TEMP_BODY"), completed,
+        call("shared", "README.md"), result("shared", "REAL_BODY")],
+      calls: 1, results: 1, kept: ["README.md", "REAL_BODY"], removed: ["TEMP_BODY", ".system_generated"],
+    },
+    {
+      name: "generated read after ID reuse in the same run",
+      messages: [call("shared", "README.md"), result("shared", "REAL_BODY"),
+        call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"), result("shared", "TEMP_BODY")],
+      calls: 1, results: 1, kept: ["README.md", "REAL_BODY"], removed: ["TEMP_BODY", ".system_generated"],
+    },
+    {
+      name: "ambiguous duplicate IDs in one assistant batch are retained",
+      messages: [{ ...call("shared", "README.md"), content: [
+        ...call("shared", "README.md").content,
+        ...call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt").content,
+      ] }, result("shared", "REAL_BODY"), result("shared", "TEMP_BODY")],
+      calls: 2, results: 2, kept: ["README.md", "REAL_BODY", "TEMP_BODY"], removed: [],
+    },
+    {
+      name: "only one corresponding result is removed",
+      messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"),
+        result("shared", "TEMP_BODY"), result("shared", "UNPAIRED_BODY")],
+      calls: 0, results: 1, kept: ["UNPAIRED_BODY"], removed: ["TEMP_BODY", ".system_generated"],
+    },
+    {
+      name: "a new assistant message closes the previous batch",
+      messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"), completed,
+        result("shared", "UNPAIRED_BODY")],
+      calls: 0, results: 1, kept: ["UNPAIRED_BODY"], removed: [".system_generated"],
+    },
+    {
+      name: "a result from a different tool with the same ID is retained",
+      messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"),
+        { ...result("shared", "BASH_BODY"), toolName: "bash" }, result("shared", "TEMP_BODY")],
+      calls: 0, results: 0, kept: ["BASH_BODY", "## Tool result: bash (id: shared,"], removed: ["TEMP_BODY", ".system_generated"],
+    },
+    {
+      name: "user and system updates do not break the current tool batch",
+      messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"),
+        { role: "user", content: "Keep this update", timestamp: 4 } as Context["messages"][number],
+        { role: "system", content: "Keep this rule", timestamp: 5 } as Context["messages"][number], result("shared", "TEMP_BODY")],
+      calls: 0, results: 0, kept: ["Keep this update", "Keep this rule"], removed: ["TEMP_BODY", ".system_generated"],
+    },
+    {
+      name: "a result preceding the generated read is retained",
+      messages: [result("shared", "EARLIER_BODY"),
+        call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"), result("shared", "TEMP_BODY")],
+      calls: 0, results: 1, kept: ["EARLIER_BODY"], removed: ["TEMP_BODY", ".system_generated"],
+    },
+  ]) {
+    it(`scopes generated-read filtering: ${name}`, () => {
+      const before = structuredClone(messages);
+      const prompt = formatContextPrompt({ messages }, false);
+
+      assert.equal(prompt.match(/### Tool call: read \(id: shared\)/g)?.length ?? 0, calls);
+      assert.equal(prompt.match(/## Tool result: read \(id: shared,/g)?.length ?? 0, results);
+      for (const value of kept) assert.ok(prompt.includes(value), value);
+      for (const value of removed) assert.ok(!prompt.includes(value), value);
+      assert.deepEqual(messages, before);
+    });
   }
 
   for (const { name, body, count, capped } of [

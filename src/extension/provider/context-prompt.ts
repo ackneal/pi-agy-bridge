@@ -70,20 +70,24 @@ function render(message: Message, body = text(message)): string {
 
 function filterHistory(messages: readonly Message[]): Message[] {
   const removed = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
+  return messages.flatMap((message): Message[] => {
+    if (message.role === "toolResult" && message.toolName === "read" && removed.delete(message.toolCallId)) return [];
+    if (message.role !== "assistant") return [message];
+
+    // IDs can recur in later batches. Ambiguous IDs within a batch stay intact.
+    removed.clear();
+    const counts = new Map<string, number>();
     for (const block of message.content) {
-      if (block.type !== "toolCall" || block.name !== "read") continue;
+      if (block.type === "toolCall") counts.set(block.id, (counts.get(block.id) ?? 0) + 1);
+    }
+    for (const block of message.content) {
+      if (block.type !== "toolCall" || block.name !== "read" || counts.get(block.id) !== 1) continue;
       const file = block.arguments.path;
       if (typeof file !== "string" || file.includes("\0")) continue;
       const normalized = path.posix.normalize(file.replaceAll("\\", "/"));
       if (/(?:^|\/)\.gemini\/antigravity-cli\/brain\/[^/]+\/\.system_generated\//.test(normalized)) removed.add(block.id);
     }
-  }
 
-  return messages.flatMap((message): Message[] => {
-    if (message.role === "toolResult" && removed.has(message.toolCallId)) return [];
-    if (message.role !== "assistant") return [message];
     const content = message.content.filter((block) => block.type !== "thinking" && !(block.type === "toolCall" && removed.has(block.id)));
     if (!content.length && !message.errorMessage) return [];
     return [{ ...message, content }];
