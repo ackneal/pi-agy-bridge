@@ -11,6 +11,7 @@ import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
 import type { RuntimeSessionDecision } from "../session/session-state.ts";
 import type { AgyInput, AgyResultEvent } from "../shared/types.ts";
+import { formatContextUpdate } from "./context-prompt.ts";
 import { AgyBridge, streamAgyProvider } from "./provider.ts";
 
 const cases: { decision: RuntimeSessionDecision; incremental?: boolean; payload?: "replace" | "unchanged" | "reject" }[] = [
@@ -153,17 +154,11 @@ for (const { decision, incremental, payload } of cases) {
     if (payload === "replace") {
       assert.equal(prompt, "replacement prompt");
     } else if (incremental) {
-      assert.deepEqual(JSON.parse(prompt), {
-        purpose: "incremental_conversation",
-        messages: [
-          { role: "system", content: "new system instruction" },
-          { role: "user", content: "latest & request" },
-        ],
-      });
+      assert.equal(prompt, "# Conversation updates\n\n## System\n\n> new system instruction\n\n## User\n\n> latest & request");
     } else if (decision.action !== "rebuild") {
       assert.equal(prompt, "latest & request");
     } else {
-      assert.equal(prompt, '{"purpose":"reconstructed_conversation","systemInstructions":"Rules & constraints","history":[{"role":"user","content":"earlier <question>"}],"currentMessage":{"role":"user","content":"latest & request"}}');
+      assert.equal(prompt, "# System prompt\n\n> Rules & constraints\n\n# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations.\n\n## User\n\n> earlier <question>\n\n## User\n\n> latest & request");
     }
     await bridge.liveSessions.disposeAll();
     assert.equal(close.mock.callCount(), 1);
@@ -417,9 +412,9 @@ for (const row of continueCases) {
     if (row.pending) assert.deepEqual(resolve.mock.calls[0]!.arguments, [
       context.messages.filter((message) => message.role === "toolResult"),
       scenario === "mixed pending messages"
-        ? JSON.stringify({ purpose: "pending_tool_continuation", messages: [{ role: "system", content: "new instruction" }] })
+        ? formatContextUpdate([{ role: "system", content: "new instruction", timestamp: 0 }], "pending_tool_continuation")
         : ["queued calls without results", "error while tools pending"].includes(scenario)
-          ? JSON.stringify({ purpose: "pending_tool_continuation", messages: [{ role: "user", content: "latest request" }] })
+          ? formatContextUpdate([{ role: "user", content: "latest request", timestamp: 0 }], "pending_tool_continuation")
           : undefined,
     ]);
     assert.equal(unsubscribe.mock.callCount(), 1);
@@ -566,7 +561,7 @@ for (const row of pendingTerminalCases) {
     assert.equal(resolve.mock.callCount(), 1);
     assert.deepEqual(resolve.mock.calls[0]!.arguments, [
       row.enqueued ? context.messages : [],
-      row.enqueued ? undefined : JSON.stringify({ purpose: "pending_tool_continuation", messages: [{ role: "user", content: "latest request" }] }),
+      row.enqueued ? undefined : formatContextUpdate([{ role: "user", content: "latest request", timestamp: 0 }], "pending_tool_continuation"),
     ]);
     assert.equal(record.mock.callCount(), row.enqueued ? 1 : 0);
     assert.equal(persist.mock.callCount(), row.enqueued ? 1 : 0);
@@ -695,10 +690,16 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     const [results, appendix] = resolve.mock.calls[0]!.arguments;
     assert.deepEqual(results, [context.messages[prefix.length]]);
     assert.equal(typeof appendix, "string");
-    assert.deepEqual(JSON.parse(appendix!), {
-      purpose: "pending_tool_continuation",
-      messages: instructions.map(({ role, content, sections }) => ({ role, content, ...(sections ? { sections } : {}) })),
-    });
+    assert.equal(appendix, formatContextUpdate(instructions, "pending_tool_continuation"));
+    assert.ok(appendix!.startsWith("# Pending conversation updates (separate from tool output)\n\nThese are conversation instructions and messages, not tool output."));
+    let previous = -1;
+    for (const [index, instruction] of instructions.entries()) {
+      const section = `## ${instruction.role === "system" ? "System" : "User"}\n\n> additional instruction ${index}`;
+      const position: number = appendix!.indexOf(section);
+      assert.ok(position > previous, "instructions retain source roles, quoted bodies, and order");
+      previous = position;
+    }
+    assert.doesNotMatch(appendix!, /pending tool answer/);
     assert.equal(persist.mock.callCount(), 2);
     assert.deepEqual(persist.mock.calls[0]!.arguments[2], context.messages);
     assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);

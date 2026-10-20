@@ -4,7 +4,6 @@ import type {
   AnyModel,
   AssistantMessageEventStream,
   Context,
-  Message,
   Model,
   SimpleStreamOptions,
   Tool,
@@ -31,117 +30,9 @@ import type { AgyBridgeConfig } from "../shared/types.ts";
 import { collectDoctorReport, type DoctorFailure } from "./doctor.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
+import { formatContextPrompt, formatContextUpdate } from "./context-prompt.ts";
 
-function formatMessageText(message: Message): string {
-  if (typeof message.content === "string") return message.content;
-
-  return message.content
-    .map((block) => {
-      if (block.type === "text") return block.text;
-      if (block.type === "image") return `[Image: ${block.mimeType}]`;
-      if (block.type === "toolCall") {
-        return `[Tool Call: ${block.name}(${JSON.stringify(block.arguments)})]`;
-      }
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-export function formatContextPrompt(context: Context, isReused: boolean, syncedMessageCount?: number): string {
-  const currentMessage = context.messages.at(-1);
-  if (isReused) {
-    const messages = context.messages.slice(syncedMessageCount ?? Math.max(0, context.messages.length - 1));
-    if (messages.length === 0) return "";
-    const message = messages[0]!;
-    if (messages.length === 1 && message.role === "user" &&
-        (typeof message.content === "string" || message.content.every((block) => block.type === "text"))) {
-      return formatMessageText(message);
-    }
-    return formatContextUpdate(messages, "incremental_conversation");
-  }
-
-  const latestRunStart = findLatestRunStart(context.messages);
-  const history = context.messages.slice(0, -1)
-    .map((message, index) => index < latestRunStart && message.role === "toolResult"
-      ? formatOmittedToolResult(message)
-      : formatJsonMessage(message));
-  const reconstructedContext: Record<string, unknown> = {
-    purpose: "reconstructed_conversation",
-    ...(context.systemPrompt ? { systemInstructions: context.systemPrompt } : {}),
-    history,
-    ...(currentMessage ? { currentMessage: formatJsonMessage(currentMessage) } : {}),
-  };
-
-  return JSON.stringify(reconstructedContext);
-}
-
-function formatContextUpdate(
-  messages: readonly Message[],
-  purpose: "incremental_conversation" | "pending_tool_continuation",
-): string {
-  return JSON.stringify({ purpose, messages: messages.map(formatJsonMessage) });
-}
-
-function findLatestRunStart(messages: Message[]): number {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (message?.role === "assistant" && message.stopReason !== "toolUse") return index + 1;
-  }
-  return 0;
-}
-
-function formatOmittedToolResult(message: Extract<Message, { role: "toolResult" }>): Record<string, unknown> {
-  return {
-    role: message.role,
-    toolCallId: message.toolCallId,
-    toolName: message.toolName,
-    isError: message.isError,
-    contentOmitted: true,
-  };
-}
-
-function formatJsonMessage(message: Message): Record<string, unknown> {
-  const formatted: Record<string, unknown> = {
-    role: message.role,
-    content: formatJsonContent(message),
-  };
-  if (message.role === "toolResult") {
-    formatted.toolCallId = message.toolCallId;
-    formatted.toolName = message.toolName;
-    formatted.isError = message.isError;
-  }
-  if (message.role === "assistant") {
-    formatted.stopReason = message.stopReason;
-    if (message.errorMessage !== undefined) formatted.errorMessage = message.errorMessage;
-  }
-  if (message.role === "system" && message.sections && Object.keys(message.sections).length > 0) {
-    formatted.sections = message.sections;
-  }
-  return formatted;
-}
-
-function formatJsonContent(message: Message): unknown {
-  if (typeof message.content === "string") return message.content;
-
-  const content: unknown[] = [];
-  for (const block of message.content) {
-    if (block.type === "text") {
-      content.push({ type: "text", text: block.text });
-    } else if (block.type === "image") {
-      content.push({ type: "image", mimeType: block.mimeType, data: block.data });
-    } else if (block.type === "toolCall") {
-      content.push({
-        type: "toolCall",
-        id: block.id,
-        name: block.name,
-        ...(block.namespace !== undefined ? { namespace: block.namespace } : {}),
-        arguments: block.arguments,
-      });
-    }
-  }
-  return content;
-}
+export { formatContextPrompt, formatContextUpdate } from "./context-prompt.ts";
 
 export function resolveModelAndEffort(
   modelId: string,
