@@ -1,4 +1,5 @@
 import path from "node:path";
+import { debugLog, isDebugEnabled } from "../shared/debug.ts";
 import type { Context, Message } from "@earendil-works/pi-ai";
 
 // Character budgets apply only to reconstructed result bodies, never live delivery.
@@ -32,23 +33,46 @@ function limit(text: string, size: number): string {
   return quote(text.slice(0, low) + marker);
 }
 
+function imageNotices(message: Extract<Message, { role: "toolResult" }>): string[] {
+  return message.content.flatMap((block) => block.type === "image"
+    ? [`[Image omitted from reconstructed history: ${block.mimeType}; content unavailable]`] : []);
+}
+
+function minimumResultBody(message: Extract<Message, { role: "toolResult" }>): number {
+  const notices = imageNotices(message);
+  if (!notices.length) return quote(OMITTED_BODY).length;
+  const hasText = message.content.some((block) => block.type === "text" && block.text);
+  return quote(notices.join("\n")).length + (hasText ? 1 + quote(OMITTED_BODY).length : 0);
+}
+
+function budgetResult(message: Extract<Message, { role: "toolResult" }>, size: number): string {
+  const full = text(message);
+  if (full.length <= size) return full;
+  const notices = imageNotices(message);
+  if (!notices.length || minimumResultBody(message) > size) return limit(resultBody(message), size);
+
+  const images = quote(notices.join("\n"));
+  const body = message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
+  return body ? `${limit(body, size - images.length - 1)}\n${images}` : images;
+}
+
 function resultBody(message: Extract<Message, { role: "toolResult" }>): string {
   return message.content.flatMap((block) => {
     if (block.type === "text") return [block.text];
-    if (block.type === "image") return [`![Image](data:${block.mimeType};base64,${block.data})`];
+    if (block.type === "image") return [`[Image omitted from reconstructed history: ${block.mimeType}; content unavailable]`];
     return [];
   }).join("\n");
 }
 
-function text(message: Message, old = false): string {
+function text(message: Message): string {
   if (message.role === "toolResult") return quote(resultBody(message));
   if (typeof message.content === "string") return quote(message.content);
   return message.content.map((block) => {
     if (block.type === "text") return quote(block.text);
-    if (block.type === "image") return quote(`![Image](data:${block.mimeType};base64,${block.data})`);
+    if (block.type === "image") return quote(`[Image omitted from reconstructed history: ${block.mimeType}; content unavailable]`);
     if (block.type === "toolCall") {
       const args = JSON.stringify(block.arguments);
-      return `### Tool call: ${metadata(block.name)} (id: ${metadata(block.id)}${block.namespace ? `, namespace: ${metadata(block.namespace)}` : ""})\n\n${old ? limit(args, OLD_CALL_ARGUMENT_LIMIT) : quote(args)}`;
+      return `### Tool call: ${metadata(block.name)} (id: ${metadata(block.id)}${block.namespace ? `, namespace: ${metadata(block.namespace)}` : ""})\n\n${quote(args)}`;
     }
     return "";
   }).filter(Boolean).join("\n");
@@ -56,7 +80,10 @@ function text(message: Message, old = false): string {
 
 function render(message: Message, body = text(message)): string {
   if (message.role === "toolResult") {
-    return `## Tool result: ${metadata(message.toolName)} (id: ${metadata(message.toolCallId)}, status: ${message.isError ? "error" : "success"}${!body && text(message) ? ", body omitted" : ""})\n\n${body}`;
+    // If the body budget cannot fit an image notice, retain it as result metadata.
+    const missingImages = [...new Set(imageNotices(message).filter((notice) => !body.includes(quote(notice))))];
+    const imageMetadata = missingImages.length ? `, ${missingImages.map(metadata).join(" ")}` : "";
+    return `## Tool result: ${metadata(message.toolName)} (id: ${metadata(message.toolCallId)}, status: ${message.isError ? "error" : "success"}${!body && text(message) ? ", body omitted" : ""}${imageMetadata})\n\n${body}`;
   }
   if (message.role === "system") {
     const sections = Object.entries(message.sections ?? {}).map(([name, value]) =>
@@ -81,7 +108,7 @@ function filterHistory(messages: readonly Message[]): Message[] {
       if (block.type === "toolCall") counts.set(block.id, (counts.get(block.id) ?? 0) + 1);
     }
     for (const block of message.content) {
-      if (block.type !== "toolCall" || block.name !== "read" || counts.get(block.id) !== 1) continue;
+      if (block.type !== "toolCall" || block.name !== "read" || !block.id.trim() || counts.get(block.id) !== 1) continue;
       const file = block.arguments.path;
       if (typeof file !== "string" || file.includes("\0")) continue;
       const normalized = path.posix.normalize(file.replaceAll("\\", "/"));
@@ -89,9 +116,110 @@ function filterHistory(messages: readonly Message[]): Message[] {
     }
 
     const content = message.content.filter((block) => block.type !== "thinking" && !(block.type === "toolCall" && removed.has(block.id)));
-    if (!content.length && !message.errorMessage) return [];
+    // Keep even hidden assistant boundaries for subsequent call/result pairing.
     return [{ ...message, content }];
   });
+}
+
+type ToolResult = Extract<Message, { role: "toolResult" }>;
+type ToolCall = Extract<Extract<Message, { role: "assistant" }>["content"][number], { type: "toolCall" }>;
+
+function endsRun(message: Message): boolean {
+  return message.role === "assistant" && ["stop", "length", "error", "aborted"].includes(message.stopReason);
+}
+
+function operationArguments(call: ToolCall): string {
+  const value = ["read", "edit", "write"].includes(call.name) ? call.arguments.path
+    : call.name === "bash" ? call.arguments.command : JSON.stringify(call.arguments);
+  return typeof value === "string" ? value : "Arguments unavailable";
+}
+
+function errorReason(message: ToolResult): string | undefined {
+  if (!message.isError) return undefined;
+  const blocks = message.content.filter((block) => block.type === "text");
+  const last = blocks.at(-1)?.text.trimEnd().slice(-512).split(/\r\n?|[\n\u0085\u2028\u2029]/).at(-1)?.trim();
+  // Pi's bash tool appends these execution diagnostics after arbitrary stdout.
+  if (message.toolName === "bash" && last && /^(?:Command aborted|Command exited with code -?\d+|Command timed out after [\d.]+ seconds|Command terminated without an exit code)$/.test(last)) return last;
+  const first = blocks.flatMap((block) => block.text.slice(0, 512).split(/\r\n?|[\n\u0085\u2028\u2029]/))
+    .find((line) => line.trim());
+  if (!first || /^\s*\[(?:Body omitted|Truncated:)/.test(first)) return undefined;
+  return first.length > 200 ? `${first.slice(0, 199)}…` : first;
+}
+
+function executionStatus(message: ToolResult): "SUCCESS" | "ERROR" | "ABORTED" {
+  if (!message.isError) return "SUCCESS";
+  const blocks = message.content.filter((block) => block.type === "text");
+  const operationAborted = blocks.length === 1 && blocks[0]!.text.trim() === "Operation aborted";
+  return operationAborted || message.toolName === "bash" && errorReason(message) === "Command aborted" ? "ABORTED" : "ERROR";
+}
+
+function completedHistory(messages: readonly Message[]): string[] {
+  const output: string[] = [];
+  let group: string | undefined;
+  const consumed = new Set<Message>();
+  const operation = (name: string, value: string, status: string, result?: ToolResult) => {
+    if (!group) output.push("## Tools (completed)");
+    if (group !== name) output.push(`${metadata(name)}:`);
+    const reason = result ? errorReason(result) : undefined;
+    const suffix = status === "SUCCESS" ? "" : ` — ${status}${reason ? `: ${reason}` : ""}`;
+    output.push(limit(value, OLD_CALL_ARGUMENT_LIMIT).replace(/^> /, "> - ") + (suffix ? quote(suffix).slice(2) : ""));
+    if (result) {
+      for (const block of result.content) {
+        if (block.type === "image") output.push(quote(`[Image omitted from reconstructed history: ${block.mimeType}; content unavailable]`));
+      }
+    }
+    group = name;
+  };
+  const breakGroup = () => { group = undefined; };
+
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]!;
+    if (message.role === "toolResult") {
+      if (consumed.has(message)) continue;
+      operation(message.toolName, "Unpaired result", message.isError ? executionStatus(message) : "UNKNOWN", message);
+      continue;
+    }
+    if (message.role !== "assistant") {
+      breakGroup();
+      output.push(render(message));
+      continue;
+    }
+    const batch = message;
+    const calls = batch.content.filter((block): block is ToolCall => block.type === "toolCall");
+    if (!calls.length) {
+      if (endsRun(batch) || batch.errorMessage || batch.content.some((block) => block.type === "text" && block.text.trim())) {
+        breakGroup();
+        output.push(render(batch));
+      }
+      continue;
+    }
+    let end = index + 1;
+    while (end < messages.length && messages[end]!.role !== "assistant") end++;
+    const results = messages.slice(index + 1, end).filter((item): item is ToolResult => item.role === "toolResult");
+    let terminal = index;
+    while (terminal < messages.length && !endsRun(messages[terminal]!)) terminal++;
+    const aborted = terminal < messages.length && (messages[terminal] as Extract<Message, { role: "assistant" }>).stopReason === "aborted";
+    for (const block of batch.content) {
+      if (block.type === "text" && block.text.trim()) {
+        breakGroup();
+        const { errorMessage: _error, ...withoutError } = batch;
+        output.push(render({ ...withoutError, content: [block] }));
+      }
+      if (block.type !== "toolCall") continue;
+      const matches = results.filter((item) => item.toolCallId === block.id && item.toolName === block.name);
+      const unique = Boolean(block.id.trim()) && calls.filter((item) => item.id === block.id && item.name === block.name).length === 1;
+      const result = unique && matches.length === 1 ? matches[0] : undefined;
+      if (result) consumed.add(result);
+      const status = result ? executionStatus(result) : unique && !matches.length && aborted ? "ABORTED: completion unknown" : "UNKNOWN";
+      operation(block.name, operationArguments(block), status, result);
+    }
+    if (endsRun(batch)) breakGroup();
+    if (batch.errorMessage || endsRun(batch) && !batch.content.some((block) => block.type === "text" && block.text.trim())) {
+      breakGroup();
+      output.push(render({ ...batch, content: [] }));
+    }
+  }
+  return output;
 }
 
 export function formatContextUpdate(messages: readonly Message[], purpose: "incremental_conversation" | "pending_tool_continuation"): string {
@@ -115,32 +243,50 @@ export function formatContextPrompt(context: Context, isReused: boolean, syncedM
   let start = 0;
   for (let i = context.messages.length - 1; i >= 0; i--) {
     const message = context.messages[i];
-    if (message?.role === "assistant" && message.stopReason !== "toolUse") { start = i + 1; break; }
+    if (message && endsRun(message)) { start = i + 1; break; }
   }
   const oldMessages = filterHistory(context.messages.slice(0, start));
-  const currentMessages = filterHistory(context.messages);
-  const oldSet = new Set(context.messages.slice(0, start));
-  const results = currentMessages.filter((message): message is Extract<Message, { role: "toolResult" }> =>
-    message.role === "toolResult" && !oldSet.has(message));
+  const currentMessages = filterHistory(context.messages.slice(start));
+  const results = currentMessages.filter((message): message is ToolResult => message.role === "toolResult");
   const bodies = new Map<Message, string>();
   const total = results.reduce((sum, message) => sum + text(message).length, 0);
   let remaining = RESULT_BODY_BUDGET;
   const prioritized = [...results].reverse().sort((a, b) => Number(b.isError) - Number(a.isError));
-  for (const [index, message] of prioritized.entries()) {
+  let reservedMinimum = prioritized.reduce((sum, message) => sum + minimumResultBody(message), 0);
+  for (const message of prioritized) {
     const body = text(message);
-    const reserved = Math.min(remaining, (prioritized.length - index - 1) * quote(OMITTED_BODY).length);
+    reservedMinimum -= minimumResultBody(message);
+    const reserved = Math.min(remaining, reservedMinimum);
     const size = total <= RESULT_BODY_BUDGET ? body.length : Math.min(remaining - reserved, RESULT_BODY_CEILING, body.length);
-    const rendered = limit(resultBody(message), size);
+    const rendered = budgetResult(message, size);
     bodies.set(message, rendered);
     remaining -= rendered.length;
   }
 
-  // Filtering clones assistants, so use the filtered prefix length for chronological rendering.
-  return [context.systemPrompt ? `# System prompt\n\n${quote(context.systemPrompt)}` : "",
-    currentMessages.length > 1
+  const prompt = [context.systemPrompt ? `# System prompt\n\n${quote(context.systemPrompt)}` : "",
+    oldMessages.length + currentMessages.length > 1
       ? "# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations."
       : "",
-    ...currentMessages.map((message, index) => render(message,
-      message.role === "toolResult" && oldSet.has(message) ? quote("[Body omitted: completed run]") :
-        bodies.get(message) ?? text(message, index < oldMessages.length)))].filter(Boolean).join("\n\n");
+    ...completedHistory(oldMessages),
+    ...currentMessages.filter((message) => message.role !== "assistant" || message.content.length || message.errorMessage || endsRun(message))
+      .map((message) => render(message, bodies.get(message) ?? text(message)))].filter(Boolean).join("\n\n");
+
+  if (isDebugEnabled()) {
+    // Baseline: original JSON message representation plus raw system prompt, in UTF-16 characters.
+    const changedResults = [...bodies].filter(([message, body]) => body !== text(message));
+    const omittedResults = changedResults.filter(([, body]) => !body || body === quote(OMITTED_BODY) || body.startsWith(`${quote(OMITTED_BODY)}\n`));
+    debugLog("context", "Rebuild representation characters", {
+      inputChars: JSON.stringify(context.messages).length + (context.systemPrompt?.length ?? 0),
+      finalChars: prompt.length,
+      omittedToolResults: context.messages.filter((message) => message.role === "toolResult").length - results.length + omittedResults.length,
+      truncatedToolResults: changedResults.length - omittedResults.length,
+      truncatedArguments: oldMessages.flatMap((message) => message.role === "assistant" ? message.content : []).filter((block) => {
+        if (block.type !== "toolCall") return false;
+        return quote(operationArguments(block)).length > OLD_CALL_ARGUMENT_LIMIT;
+      }).length,
+      imagePlaceholders: [...oldMessages, ...currentMessages].reduce((sum, message) => sum +
+        (typeof message.content === "string" ? 0 : message.content.filter((block) => block.type === "image").length), 0),
+    });
+  }
+  return prompt;
 }

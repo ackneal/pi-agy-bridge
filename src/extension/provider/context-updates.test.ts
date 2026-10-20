@@ -51,12 +51,12 @@ const cases: Case[] = [
     expected: "# Conversation updates\n\n## System\n\n> rules & policy",
   },
   ...[true, false].map((isReused): Case => ({
-    name: `preserves exact image bytes in ${isReused ? "incremental Markdown" : "rebuilt Markdown"}`,
+    name: `preserves image association with text-only placeholders in ${isReused ? "incremental Markdown" : "rebuilt Markdown"}`,
     context: { messages: [oldMessage, { role: "user", content: [{ type: "text", text: "look" }, image], timestamp: 2 }] },
     isReused, syncedMessageCount: 1,
     expected: isReused
-      ? "# Conversation updates\n\n## User\n\n> look\n> ![Image](data:image/png;base64,AAECA/8=)"
-      : "# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations.\n\n## User\n\n> OLD_HISTORY_SENTINEL\n\n## User\n\n> look\n> ![Image](data:image/png;base64,AAECA/8=)",
+      ? "# Conversation updates\n\n## User\n\n> look\n> [Image omitted from reconstructed history: image/png; content unavailable]"
+      : "# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations.\n\n## User\n\n> OLD_HISTORY_SENTINEL\n\n## User\n\n> look\n> [Image omitted from reconstructed history: image/png; content unavailable]",
   })),
   ...[
     { name: "fully synced history", messages: [oldMessage], syncedMessageCount: 1 },
@@ -74,6 +74,8 @@ describe("formatContextPrompt context updates", () => {
 
       if (exact !== undefined) assert.equal(prompt, exact);
       if (expected !== undefined) assert.equal(prompt, expected);
+      assert.ok(!prompt.includes("data:image/"));
+      assert.ok(!prompt.includes(image.data));
     });
   }
 });

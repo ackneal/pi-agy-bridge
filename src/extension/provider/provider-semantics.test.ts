@@ -21,6 +21,27 @@ const assistant: AssistantMessage = {
 };
 
 describe("formatContextPrompt provider semantics", () => {
+  for (const isError of [true, false]) {
+    it(`flattens completed tools while preserving source status (${isError})`, () => {
+      const { errorMessage, ...plain } = assistant;
+      const prompt = formatContextPrompt({ messages: [
+        { ...plain, stopReason: "toolUse", content: [{ type: "toolCall", id: "completed-call", name: "read", arguments: { path: "source.ts", offset: 20, limit: 40 } }] },
+        { role: "toolResult", toolCallId: "completed-call", toolName: "read", content: [{ type: "text", text: isError ? "source unavailable" : "discarded source body" }], isError, timestamp: 3 },
+        { ...plain, content: [{ type: "text", text: "finished answer" }], stopReason: "stop", timestamp: 4 },
+        { role: "user", content: "continue", timestamp: 5 },
+      ] }, false);
+
+      assert.ok(prompt.includes(`## Tools (completed)\n\nread:\n\n> - source.ts${isError ? " — ERROR: source unavailable" : ""}`));
+      assert.equal(prompt.includes("ERROR: source unavailable"), isError);
+      assert.ok(!prompt.includes("discarded source body"));
+      assert.ok(!prompt.includes("completed-call"));
+      assert.ok(!prompt.includes('"offset"'));
+      assert.ok(!prompt.includes('"limit"'));
+      assert.ok(!prompt.includes("## Tool result:"));
+      assert.ok(prompt.indexOf("## Tools (completed)") < prompt.indexOf("## Assistant (status: stop)"));
+      assert.ok(prompt.endsWith("## Assistant (status: stop)\n\n> finished answer\n\n## User\n\n> continue"));
+    });
+  }
   for (const isReused of [true, false]) {
     for (const isError of [true, false]) {
       it(`preserves metadata and result status (${isReused}, ${isError})`, () => {
@@ -29,8 +50,18 @@ describe("formatContextPrompt provider semantics", () => {
           content: [{ type: "text", text: "result & details" }], isError, timestamp: 3,
         }] }, isReused, 0);
 
-        assert.ok(prompt.includes('## Assistant (status: error)\n\n### Tool call: read (id: call\\<&1, namespace: files&docs)\n\n> {"path":"a<b"}\n\nError:\n\n> failed <read> & "retry"'));
+        if (isReused) {
+          assert.ok(prompt.includes('## Assistant (status: error)\n\n### Tool call: read (id: call\\<&1, namespace: files&docs)\n\n> {"path":"a<b"}\n\nError:\n\n> failed <read> & "retry"'));
+        } else {
+          // The terminal assistant closes the run before its trailing result.
+          assert.ok(prompt.includes('## Tools (completed)\n\nread:\n\n> - a<b — UNKNOWN'));
+          assert.ok(prompt.includes('## Assistant (status: error)\n\n\n\nError:\n\n> failed <read> & "retry"'));
+          assert.ok(!prompt.includes("### Tool call:"));
+          assert.ok(!prompt.includes("files&docs"));
+          assert.ok(prompt.indexOf("## Tools (completed)") < prompt.indexOf("## Assistant (status: error)"));
+        }
         assert.ok(prompt.includes(`## Tool result: read (id: call\\<&1, status: ${isError ? "error" : "success"})\n\n> result & details`));
+        assert.ok(prompt.indexOf("## Assistant (status: error)") < prompt.indexOf("## Tool result:"));
         assert.ok(!prompt.includes("openai-responses"));
       });
     }

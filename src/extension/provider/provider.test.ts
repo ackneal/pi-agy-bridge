@@ -454,7 +454,7 @@ for (const row of laterFailureCases) {
     const reconstructed = send.mock.calls.at(-1)!.arguments[0].message.content;
     assert.ok(reconstructed.startsWith("# System prompt\n\n> Keep Pi history\n\n# Conversation history\n\n"));
     assert.deepEqual(reconstructed.match(/^## .+$/gm), [
-      "## User", "## User", "## Assistant (status: error)", "## User",
+      "## User", "## Assistant (status: stop)", "## User", "## Assistant (status: error)", "## User",
     ]);
     assert.ok(reconstructed.indexOf("> successful request") < reconstructed.indexOf("> failed request"), "retry includes the original undelivered request in order");
     assert.ok(reconstructed.includes(`## Assistant (status: error)\n\n${row.text ? "> Partial answer" : ""}\n\nError:\n\n> genuine failure`));

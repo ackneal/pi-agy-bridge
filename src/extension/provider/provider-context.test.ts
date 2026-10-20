@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { formatContextPrompt } from "./provider.ts";
+import { setDebugOverride } from "../shared/debug.ts";
 
 const assistantMetadata: Pick<AssistantMessage, "api" | "provider" | "model" | "usage"> = {
   api: "agy",
@@ -70,10 +71,9 @@ describe("formatContextPrompt reconstruction", () => {
     assert.equal(formatContextPrompt(context, false), [
       "# System prompt\n\n> Follow <policy> & safety.", historyHeading,
       "## User\n\n> old <question>",
-      '## Assistant (status: toolUse)\n\n### Tool call: read (id: call-1)\n\n> {"path":"README.md"}',
-      "## Tool result: read (id: call-1, status: success)\n\n> [Body omitted: completed run]",
+      "## Tools (completed)", "read:", "> - README.md",
       "## Assistant (status: stop)\n\n> read complete",
-      "## User\n\n> next & now\n> ![Image](data:image/png;base64,aW1hZ2U=)",
+      "## User\n\n> next & now\n> [Image omitted from reconstructed history: image/png; content unavailable]",
     ].join("\n\n"));
   });
 
@@ -81,10 +81,21 @@ describe("formatContextPrompt reconstruction", () => {
     const prompt = formatContextPrompt({ messages: [call("old", "old"), result("old", "OLD_BODY"), completed,
       call("current", "current"), result("current", "CURRENT_BODY"), { role: "user", content: "appended", timestamp: 4 }] }, false);
 
-    assert.ok(prompt.includes("id: old, status: success)\n\n> [Body omitted: completed run]"));
+    assert.ok(prompt.includes("> - old"));
     assert.ok(!prompt.includes("OLD_BODY"));
     assert.ok(prompt.includes("id: current, status: success)\n\n> CURRENT_BODY\n\n## User\n\n> appended"));
   });
+
+  for (const stopReason of ["pending", "deferred"] as const) {
+    it(`keeps ${stopReason} runs current`, () => {
+      const prompt = formatContextPrompt({ messages: [call("active", "active-path"),
+        result("active", "ACTIVE_BODY"), { ...completed, stopReason }] }, false);
+      assert.ok(prompt.includes("### Tool call: read (id: active)"));
+      assert.ok(prompt.includes("id: active, status: success)\n\n> ACTIVE_BODY"));
+      assert.ok(prompt.includes(`status: ${stopReason}`));
+      assert.ok(!prompt.includes("## Tools (completed)"));
+    });
+  }
 
   for (const old of [false, true]) {
     for (const { path, removed } of [
@@ -104,12 +115,12 @@ describe("formatContextPrompt reconstruction", () => {
         const prompt = formatContextPrompt({ messages: [mixed, result("hidden", "SECRET_ONE"), result("chunk", "SECRET_TWO"),
           result("visible", "VISIBLE_BODY"), ...(old ? [completed] : [])] }, false);
 
-        assert.equal(prompt.includes("### Tool call: read (id: hidden)"), !removed);
-        assert.equal(prompt.includes("### Tool call: read (id: chunk)"), !removed);
-        assert.equal(prompt.includes("## Tool result: read (id: hidden,"), !removed);
-        assert.equal(prompt.includes("## Tool result: read (id: chunk,"), !removed);
-        assert.ok(prompt.includes("> retained explanation\n### Tool call:"));
-        assert.ok(prompt.includes("### Tool call: read (id: visible)"));
+        assert.equal(prompt.includes("### Tool call: read (id: hidden)"), !removed && !old);
+        assert.equal(prompt.includes("### Tool call: read (id: chunk)"), !removed && !old);
+        assert.equal(prompt.includes("## Tool result: read (id: hidden,"), !removed && !old);
+        assert.equal(prompt.includes("## Tool result: read (id: chunk,"), !removed && !old);
+        assert.ok(prompt.includes("> retained explanation"));
+        assert.ok(prompt.includes(old ? "> - README.md" : "### Tool call: read (id: visible)"));
         assert.equal(prompt.includes("VISIBLE_BODY"), !old);
         assert.equal(prompt.includes("SECRET_ONE"), !removed && !old);
       });
@@ -209,11 +220,75 @@ describe("formatContextPrompt reconstruction", () => {
     it(`limits only old call arguments to 1000 rendered characters (${old})`, () => {
       const args = "x".repeat(2000);
       const prompt = formatContextPrompt({ messages: [call("args", args), ...(old ? [completed] : [])] }, false);
-      const body = prompt.split("### Tool call: read (id: args)\n\n")[1]!.split("\n\n## Assistant")[0]!;
+      const body = old ? prompt.split("read:\n\n")[1]!.split("\n\n## Assistant")[0]! : prompt.split("### Tool call: read (id: args)\n\n")[1]!;
 
       assert.equal(body.includes("[Truncated:"), old);
-      if (old) assert.equal(body.length, 1000);
+      if (old) {
+        assert.equal(body.length, 1000 + 2 + " — UNKNOWN".length);
+        assert.ok(body.startsWith("> - "));
+        assert.ok(body.endsWith("[Truncated: 2000 characters total] — UNKNOWN"));
+      }
       else assert.equal(body, `> ${JSON.stringify({ path: args })}`);
     });
   }
 });
+
+for (const { name, messages, expected, absent } of [
+  { name: "out of order results retain call order", messages: [{ ...call("a", "first"), content: [...call("a", "first").content, ...call("b", "second").content] }, result("b", "bad", true), result("a", "ok"), completed], expected: ["> - first", "> - second — ERROR: bad"], absent: ["id:", "Body omitted"] },
+  { name: "duplicates are unknown", messages: [call("a", "file"), result("a", "ok"), result("a", "ok"), completed], expected: ["> - file — UNKNOWN"], absent: ["SUCCESS"] },
+  { name: "missing aborted call", messages: [call("a", "file"), { ...completed, stopReason: "aborted" as const }], expected: ["> - file — ABORTED", "status: aborted"], absent: ["SUCCESS"] },
+  { name: "missing call is unknown", messages: [call("a", "file"), completed], expected: ["> - file — UNKNOWN"], absent: ["SUCCESS"] },
+  { name: "orphan success is unknown", messages: [result("a", "untrusted"), completed], expected: ["> - Unpaired result — UNKNOWN"], absent: ["SUCCESS", "untrusted", "id:"] },
+  { name: "reused IDs pair per batch", messages: [call("a", "one"), result("a", "ok"), call("a", "two"), result("a", "failure", true), completed], expected: ["> - one", "> - two — ERROR: failure"], absent: ["UNKNOWN"] },
+  { name: "tool image stays with operation", messages: [call("a", "image"), { ...result("a", "ok"), content: [{ type: "image" as const, mimeType: "image/png", data: "SECRET_BASE64" }] }, completed], expected: ["> - image\n\n> [Image omitted from reconstructed history: image/png; content unavailable]"], absent: ["SECRET_BASE64", "data:"] },
+  { name: "text splits groups", messages: [{ ...call("a", "one"), content: [...call("a", "one").content, { type: "text" as const, text: "between" }, ...call("b", "two").content] }, result("a", "ok"), result("b", "ok"), completed], expected: ["> - one", "> between", "## Tools (completed)\n\nread:\n\n> - two"], absent: ["id:"] },
+]) {
+  it(name, () => {
+    const before = structuredClone(messages);
+    const prompt = formatContextPrompt({ messages }, false);
+    let position = -1;
+    for (const value of expected) {
+      const next = prompt.indexOf(value, position + 1);
+      assert.ok(next > position, value);
+      position = next;
+    }
+    for (const value of absent) assert.ok(!prompt.includes(value), value);
+    assert.deepEqual(messages, before);
+  });
+}
+
+for (const { name, input, expected, enabled } of ([
+  { name: "completed results", input: { systemPrompt: "PRIVATE_SYSTEM", messages: [call("private-id", "PRIVATE_PATH"), result("private-id", "PRIVATE_BODY"), completed] }, expected: [1, 0, 0, 0] },
+  { name: "current truncation and omission", input: { messages: Array.from({ length: 5 }, (_, index) => result(`private-${index}`, "x".repeat(12000))) }, expected: [2, 3, 0, 0] },
+  { name: "argument truncation and image replacement", input: { messages: [call("private-id", "x".repeat(2000)), {
+    ...result("private-id", "PRIVATE_BODY"), content: [{ type: "image" as const, mimeType: "image/png", data: "PRIVATE_BASE64" }],
+  }, completed] }, expected: [1, 0, 1, 1] },
+  { name: "source text is not a generated image placeholder", input: { messages: [{ role: "user" as const, content: "[Image omitted from reconstructed history: fake/type; content unavailable]", timestamp: 1 }] }, expected: [0, 0, 0, 0] },
+] satisfies { name: string; input: Context; expected: number[] }[]).flatMap((row) => [false, true].map((enabled) => ({ ...row, enabled })))) {
+  it(`logs numeric rebuild metrics only when enabled (${name}, ${enabled})`, () => {
+    const previous = process.env["AGY_BRIDGE_DEBUG"];
+    delete process.env["AGY_BRIDGE_DEBUG"];
+    const write = process.stderr.write;
+    let logged = "";
+    process.stderr.write = ((chunk: string | Uint8Array) => { logged += String(chunk); return true; }) as typeof write;
+    setDebugOverride(enabled);
+    try {
+      const prompt = formatContextPrompt(input, false);
+      assert.equal(Boolean(logged), enabled);
+      if (enabled) {
+        const metrics = JSON.parse(logged.slice(logged.indexOf("{")));
+        assert.equal(metrics.inputChars, JSON.stringify(input.messages).length + ("systemPrompt" in input ? input.systemPrompt.length : 0));
+        assert.equal(metrics.finalChars, prompt.length);
+        assert.deepEqual([metrics.omittedToolResults, metrics.truncatedToolResults, metrics.truncatedArguments, metrics.imagePlaceholders], expected);
+        assert.ok(!logged.includes("private-id"));
+        assert.ok(Object.values(metrics).every((value) => typeof value === "number"));
+        assert.ok(!logged.includes("PRIVATE"));
+      }
+    } finally {
+      process.stderr.write = write;
+      setDebugOverride(false);
+      if (previous === undefined) delete process.env["AGY_BRIDGE_DEBUG"];
+      else process.env["AGY_BRIDGE_DEBUG"] = previous;
+    }
+  });
+}
