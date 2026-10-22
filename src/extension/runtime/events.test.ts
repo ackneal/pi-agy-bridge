@@ -21,6 +21,18 @@ const blockedToolCases: {
   unrestricted?: boolean;
   allowedToolNames?: string[];
 }[] = [
+  ...[
+    { name: "native view_file nested", event: { event: "step_update", tool_call: { id: "view", name: "view_file", arguments: "{}" } } },
+    { name: "native view_file enveloped", event: { event: "step_update", step_update: { tool_call: { id: "view", name: "view_file" } } } },
+    { name: "native view_file flat", event: { event: "step_update", update_type: "tool", tool_name: "view_file" } },
+    { name: "native view_file legacy", event: { event: "step_update", step_type: "tool", name: "view_file" } },
+  ].map(({ name, event }) => ({ name, event, blocked: undefined, allowedToolNames: [] })),
+  ...["View_file", "view_file ", "view_file_extra", "mcp__pi__view_file", "write_to_file", "run_command"].map((name) => ({
+    name: `restricted exact-name boundary ${JSON.stringify(name)}`,
+    event: { event: "step_update", tool_call: { id: "restricted", name } },
+    blocked: name,
+  })),
+  { name: "allowed MCP view_file remains a Pi tool", event: { event: "step_update", tool_call: { id: "mcp", name: "mcp__pi__view_file" } }, blocked: undefined, toolName: "mcp__pi__view_file", allowedToolNames: ["view_file"] },
   { name: "top-level call", event: { event: "step_update", tool_call: { id: "", name: "run_command", arguments: "{}" } }, blocked: "run_command" },
   { name: "nested call", event: { event: "step_update", step_update: { tool_call: { id: "native", name: "run_command" } } }, blocked: "run_command" },
   { name: "empty nested tool name", event: { event: "step_update", tool_call: { id: "native", name: "" } }, blocked: "" },
@@ -87,7 +99,9 @@ for (const expected of blockedToolCases) {
       assert.equal(terminal[0]?.type, expected.blocked === undefined ? expected.terminalType ?? "done" : "error");
       const names = !bridgeToolCallsExternally && expected.toolName ? [expected.toolName] : [];
       assert.deepEqual(adapter.message.content.filter((block) => block.type === "toolCall").map((call) => call.name), names);
-      assert.equal(events.filter((event) => event.type === "toolcall_end").length, names.length);
+      for (const type of ["toolcall_start", "toolcall_delta", "toolcall_end"]) {
+        assert.equal(events.filter((event) => event.type === type).length, names.length);
+      }
     });
   }
 

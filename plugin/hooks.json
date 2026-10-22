@@ -1,0 +1,16 @@
+{
+  "restrict-view-file": {
+    "PreToolUse": [
+      {
+        "matcher": "^view_file$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"${PI_AGY_BRIDGE_RECOVERY-}\" = 1 ]; then exec \"$PI_AGY_BRIDGE_HOOK_RUNTIME\" ./hooks/restrict-view-file.js; else printf '%s\\n' '{\"decision\":\"allow\"}'; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

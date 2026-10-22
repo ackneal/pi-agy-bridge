@@ -34,7 +34,7 @@ describe("static Antigravity CLI bridge plugin", () => {
     assert.match(markdown, /\ncommandExecutionPolicy: sandbox\n/);
     assert.match(markdown, /\nexcludeDefaultComponents: true\n/);
     assert.match(markdown, /\ninheritMcp: true\n/);
-    assert.doesNotMatch(markdown, /\ntools:\n/);
+    assert.match(markdown, /\ntools: \[view_file\]\n/);
     assert.match(markdown, /model runtime delegated by Pi/);
     for (const requirement of [
       /plain Markdown conversation context/,
@@ -54,10 +54,8 @@ describe("static Antigravity CLI bridge plugin", () => {
       /`UNKNOWN` means unconfirmed, not an automatic retry/,
       /Current tool calls keep their IDs, arguments, results, and pending state/,
       /IDs link current calls to their results/,
-      /Image placeholders give the MIME type but mark image content unavailable/,
-      /A placeholder does not mean you have seen the image/,
-      /If the task needs it, ask for the image content or a description/,
-      /Native image transport is not verified; do not promise it/,
+      /Image placeholders in Pi-provided context record the MIME type, not the image content/,
+      /Do not infer image details from a placeholder/,
       /Do not infer status from omitted results/,
       /`System section replace` replaces that section/,
       /`System section remove` removes that section/,
@@ -77,10 +75,11 @@ describe("static Antigravity CLI bridge plugin", () => {
       /Omitted or truncated content alone does not mean failure/,
       /current tool declarations and the MCP tool list describe the same tools/,
       /tool mentioned only in history may no longer be available/,
-      /reading chunks of 60 lines/,
-      /`read` tool with `offset` and `limit`/,
-      /If a chunk is also replaced by a file reference, reduce `limit`/,
-      /Use continuation offsets from the result/,
+      /Use Pi MCP tools for ordinary file operations/,
+      /Pi MCP `read` can read text and images/,
+      /Large tool outputs may be stored in temporary files/,
+      /If the content you need is provided as a file reference rather than inline, use native `view_file` directly to read it/,
+      /`view_file` can only read artifacts under the current conversation's `\.system_generated\/steps\/`/,
       /`call_mcp_tool`/,
       /ServerName: "pi-agy-bridge_pi"/,
       /`ToolName`.*exact plain Pi tool name/,
@@ -101,7 +100,7 @@ describe("static Antigravity CLI bridge plugin", () => {
     const command = config.mcpServers["pi"];
 
     assert.equal(command.command, "sh");
-    assert.deepEqual(command.args, ["-c", 'exec "$PI_AGY_BRIDGE_MCP_NODE" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"']);
+    assert.deepEqual(command.args, ["-c", 'exec "$PI_AGY_BRIDGE_MCP_RUNTIME" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"']);
   });
 
   it("preserves spaced paths and literal shell characters as real shell argv", async (t) => {
@@ -125,7 +124,9 @@ describe("static Antigravity CLI bridge plugin", () => {
       } finally {
         process.execPath = originalNodePath;
       }
-      assert.equal(environment.PI_AGY_BRIDGE_MCP_NODE, nodePath);
+      assert.equal(environment.PI_AGY_BRIDGE_RECOVERY, "1");
+      assert.equal(environment.PI_AGY_BRIDGE_MCP_RUNTIME, nodePath);
+      assert.equal(environment.PI_AGY_BRIDGE_HOOK_RUNTIME, nodePath);
       assert.equal(environment.PI_AGY_BRIDGE_MCP_ENTRYPOINT, fileURLToPath(new URL("../../src/mcp/index.js", import.meta.url)));
       assert.equal(environment.PI_AGY_BRIDGE_MCP_ENDPOINT, bridge.bridgeUri);
 
