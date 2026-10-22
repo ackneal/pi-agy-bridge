@@ -11,8 +11,7 @@ async function decide(input) {
   const id = input?.conversationId;
   const artifact = input?.artifactDirectoryPath;
   const target = input?.toolCall?.args?.AbsolutePath;
-  if (input?.toolCall?.name !== "view_file" || typeof id !== "string" ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ||
+  if (typeof id !== "string" ||
       typeof artifact !== "string" || !path.isAbsolute(artifact) || artifact.includes("\0") ||
       artifact.split(path.sep).includes("..") || path.basename(artifact) !== id ||
       typeof target !== "string" || !path.isAbsolute(target) || target.includes("\0") ||

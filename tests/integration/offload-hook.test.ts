@@ -33,9 +33,14 @@ it("restricts native view_file to current conversation regular step files", asyn
     const redirectedSteps = path.join(home, "redirected-steps", id, ".system_generated", "steps");
     await mkdir(path.dirname(redirectedSteps), { recursive: true });
     await symlink(other, redirectedSteps);
+    const namedArtifact = path.join(brain, "named-conversation");
+    const namedFile = path.join(namedArtifact, ".system_generated/steps/artifact.md");
+    await mkdir(path.dirname(namedFile), { recursive: true });
+    await writeFile(namedFile, "artifact");
     const request = (target: string, conversationId = id) => ({ conversationId, artifactDirectoryPath: artifact, toolCall: { name: "view_file", args: { AbsolutePath: target } } });
     const cases = [
       { name: "current artifact outside default CLI home", input: request(file), decision: "allow" },
+      { name: "non-UUID conversation", input: { conversationId: "named-conversation", artifactDirectoryPath: namedArtifact, toolCall: { args: { AbsolutePath: namedFile } } }, decision: "allow" },
       { name: "internal symlink", input: request(path.join(steps, "internal")), decision: "allow" },
       { name: "cross conversation", input: request(path.join(other, "artifact.md")), decision: "deny" },
       { name: "project file", input: request(project), decision: "deny" },
@@ -58,8 +63,8 @@ it("restricts native view_file to current conversation regular step files", asyn
       { name: "missing file", input: request(path.join(steps, "missing")), decision: "deny" },
       { name: "traversal", input: request(`${steps}/../steps/artifact.md`), decision: "deny" },
       { name: "relative path", input: request("artifact.md"), decision: "deny" },
-      { name: "invalid UUID", input: request(file, "../escape"), decision: "deny" },
-      { name: "wrong tool", input: { ...request(file), toolCall: { name: "read_file", args: { AbsolutePath: file } } }, decision: "deny" },
+      { name: "conversation mismatch", input: request(file, "../escape"), decision: "deny" },
+      { name: "tool selection belongs to manifest", input: { ...request(file), toolCall: { name: "read_file", args: { AbsolutePath: file } } }, decision: "allow" },
       { name: "null", input: null, decision: "deny" },
       { name: "missing fields", input: {}, decision: "deny" },
       { name: "wrong path type", input: { ...request(file), toolCall: { name: "view_file", args: { AbsolutePath: 1 } } }, decision: "deny" },
