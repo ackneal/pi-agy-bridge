@@ -100,7 +100,7 @@ describe("static Antigravity CLI bridge plugin", () => {
     const command = config.mcpServers["pi"];
 
     assert.equal(command.command, "sh");
-    assert.deepEqual(command.args, ["-c", 'exec "$PI_AGY_BRIDGE_MCP_NODE" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"']);
+    assert.deepEqual(command.args, ["-c", 'exec "$PI_AGY_BRIDGE_MCP_RUNTIME" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"']);
   });
 
   it("preserves spaced paths and literal shell characters as real shell argv", async (t) => {
@@ -125,7 +125,8 @@ describe("static Antigravity CLI bridge plugin", () => {
         process.execPath = originalNodePath;
       }
       assert.equal(environment.PI_AGY_BRIDGE_RECOVERY, "1");
-      assert.equal(environment.PI_AGY_BRIDGE_MCP_NODE, nodePath);
+      assert.equal(environment.PI_AGY_BRIDGE_MCP_RUNTIME, nodePath);
+      assert.equal(environment.PI_AGY_BRIDGE_HOOK_RUNTIME, nodePath);
       assert.equal(environment.PI_AGY_BRIDGE_MCP_ENTRYPOINT, fileURLToPath(new URL("../../src/mcp/index.js", import.meta.url)));
       assert.equal(environment.PI_AGY_BRIDGE_MCP_ENDPOINT, bridge.bridgeUri);
 

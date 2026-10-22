@@ -80,7 +80,7 @@ it("restricts native view_file to current conversation regular step files", asyn
       await t.test(row.name, () => {
         const result = spawnSync("sh", ["-c", hook.command], {
           cwd: plugin,
-          env: { ...process.env, HOME: home, PI_AGY_BRIDGE_RECOVERY: "1", PI_AGY_BRIDGE_MCP_NODE: process.execPath },
+          env: { ...process.env, HOME: home, PI_AGY_BRIDGE_RECOVERY: "1", PI_AGY_BRIDGE_HOOK_RUNTIME: process.execPath },
           input: row.input === undefined ? "{" : JSON.stringify(row.input),
           encoding: "utf8",
         });
@@ -117,9 +117,9 @@ it("gates the command on the exact recovery marker", async (t) => {
     await t.test(row.name, () => {
       const env = { ...process.env };
       delete env.PI_AGY_BRIDGE_RECOVERY;
-      delete env.PI_AGY_BRIDGE_MCP_NODE;
+      delete env.PI_AGY_BRIDGE_HOOK_RUNTIME;
       if (row.marker !== undefined) env.PI_AGY_BRIDGE_RECOVERY = row.marker;
-      if (row.node !== undefined) env.PI_AGY_BRIDGE_MCP_NODE = row.node;
+      if (row.node !== undefined) env.PI_AGY_BRIDGE_HOOK_RUNTIME = row.node;
 
       const result = spawnSync("sh", ["-c", command], { cwd: plugin, env, input: row.input, encoding: "utf8" });
       assert.ifError(result.error);

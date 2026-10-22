@@ -60,7 +60,8 @@ export class BridgeIPC {
     const { nodePath, entrypointPath } = resolveMcpEntrypoint();
     return {
       PI_AGY_BRIDGE_RECOVERY: "1",
-      PI_AGY_BRIDGE_MCP_NODE: nodePath,
+      PI_AGY_BRIDGE_MCP_RUNTIME: nodePath,
+      PI_AGY_BRIDGE_HOOK_RUNTIME: process.execPath,
       PI_AGY_BRIDGE_MCP_ENTRYPOINT: entrypointPath,
       PI_AGY_BRIDGE_MCP_ENDPOINT: this.bridgeUri,
     };

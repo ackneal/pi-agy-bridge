@@ -32,7 +32,7 @@ export function generateMcpConfig(): {
     mcpServers: {
       pi: {
         command: "sh",
-        args: ["-c", 'exec "$PI_AGY_BRIDGE_MCP_NODE" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'],
+        args: ["-c", 'exec "$PI_AGY_BRIDGE_MCP_RUNTIME" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'],
       },
     },
   };

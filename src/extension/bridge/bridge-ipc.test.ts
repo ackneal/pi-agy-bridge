@@ -292,13 +292,13 @@ describe("AgyMcpServer", () => {
         throw error;
       }
       const environment = bridge.processEnvironment;
-      assert.equal(environment.PI_AGY_BRIDGE_MCP_NODE, process.execPath);
+      assert.equal(environment.PI_AGY_BRIDGE_MCP_RUNTIME, process.execPath);
       assert.equal(environment.PI_AGY_BRIDGE_MCP_ENDPOINT, bridge.bridgeUri);
       const bridgeUri = new URL(bridge.bridgeUri);
       assert.equal(bridgeUri.protocol, "unix:");
       assert.equal(bridgeUri.searchParams.get("session"), bridge.sessionId);
 
-      child = spawn("sh", ["-c", 'exec "$PI_AGY_BRIDGE_MCP_NODE" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'], {
+      child = spawn("sh", ["-c", 'exec "$PI_AGY_BRIDGE_MCP_RUNTIME" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'], {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
@@ -452,11 +452,11 @@ describe("AgyMcpServer", () => {
   ] as const) {
     it(`fails clearly for invalid MCP command endpoint ${JSON.stringify(bridgeUri)}`, async () => {
       const scriptPath = fileURLToPath(new URL("../../mcp/index.js", import.meta.url));
-      const child = spawn("sh", ["-c", 'exec "$PI_AGY_BRIDGE_MCP_NODE" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'], {
+      const child = spawn("sh", ["-c", 'exec "$PI_AGY_BRIDGE_MCP_RUNTIME" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'], {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
-          PI_AGY_BRIDGE_MCP_NODE: process.execPath,
+          PI_AGY_BRIDGE_MCP_RUNTIME: process.execPath,
           PI_AGY_BRIDGE_MCP_ENTRYPOINT: scriptPath,
           PI_AGY_BRIDGE_MCP_ENDPOINT: bridgeUri,
         },
