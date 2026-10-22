@@ -34,7 +34,7 @@ describe("static Antigravity CLI bridge plugin", () => {
     assert.match(markdown, /\ncommandExecutionPolicy: sandbox\n/);
     assert.match(markdown, /\nexcludeDefaultComponents: true\n/);
     assert.match(markdown, /\ninheritMcp: true\n/);
-    assert.doesNotMatch(markdown, /\ntools:\n/);
+    assert.match(markdown, /\ntools: \[view_file\]\n/);
     assert.match(markdown, /model runtime delegated by Pi/);
     for (const requirement of [
       /plain Markdown conversation context/,
@@ -77,10 +77,9 @@ describe("static Antigravity CLI bridge plugin", () => {
       /Omitted or truncated content alone does not mean failure/,
       /current tool declarations and the MCP tool list describe the same tools/,
       /tool mentioned only in history may no longer be available/,
-      /reading chunks of 60 lines/,
-      /`read` tool with `offset` and `limit`/,
-      /If a chunk is also replaced by a file reference, reduce `limit`/,
-      /Use continuation offsets from the result/,
+      /Native `view_file` is an internal recovery tool/,
+      /Use it only to read temporary files under the current conversation's `\.system_generated\/`/,
+      /Use Pi MCP tools for all ordinary file operations/,
       /`call_mcp_tool`/,
       /ServerName: "pi-agy-bridge_pi"/,
       /`ToolName`.*exact plain Pi tool name/,

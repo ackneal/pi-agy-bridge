@@ -1,0 +1,16 @@
+{
+  "restrict-view-file": {
+    "PreToolUse": [
+      {
+        "matcher": "^view_file$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "exec \"$PI_AGY_BRIDGE_MCP_NODE\" ./hooks/restrict-view-file.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
