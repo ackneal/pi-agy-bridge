@@ -19,6 +19,7 @@ it("restricts native view_file to current conversation regular step files", asyn
     const other = path.join(brain, otherId, ".system_generated/steps");
     await mkdir(steps, { recursive: true });
     await mkdir(other, { recursive: true });
+    await mkdir(path.join(steps, "child"));
     const file = path.join(steps, "artifact.md");
     const project = path.join(home, "project.txt");
     await writeFile(file, "artifact");
@@ -42,33 +43,53 @@ it("restricts native view_file to current conversation regular step files", asyn
       { name: "current artifact outside default CLI home", input: request(file), decision: "allow" },
       { name: "non-UUID conversation", input: { conversationId: "named-conversation", artifactDirectoryPath: namedArtifact, toolCall: { args: { AbsolutePath: namedFile } } }, decision: "allow" },
       { name: "internal symlink", input: request(path.join(steps, "internal")), decision: "allow" },
-      { name: "cross conversation", input: request(path.join(other, "artifact.md")), decision: "deny" },
-      { name: "project file", input: request(project), decision: "deny" },
-      ...[undefined, null, 1, "", "relative", `${artifact}/../${id}`, `${artifact}\0`, home, path.join(brain, otherId)].map((value) => ({
+      { name: "cross conversation", input: request(path.join(other, "artifact.md")), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "project file", input: request(project), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      ...[
+        { value: undefined, reason: "Malformed Request: Invalid or missing arguments" },
+        { value: null, reason: "Malformed Request: Invalid or missing arguments" },
+        { value: 1, reason: "Malformed Request: Invalid or missing arguments" },
+        { value: "", reason: "Malformed Request: Invalid or missing arguments" },
+        { value: "relative", reason: "Malformed Request: Invalid or missing arguments" },
+        { value: `${artifact}/../${id}`, reason: "Malformed Request: Invalid or missing arguments" },
+        { value: `${artifact}\0`, reason: "Malformed Request: Invalid or missing arguments" },
+        { value: home, reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+        { value: path.join(brain, otherId), reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      ].map(({ value, reason }) => ({
         name: `invalid artifact metadata ${JSON.stringify(value)}`,
         input: { ...request(file), artifactDirectoryPath: value },
         decision: "deny",
+        reason,
       })),
-      ...[undefined, null, 1, "", "not-a-uuid"].map((value) => ({
+      ...[
+        { value: undefined, reason: "Malformed Request: Invalid or missing arguments" },
+        { value: null, reason: "Malformed Request: Invalid or missing arguments" },
+        { value: 1, reason: "Malformed Request: Invalid or missing arguments" },
+        { value: "", reason: "Malformed Request: Invalid or missing arguments" },
+        { value: "not-a-uuid", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      ].map(({ value, reason }) => ({
         name: `invalid conversation metadata ${JSON.stringify(value)}`,
         input: { ...request(file), conversationId: value },
         decision: "deny",
+        reason,
       })),
-      { name: "redirected artifact root", input: { ...request(path.join(redirectedArtifact, ".system_generated/steps/artifact.md")), artifactDirectoryPath: redirectedArtifact }, decision: "deny" },
-      { name: "redirected steps root", input: { ...request(path.join(redirectedSteps, "artifact.md")), artifactDirectoryPath: path.dirname(path.dirname(redirectedSteps)) }, decision: "deny" },
-      { name: "untrusted artifact root", input: { ...request(project), artifactDirectoryPath: home }, decision: "deny" },
-      { name: "file symlink escape", input: request(path.join(steps, "escape")), decision: "deny" },
-      { name: "directory symlink escape", input: request(path.join(steps, "other/artifact.md")), decision: "deny" },
-      { name: "directory", input: request(steps), decision: "deny" },
-      { name: "missing file", input: request(path.join(steps, "missing")), decision: "deny" },
-      { name: "traversal", input: request(`${steps}/../steps/artifact.md`), decision: "deny" },
-      { name: "relative path", input: request("artifact.md"), decision: "deny" },
-      { name: "conversation mismatch", input: request(file, "../escape"), decision: "deny" },
+      { name: "redirected artifact root", input: { ...request(path.join(redirectedArtifact, ".system_generated/steps/artifact.md")), artifactDirectoryPath: redirectedArtifact }, decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "redirected steps root", input: { ...request(path.join(redirectedSteps, "artifact.md")), artifactDirectoryPath: path.dirname(path.dirname(redirectedSteps)) }, decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "untrusted artifact root", input: { ...request(project), artifactDirectoryPath: home }, decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "file symlink escape", input: request(path.join(steps, "escape")), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "directory symlink escape", input: request(path.join(steps, "other/artifact.md")), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "directory", input: request(steps), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "child directory", input: request(path.join(steps, "child")), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "NUL path", input: request(`${file}\0`), decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
+      { name: "missing file", input: request(path.join(steps, "missing")), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "traversal", input: request(`${steps}/../steps/artifact.md`), decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
+      { name: "relative path", input: request("artifact.md"), decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
+      { name: "conversation mismatch", input: request(file, "../escape"), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
       { name: "tool selection belongs to manifest", input: { ...request(file), toolCall: { name: "read_file", args: { AbsolutePath: file } } }, decision: "allow" },
-      { name: "null", input: null, decision: "deny" },
-      { name: "missing fields", input: {}, decision: "deny" },
-      { name: "wrong path type", input: { ...request(file), toolCall: { name: "view_file", args: { AbsolutePath: 1 } } }, decision: "deny" },
-      { name: "malformed JSON", input: undefined, decision: "deny" },
+      { name: "null", input: null, decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
+      { name: "missing fields", input: {}, decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
+      { name: "wrong path type", input: { ...request(file), toolCall: { name: "view_file", args: { AbsolutePath: 1 } } }, decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
+      { name: "malformed JSON", input: undefined, decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
     ];
     const manifest = JSON.parse(await readFile(path.join(plugin, "hooks.json"), "utf8"));
     const policy = manifest["restrict-view-file"].PreToolUse[0];
@@ -88,7 +109,7 @@ it("restricts native view_file to current conversation regular step files", asyn
         assert.equal(result.stderr, "");
         const output = JSON.parse(result.stdout);
         assert.equal(output.decision, row.decision);
-        if (row.decision === "deny") assert.ok(output.reason);
+        if (row.decision === "deny") assert.equal(output.reason, row.reason);
         else assert.deepEqual(output, { decision: "allow" });
       });
     }
@@ -106,10 +127,10 @@ it("gates the command on the exact recovery marker", async (t) => {
     { name: "unmarked with unset Node delegates malformed input", marker: undefined, node: undefined, input: "{", decision: "allow" },
     { name: "unmarked with missing Node delegates", marker: undefined, node: missingNode, input: "{}", decision: "allow" },
     ...["", "0", "true", "01", "1 ", " 1"].map((marker) => ({
-      name: `nonexact marker ${JSON.stringify(marker)} delegates without Node`, marker, node: undefined, input: "{", decision: "allow",
+      name: `nonexact marker ${JSON.stringify(marker)} delegates without Node`, marker, node: undefined, input: "{", decision: "allow", reason: undefined,
     })),
-    { name: "marked enforces metadata restrictions", marker: "1", node: process.execPath, input: "{}", decision: "deny" },
-    { name: "marked denies malformed input", marker: "1", node: process.execPath, input: "{", decision: "deny" },
+    { name: "marked enforces metadata restrictions", marker: "1", node: process.execPath, input: "{}", decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
+    { name: "marked denies malformed input", marker: "1", node: process.execPath, input: "{", decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
     { name: "marked with unset Node fails closed", marker: "1", node: undefined, input: "{}", decision: undefined },
     { name: "marked with missing Node fails closed", marker: "1", node: missingNode, input: "{}", decision: undefined },
   ];
@@ -134,7 +155,7 @@ it("gates the command on the exact recovery marker", async (t) => {
       if (row.decision === "allow") assert.deepEqual(output, { decision: "allow" });
       else {
         assert.equal(output.decision, "deny");
-        assert.ok(output.reason);
+        assert.equal(output.reason, row.reason);
       }
     });
   }

@@ -11,23 +11,27 @@ async function decide(input) {
   const id = input?.conversationId;
   const artifact = input?.artifactDirectoryPath;
   const target = input?.toolCall?.args?.AbsolutePath;
-  if (typeof id !== "string" ||
+  if (typeof id !== "string" || id === "" ||
       typeof artifact !== "string" || !path.isAbsolute(artifact) || artifact.includes("\0") ||
-      artifact.split(path.sep).includes("..") || path.basename(artifact) !== id ||
+      artifact.split(path.sep).includes("..") ||
       typeof target !== "string" || !path.isAbsolute(target) || target.includes("\0") ||
       target.split(path.sep).includes("..")) {
-    return { decision: "deny", reason: "Invalid view_file hook input" };
+    return { decision: "deny", reason: "Malformed Request: Invalid or missing arguments" };
   }
 
   const root = path.join(artifact, ".system_generated", "steps");
-  if (!inside(root, target)) {
-    return { decision: "deny", reason: "Path is outside current conversation steps" };
+  if (path.basename(artifact) !== id || !inside(root, target)) {
+    return { decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" };
   }
 
-  const [resolvedRoot, resolvedTarget] = await Promise.all([realpath(root), realpath(target)]);
-  // Reject redirected roots as well as file/directory symlinks escaping the root.
-  if (resolvedRoot !== root || !inside(resolvedRoot, resolvedTarget) || !(await stat(resolvedTarget)).isFile()) {
-    return { decision: "deny", reason: "Path is not a regular file within current conversation steps" };
+  try {
+    const [resolvedRoot, resolvedTarget] = await Promise.all([realpath(root), realpath(target)]);
+    // Reject redirected roots as well as file/directory symlinks escaping the root.
+    if (resolvedRoot !== root || !inside(resolvedRoot, resolvedTarget) || !(await stat(resolvedTarget)).isFile()) {
+      return { decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" };
+    }
+  } catch {
+    return { decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" };
   }
 
   return { decision: "allow" };
@@ -41,5 +45,5 @@ try {
   }
   console.log(JSON.stringify(await decide(JSON.parse(input))));
 } catch {
-  console.log(JSON.stringify({ decision: "deny", reason: "Unable to validate view_file request" }));
+  console.log(JSON.stringify({ decision: "deny", reason: "Malformed Request: Invalid or missing arguments" }));
 }
