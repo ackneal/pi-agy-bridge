@@ -75,7 +75,7 @@ it("restricts native view_file to current conversation regular step files", asyn
       await t.test(row.name, () => {
         const result = spawnSync("sh", ["-c", hook.command], {
           cwd: plugin,
-          env: { ...process.env, HOME: home, PI_AGY_BRIDGE_MCP_NODE: process.execPath },
+          env: { ...process.env, HOME: home, PI_AGY_BRIDGE_RECOVERY: "1", PI_AGY_BRIDGE_MCP_NODE: process.execPath },
           input: row.input === undefined ? "{" : JSON.stringify(row.input),
           encoding: "utf8",
         });
@@ -89,5 +89,48 @@ it("restricts native view_file to current conversation regular step files", asyn
     }
   } finally {
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("gates the command on the exact recovery marker", async (t) => {
+  const manifest = JSON.parse(await readFile(path.join(plugin, "hooks.json"), "utf8"));
+  const command = manifest["restrict-view-file"].PreToolUse[0].hooks[0].command;
+  const missingNode = path.join(plugin, "nonexistent-node");
+  const cases = [
+    { name: "unmarked delegates despite invalid metadata", marker: undefined, node: process.execPath, input: "{}", decision: "allow" },
+    { name: "unmarked with unset Node delegates malformed input", marker: undefined, node: undefined, input: "{", decision: "allow" },
+    { name: "unmarked with missing Node delegates", marker: undefined, node: missingNode, input: "{}", decision: "allow" },
+    ...["", "0", "true", "01", "1 ", " 1"].map((marker) => ({
+      name: `nonexact marker ${JSON.stringify(marker)} delegates without Node`, marker, node: undefined, input: "{", decision: "allow",
+    })),
+    { name: "marked enforces metadata restrictions", marker: "1", node: process.execPath, input: "{}", decision: "deny" },
+    { name: "marked denies malformed input", marker: "1", node: process.execPath, input: "{", decision: "deny" },
+    { name: "marked with unset Node fails closed", marker: "1", node: undefined, input: "{}", decision: undefined },
+    { name: "marked with missing Node fails closed", marker: "1", node: missingNode, input: "{}", decision: undefined },
+  ];
+  for (const row of cases) {
+    await t.test(row.name, () => {
+      const env = { ...process.env };
+      delete env.PI_AGY_BRIDGE_RECOVERY;
+      delete env.PI_AGY_BRIDGE_MCP_NODE;
+      if (row.marker !== undefined) env.PI_AGY_BRIDGE_RECOVERY = row.marker;
+      if (row.node !== undefined) env.PI_AGY_BRIDGE_MCP_NODE = row.node;
+
+      const result = spawnSync("sh", ["-c", command], { cwd: plugin, env, input: row.input, encoding: "utf8" });
+      assert.ifError(result.error);
+      if (row.decision === undefined) {
+        assert.notEqual(result.status, 0);
+        assert.equal(result.stdout, "");
+        return;
+      }
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stderr, "");
+      const output = JSON.parse(result.stdout);
+      if (row.decision === "allow") assert.deepEqual(output, { decision: "allow" });
+      else {
+        assert.equal(output.decision, "deny");
+        assert.ok(output.reason);
+      }
+    });
   }
 });

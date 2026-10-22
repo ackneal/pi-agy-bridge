@@ -124,6 +124,7 @@ describe("static Antigravity CLI bridge plugin", () => {
       } finally {
         process.execPath = originalNodePath;
       }
+      assert.equal(environment.PI_AGY_BRIDGE_RECOVERY, "1");
       assert.equal(environment.PI_AGY_BRIDGE_MCP_NODE, nodePath);
       assert.equal(environment.PI_AGY_BRIDGE_MCP_ENTRYPOINT, fileURLToPath(new URL("../../src/mcp/index.js", import.meta.url)));
       assert.equal(environment.PI_AGY_BRIDGE_MCP_ENDPOINT, bridge.bridgeUri);
