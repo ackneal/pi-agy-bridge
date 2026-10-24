@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { DriverId } from "../drivers/types.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { LiveSession, PiContextAdapter } from "./session.ts";
 import { debugLog, isDebugEnabled } from "../shared/debug.ts";
@@ -22,7 +23,7 @@ export class RuntimeSessionStore {
     this.piContext = piContext;
   }
 
-  public async get(piSessionId: string, loginEpoch?: string): Promise<AgyConversationCheckpoint | undefined> {
+  public async get(piSessionId: string, loginEpoch?: string, driver: DriverId = "cli"): Promise<AgyConversationCheckpoint | undefined> {
     const sessionManager = this.piContext.getSessionManager(piSessionId);
     if (!sessionManager) return undefined;
 
@@ -37,10 +38,18 @@ export class RuntimeSessionStore {
     }
     if (!entry || !isRecord(entry.data)) return undefined;
     if (entry.data.deleted === true || entry.data.loginEpoch !== loginEpoch) return undefined;
-    if (typeof entry.data.conversationId !== "string") return undefined;
+    // Only CLI may read older conversationId formats. A malformed latest
+    // checkpoint must never expose an older branch reference.
+    const tagged = "driver" in entry.data || "version" in entry.data;
+    if (tagged && (entry.data.driver !== driver || entry.data.version !== 1)) return undefined;
+    if (!tagged && driver !== "cli") return undefined;
+    const reference = tagged && "reference" in entry.data
+      ? entry.data.reference
+      : driver === "cli" ? entry.data.conversationId : undefined;
+    if (typeof reference !== "string") return undefined;
 
     return {
-      conversationId: entry.data.conversationId,
+      conversationId: reference,
       ...(typeof entry.data.messageFormat === "string" ? { messageFormat: entry.data.messageFormat } : {}),
       ...(typeof entry.data.fingerprint === "string" ? { fingerprint: entry.data.fingerprint } : {}),
       ...(typeof entry.data.messageCount === "number" ? { messageCount: entry.data.messageCount } : {}),
@@ -52,14 +61,17 @@ export class RuntimeSessionStore {
     piSessionId: string,
     checkpoint: AgyConversationCheckpoint,
     messages: readonly unknown[],
-    loginEpoch?: string
+    loginEpoch?: string,
+    driver: DriverId = "cli"
   ): Promise<AgyConversationCheckpoint> {
     const sessionManager = this.requireSessionManager(piSessionId);
     const fingerprint = fingerprintSerializedMessages(messages.map(serializeMessage));
     const messageCount = messages.length;
     const pendingMetadata = typeof checkpoint.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: checkpoint.hasPendingToolCalls } : {};
     sessionManager.appendCustomEntry(ENTRY_TYPE, {
-      conversationId: checkpoint.conversationId,
+      driver,
+      version: 1,
+      reference: checkpoint.conversationId,
       ...(loginEpoch ? { loginEpoch } : {}),
       fingerprint,
       messageCount,

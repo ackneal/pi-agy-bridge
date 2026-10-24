@@ -1,6 +1,5 @@
-import type { ConversationErrorState } from "../runtime/events.ts";
+import type { DriverId, DriverSession, RuntimeEvent } from "../drivers/types.ts";
 import { randomUUID } from "node:crypto";
-import type { AgyRuntime } from "../runtime/process.ts";
 import type { ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import { debugLog } from "../shared/debug.ts";
@@ -90,18 +89,11 @@ export function calculateSyncKey(
 export class LiveSession {
   public readonly id = randomUUID();
   public readonly piSessionId: string;
-  public activeProcess: AgyRuntime | null = null;
+  public activeProcess: DriverSession | null = null;
+  public driverId: DriverId = "cli";
   public activeMcpServer: BridgeIPC | null = null;
   public syncKey: string = "";
-  public readonly errorState: ConversationErrorState = {};
-  public get conversationId(): string | undefined {
-    return this.errorState.conversationId;
-  }
-
-  public set conversationId(value: string | undefined) {
-    if (value !== this.errorState.conversationId) this.errorState.lastError = undefined;
-    this.errorState.conversationId = value;
-  }
+  public conversationId: string | undefined;
   public readonly resources = new SessionResources();
   private unsubscribeRuntimeEvents: (() => void) | null = null;
   private abortSignal: AbortSignal | null = null;
@@ -127,7 +119,7 @@ export class LiveSession {
   }
 
   public setSession(
-    process: AgyRuntime,
+    process: DriverSession,
     syncKey: string,
     mcpServer?: BridgeIPC,
     conversationId?: string,
@@ -136,19 +128,20 @@ export class LiveSession {
     if (preparationId !== undefined && !this.ownsPreparation(preparationId)) return false;
 
     this.activeProcess = process;
+    this.driverId = process.driver;
     this.activeMcpServer = mcpServer ?? null;
     this.syncKey = syncKey;
     this.conversationId = conversationId;
     return true;
   }
 
-  public setRuntimeEventHandler(handler: Parameters<AgyRuntime["onEvent"]>[0] | null): void {
+  public setRuntimeEventHandler(handler: ((event: RuntimeEvent) => void) | null): void {
     const unsubscribe = this.unsubscribeRuntimeEvents;
     this.unsubscribeRuntimeEvents = null;
     unsubscribe?.();
 
     if (handler && this.activeProcess) {
-      this.unsubscribeRuntimeEvents = this.activeProcess.onEvent(handler);
+      this.unsubscribeRuntimeEvents = this.activeProcess.onRuntimeEvent(handler);
     }
   }
 

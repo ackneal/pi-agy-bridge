@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import test, { describe, it } from "node:test";
+import { describe, it } from "node:test";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { calculateSyncKey, LiveSession, LiveSessionRegistry, PiContextAdapter } from "./session.ts";
-import type { AgyProcess, AgyRuntime } from "../runtime/process.ts";
+import type { DriverSession } from "../drivers/types.ts";
 import type { AgyMcpServer } from "../bridge/bridge-ipc.ts";
 
 describe("calculateSyncKey", () => {
@@ -53,18 +53,20 @@ describe("calculateSyncKey", () => {
 });
 
 describe("LiveSession", () => {
-  type EventHandler = Parameters<AgyRuntime["onEvent"]>[0];
+  type EventHandler = Parameters<DriverSession["onRuntimeEvent"]>[0];
 
   function createRuntime(abort: () => Promise<void> = async () => {}) {
     const subscriptions: { handler: EventHandler; unsubscribeCalls: number }[] = [];
-    const runtime = {
-      onEvent: (handler: EventHandler) => {
+    const runtime: DriverSession = {
+      driver: "cli", isRunning: true,
+      formatContextUpdate: () => "", submit: async () => {},
+      onRuntimeEvent: (handler: EventHandler) => {
         const subscription = { handler, unsubscribeCalls: 0 };
         subscriptions.push(subscription);
         return () => { subscription.unsubscribeCalls++; };
       },
       abort,
-    } as unknown as AgyRuntime;
+    };
 
     return {
       runtime,
@@ -97,13 +99,13 @@ describe("LiveSession", () => {
           if (row.detachProcess && index === 1) session.activeProcess = null;
           session.setRuntimeEventHandler(handler === null ? null : handlers[handler]!);
         }
-        mock.emit({ event: "result", status: "success" }, "agy");
-        mock.emit({ event: "result", status: "error" }, "runtime");
+        mock.emit({ type: "complete", reason: "stop", resumable: true });
+        mock.emit({ type: "complete", reason: "error", resumable: false });
 
         assert.deepEqual(mock.subscriptions.map((subscription) => subscription.unsubscribeCalls), row.unsubscribeCalls);
         assert.deepEqual(events, row.activeHandler === null ? [] : [
-          { handler: row.activeHandler, args: [{ event: "result", status: "success" }, "agy"] },
-          { handler: row.activeHandler, args: [{ event: "result", status: "error" }, "runtime"] },
+          { handler: row.activeHandler, args: [{ type: "complete", reason: "stop", resumable: true }] },
+          { handler: row.activeHandler, args: [{ type: "complete", reason: "error", resumable: false }] },
         ]);
       } finally {
         await session.dispose();
@@ -198,7 +200,7 @@ describe("LiveSession", () => {
 
       try {
         await session.dispose({ preparationId: token });
-        mock.emit({ event: "result" }, "agy");
+        mock.emit({ type: "start" });
         controller.abort();
 
         assert.equal(session.ownsPreparation(current), true);
@@ -271,11 +273,12 @@ describe("LiveSession", () => {
     it(row.name, async () => {
       const session = new LiveSession("pi-session-a");
       const lifecycle: string[] = [];
-      const mockProc = {
+      const mockProc: DriverSession = {
+        driver: "cli", formatContextUpdate: () => "", submit: async () => {},
         isRunning: true,
-        onEvent: () => () => { lifecycle.push("unsubscribe"); },
-        abort: async () => lifecycle.push("process"),
-      } as unknown as AgyProcess;
+        onRuntimeEvent: () => () => { lifecycle.push("unsubscribe"); },
+        abort: async () => { lifecycle.push("process"); },
+      };
       const mockMcpServer = {
         close: async () => lifecycle.push("mcp"),
       } as unknown as AgyMcpServer;
@@ -358,7 +361,7 @@ describe("LiveSession", () => {
         assert.equal(oldRuntime.subscriptions[0]!.unsubscribeCalls, 1);
         assert.equal(session.activeProcess, null);
         assert.equal(session.resources.terminals.resolve(handle), row.preserveResources ? "pi-terminal" : undefined);
-        oldRuntime.emit({ event: "result" }, "agy");
+        oldRuntime.emit({ type: "start" });
         assert.equal(events.length, 0);
         if (row.delayedStage === "process") await Promise.resolve();
         assert.deepEqual(lifecycle, row.delayedStage === "mcp" ? ["old-mcp"] : ["old-mcp", "old-process"]);
@@ -370,8 +373,8 @@ describe("LiveSession", () => {
         const replacementHandle = session.resources.terminals.bind("replacement-terminal");
         release();
         await disposal;
-        oldRuntime.emit({ event: "result" }, "agy");
-        replacement.emit({ event: "result" }, "runtime");
+        oldRuntime.emit({ type: "start" });
+        replacement.emit({ type: "start" });
         replacementController.abort();
 
         assert.equal(session.ownsPreparation(oldPreparation), false);
@@ -438,21 +441,3 @@ describe("LiveSessionRegistry", () => {
     assert.equal(registry.get("pi-session-b"), undefined);
   });
 });
-
-
-for (const row of [
-  { name: "replacement preserves conversation", preserveConversation: true, next: "same", expected: "quota" },
-  { name: "new conversation clears error", preserveConversation: true, next: "new", expected: undefined },
-  { name: "disposal clears error", preserveConversation: false, next: undefined, expected: undefined },
-]) {
-  test(row.name, async () => {
-    const session = new LiveSession("pi");
-    session.conversationId = "same";
-    session.errorState.lastError = "quota";
-    const state = session.errorState;
-    await session.dispose({ preserveConversation: row.preserveConversation });
-    session.conversationId = row.next;
-    assert.equal(session.errorState, state);
-    assert.equal(state.lastError, row.expected);
-  });
-}

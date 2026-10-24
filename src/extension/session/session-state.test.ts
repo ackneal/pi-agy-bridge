@@ -8,8 +8,16 @@ import { LiveSession, PiContextAdapter } from "./session.ts";
 import { messagesMatch, RuntimeSessionStore, RuntimeSessionSync, type AgyConversationCheckpoint } from "./session-state.ts";
 import { MESSAGE_FORMAT } from "./history.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
-import type { AgyProcess } from "../runtime/process.ts";
+import type { DriverSession } from "../drivers/types.ts";
 import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
+
+function runtime(isRunning: boolean): DriverSession {
+  return {
+    driver: "cli", isRunning,
+    onRuntimeEvent: () => () => {}, formatContextUpdate: () => "",
+    submit: async () => {}, abort: async () => {},
+  };
+}
 
 describe("RuntimeSessionStore", () => {
   const pendingMetadataCases = [
@@ -41,7 +49,8 @@ describe("RuntimeSessionStore", () => {
         const entry = manager.getBranch().at(-1);
         assert.ok(entry?.type === "custom");
         assert.deepEqual(entry.data, {
-          conversationId: "agy-conversation", fingerprint: written.fingerprint,
+          driver: "cli", version: 1,
+          reference: "agy-conversation", fingerprint: written.fingerprint,
           messageCount: history.length, messageFormat: MESSAGE_FORMAT, ...expectedPending,
         });
         assert.equal(manager.buildSessionContext().messages.length, 0);
@@ -63,6 +72,61 @@ describe("RuntimeSessionStore", () => {
       } finally {
         await rm(sessionDir, { recursive: true, force: true });
       }
+    });
+  }
+
+  const referenceCases = [
+    { name: "legacy CLI", data: { conversationId: "opaque" }, owner: "cli" },
+    { name: "first-stage CLI", data: { driver: "cli", version: 1, conversationId: "opaque" }, owner: "cli" },
+    { name: "CLI", data: { driver: "cli", version: 1, reference: "opaque" }, owner: "cli" },
+    { name: "ACP", data: { driver: "acp", version: 1, reference: "opaque" }, owner: "acp" },
+    ...[
+      { driver: "other", version: 1, reference: "opaque" },
+      { driver: "cli", version: 2, reference: "opaque" },
+      { driver: "acp", version: 2, reference: "opaque" },
+      { driver: "cli", reference: "opaque" },
+      { version: 1, reference: "opaque" },
+      { driver: null, version: 1, reference: "opaque" },
+      { driver: "cli", version: "1", reference: "opaque" },
+      { driver: "acp", version: 1, conversationId: "opaque" },
+      { driver: "cli", version: 1, reference: null, conversationId: "opaque" },
+      { reference: "opaque" },
+    ].map((data, index) => ({ name: `unknown format ${index}`, data, owner: undefined })),
+  ];
+
+  for (const row of referenceCases) {
+    for (const driver of ["cli", "acp"] as const) {
+      it(`isolates persisted references: ${row.name} read by ${driver}`, async () => {
+        const manager = SessionManager.inMemory("/workspace");
+        const context = new PiContextAdapter();
+        const sessionId = context.bind(manager);
+        const store = new RuntimeSessionStore(context);
+        await store.set(sessionId, { conversationId: "older" }, [], undefined, driver);
+        manager.appendCustomEntry("pi-agy-bridge.runtime-session", row.data);
+
+        assert.deepEqual(await store.get(sessionId, undefined, driver),
+          row.owner === driver ? { conversationId: "opaque" } : undefined);
+      });
+    }
+  }
+
+  for (const driver of ["cli", "acp"] as const) {
+    it(`roundtrips opaque ${driver} references with epoch and tombstone isolation`, async () => {
+      const manager = SessionManager.inMemory("/workspace");
+      const context = new PiContextAdapter();
+      const sessionId = context.bind(manager);
+      const store = new RuntimeSessionStore(context);
+      const checkpoint = await store.set(sessionId, {
+        conversationId: 'opaque:/not/a/path?{"native":true}', hasPendingToolCalls: true,
+      }, [{ role: "user", content: "hello" }], "epoch", driver);
+
+      assert.deepEqual(await store.get(sessionId, "epoch", driver), checkpoint);
+      assert.equal(messagesMatch(checkpoint, [{ role: "user", content: "hello" }]), true);
+      assert.equal(await store.get(sessionId, "other", driver), undefined);
+      assert.equal(await store.get(sessionId, undefined, driver), undefined);
+      assert.equal(await store.get(sessionId, "epoch", driver === "cli" ? "acp" : "cli"), undefined);
+      await store.delete(sessionId);
+      assert.equal(await store.get(sessionId, "epoch", driver), undefined);
     });
   }
 
@@ -102,7 +166,7 @@ test("metadata changes preserve live pending tool results and versioned persiste
   const replay = { ...assistant, thinkingLevel: "medium", timestamp: 123, usage: { input: 10 } };
   const toolResult = { role: "toolResult" as const, toolCallId: call.id, toolName: "read", content: [{ type: "text" as const, text: "pi-agy-bridge" }], isError: false, timestamp: 124 };
   const live = new LiveSession("metadata-test");
-  live.setSession({ isRunning: true } as AgyProcess, "sync-key", undefined, "agy-conversation");
+  live.setSession(runtime(true), "sync-key", undefined, "agy-conversation");
   const sync = new RuntimeSessionSync();
   sync.record(live, [user], assistant);
   assert.deepEqual(sync.decide(live, { syncKey: "sync-key", messages: [user, replay, toolResult] }), { action: "continue" });
@@ -121,7 +185,7 @@ test("metadata changes preserve live pending tool results and versioned persiste
 describe("RuntimeSessionSync", () => {
   function createSession(isRunning: boolean): LiveSession {
     const session = new LiveSession("pi-session-a");
-    session.setSession({ isRunning } as AgyProcess, "sync-key", undefined, "agy-conversation");
+    session.setSession(runtime(isRunning), "sync-key", undefined, "agy-conversation");
     return session;
   }
 
@@ -285,7 +349,7 @@ describe("RuntimeSessionSync", () => {
       assert.equal(reads, 1);
       if (row.action === "resume") {
         assert.equal(sync.getSyncedMessageCount(live), 1);
-        live.setSession({ isRunning: true } as AgyProcess, input.syncKey, undefined, "agy-conversation");
+        live.setSession(runtime(true), input.syncKey, undefined, "agy-conversation");
         assert.deepEqual(sync.decide(live, { ...input, messages: [message] }), { action: "continue" });
         assert.equal(reads, 2);
       }
