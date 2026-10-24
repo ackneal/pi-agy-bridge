@@ -114,7 +114,7 @@ for (const scenario of [
     const bridge = new AgyBridge({
       on: () => {}, registerCommand: () => {}, getActiveTools: () => [], getAllTools: () => [],
       registerProvider: (registered: Provider) => { provider = registered; },
-    } as unknown as ExtensionAPI);
+    } as unknown as ExtensionAPI, { driver: "cli" });
     t.after(() => bridge.liveSessions.disposeAll());
     const lookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
       throw new Error("Reached runtime using existing Antigravity CLI login");

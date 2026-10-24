@@ -27,7 +27,7 @@ for (const scenario of [
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
     } as unknown as ExtensionAPI;
-    registerAgyProvider(pi, { agyPath });
+    registerAgyProvider(pi, { driver: "cli" as const, agyPath });
     assert.ok(provider?.refreshModels);
     const publications: ModelsPublication[] = [];
     const controller = new AbortController();
@@ -93,7 +93,7 @@ test("Pi persists raw Antigravity CLI discovery and reapplies models.json overri
     on: (event: string, handler: typeof sessionStart) => { if (event === "session_start") sessionStart = handler; }, registerCommand: () => {},
     registerProvider: runtime.registerNativeProvider.bind(runtime),
   } as unknown as ExtensionAPI;
-  await registerAndAwaitRefresh(t, runtime, () => registerAgyProvider(pi, { agyPath }));
+  await registerAndAwaitRefresh(t, runtime, () => registerAgyProvider(pi, { driver: "cli" as const, agyPath }));
 
   await runtime.refresh({ providers: ["agy"], allowNetwork: false });
 
@@ -135,7 +135,7 @@ test("Pi persists raw Antigravity CLI discovery and reapplies models.json overri
   const next = await ModelRuntime.create({ modelsPath, authPath: path.join(directory, "auth.json"), refreshOnCreate: false });
   await registerAndAwaitRefresh(t, next, () => registerAgyProvider(
     { ...pi, registerProvider: next.registerNativeProvider.bind(next) } as unknown as ExtensionAPI,
-    { agyPath: "__invalid_binary_name__" },
+    { driver: "cli" as const, agyPath: "__invalid_binary_name__" },
   ));
   const restored = await next.refresh({ providers: ["agy"], allowNetwork: false });
   assert.equal(restored.errors.size, 0);

@@ -113,7 +113,7 @@ export class AcpConnection {
 
   async request<M extends acp.AgentRequestMethod>(method: M, params: acp.AgentRequestParamsByMethod[M]): Promise<acp.AgentRequestResponsesByMethod[M]> {
     if (!this.isRunning || !this.sdk) throw new Error("ACP connection is not running");
-    return this.bounded(() => this.sdk!.agent.request(method, params), method);
+    return this.bounded(() => this.sdk!.agent.request(method, params), method, method !== acp.methods.agent.session.prompt);
   }
 
   async notify<M extends acp.AgentNotificationMethod>(method: M, params: acp.AgentNotificationParamsByMethod[M]): Promise<void> {
@@ -121,7 +121,7 @@ export class AcpConnection {
     await this.bounded(() => this.sdk!.agent.notify(method, params), method);
   }
 
-  private async bounded<T>(operation: () => Promise<T>, method: string): Promise<T> {
+  private async bounded<T>(operation: () => Promise<T>, method: string, timeout = true): Promise<T> {
     const signal = this.shutdown.signal;
     let abort!: () => void;
     const stopped = new Promise<never>((_, reject) => {
@@ -129,7 +129,10 @@ export class AcpConnection {
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
     });
-    const timer = setTimeout(() => this.stop(new Error(`ACP request timeout: ${method}`)), this.options.requestTimeoutMs ?? 180_000);
+    // Prompts can wait indefinitely for tools; only shutdown bounds their lifetime.
+    const timer = timeout
+      ? setTimeout(() => this.stop(new Error(`ACP request timeout: ${method}`)), this.options.requestTimeoutMs ?? 180_000)
+      : undefined;
     try {
       return await Promise.race([operation(), stopped]);
     } finally {

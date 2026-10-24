@@ -98,7 +98,7 @@ export class AgyAuthentication {
         this.detectionCancellation.abort(new Error("Antigravity CLI status check was replaced by a newer attempt"));
         this.detectionCancellation = new AbortController();
         this.status = "unknown";
-        const signal = AbortSignal.any([interaction.signal, this.lifecycle.signal]);
+        const signal = AbortSignal.any([interaction.signal, this.lifecycle.signal, this.detectionCancellation.signal]);
         try {
           signal.throwIfAborted();
           await beforeLogin();
@@ -128,6 +128,9 @@ export class AgyAuthentication {
   }
 
   public setBackend(backend: AgyAuthenticationBackend): void {
+    ++this.generation;
+    this.detectionCancellation.abort(new Error("Antigravity authentication backend changed"));
+    this.detectionCancellation = new AbortController();
     this.backend = backend;
     this.status = "unknown";
     this.usage = undefined;

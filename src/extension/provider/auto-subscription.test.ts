@@ -71,6 +71,7 @@ for (const row of [
       registerProvider: runtime.registerNativeProvider.bind(runtime),
     } as unknown as ExtensionAPI;
     const config = {
+      driver: "cli" as const,
       authPath,
       models: parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)"),
     };

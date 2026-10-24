@@ -34,7 +34,7 @@ for (const { decision, incremental, payload } of cases) {
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const agyPath = path.join(directory, "agy");
-    const config = { agyPath, pluginDir: path.join(directory, "plugin"), models: [] };
+    const config = { driver: "cli" as const, agyPath, pluginDir: path.join(directory, "plugin"), models: [] };
     const bridge = new AgyBridge(pi, config);
     t.after(async () => {
       try {
@@ -194,7 +194,7 @@ for (const row of invalidBatchCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
+    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
     const bridge = new AgyBridge(pi, config);
     t.after(async () => {
       try {
@@ -312,7 +312,7 @@ for (const row of continueCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
+    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
     const bridge = new AgyBridge(pi, config);
     t.after(async () => {
       try {
@@ -485,7 +485,7 @@ for (const row of pendingTerminalCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
+    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
     const bridge = new AgyBridge(pi, config);
     t.after(async () => {
       try {
@@ -609,7 +609,7 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
+    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
     const bridge = new AgyBridge(pi, config);
     t.after(async () => {
       try {
@@ -724,7 +724,7 @@ for (const conversionException of [false, true]) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
+    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
     const bridge = new AgyBridge(pi, config);
     t.after(async () => {
       try {

@@ -84,7 +84,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
         registerProvider: () => {},
         sendMessage,
       } as unknown as ExtensionAPI;
-      const bridge = new AgyBridge(pi, { models: [], agyPath: "/fake/agy", pluginDir: "/missing/doctor-plugin" });
+      const bridge = new AgyBridge(pi, { driver: "cli" as const, models: [], agyPath: "/fake/agy", pluginDir: "/missing/doctor-plugin" });
       bridge.start();
       assert.ok(doctor);
       assert.ok(shutdown);
@@ -159,7 +159,7 @@ test("doctor starts a fresh query after login while the cancelled query is still
     registerCommand: (name: string, command: { handler: () => Promise<void> }) => { if (name === "agy-bridge:doctor") doctor = command.handler; },
     registerProvider: (registered: Provider) => { provider = registered; },
     on: () => {}, sendMessage,
-  } as unknown as ExtensionAPI, { models: [], agyPath: "/fake/agy", pluginDir: "/missing/doctor-plugin" });
+  } as unknown as ExtensionAPI, { driver: "cli" as const, models: [], agyPath: "/fake/agy", pluginDir: "/missing/doctor-plugin" });
   bridge.start();
 
   const oldDoctor = doctor();

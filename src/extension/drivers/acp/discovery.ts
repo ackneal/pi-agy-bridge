@@ -1,6 +1,6 @@
 import * as acp from "@agentclientprotocol/sdk";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { modelDefaults, UNSUPPORTED_THINKING_LEVELS } from "../../discovery/model-metadata.ts";
+import { defaultModelCatalog, modelDefaults, UNSUPPORTED_THINKING_LEVELS } from "../../discovery/model-metadata.ts";
 import { AcpConnection, type AcpConnectionOptions } from "./connection.ts";
 
 export type AcpDiscoveryOptions = Pick<AcpConnectionOptions, "executable" | "cwd" | "args" | "requestTimeoutMs">;
@@ -33,7 +33,14 @@ export async function newDiscoverySession(connection: AcpConnection, cwd: string
 
 export async function discoverAcpModels(options: AcpDiscoveryOptions, signal?: AbortSignal): Promise<Model<Api>[]> {
   return withAcpDiscovery(options, signal, async (connection) => {
-    const session = await newDiscoverySession(connection, options.cwd);
+    let session: acp.NewSessionResponse;
+    try {
+      session = await newDiscoverySession(connection, options.cwd);
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (error instanceof acp.RequestError && error.code === -32000) return defaultModelCatalog();
+      throw error;
+    }
     const modelOption = session.configOptions?.find((option) => option.id === "model" && option.type === "select");
     if (!modelOption || modelOption.type !== "select") throw new Error("ACP model select configuration is unavailable");
     const values = modelOption.options.flatMap((entry) => "group" in entry ? entry.options : [entry]);

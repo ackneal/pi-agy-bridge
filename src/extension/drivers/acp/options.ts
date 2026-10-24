@@ -6,17 +6,27 @@ import { expandHome } from "../../shared/paths.ts";
 import type { AgyBridgeConfig } from "../../shared/types.ts";
 import type { AcpConnectionOptions } from "./connection.ts";
 
+function isExecutableFile(filepath: string): boolean {
+  try {
+    if (!fs.statSync(filepath).isFile()) return false;
+    fs.accessSync(filepath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function detectAcpExecutable(customPath?: string): string | undefined {
   if (customPath?.trim()) {
     const expanded = expandHome(customPath);
-    if (fs.existsSync(expanded)) return expanded;
+    if (isExecutableFile(expanded)) return expanded;
     return undefined;
   }
 
   const fromEnv = process.env.AGY_ACP_BIN;
   if (fromEnv?.trim()) {
     const expanded = expandHome(fromEnv);
-    if (fs.existsSync(expanded)) return expanded;
+    if (isExecutableFile(expanded)) return expanded;
   }
 
   const optDir = path.join(os.homedir(), ".local", "opt", "agy-acp");
@@ -26,10 +36,10 @@ export function detectAcpExecutable(customPath?: string): string | undefined {
       for (const entry of entries) {
         if (entry.isDirectory()) {
           const par = path.join(optDir, entry.name, "agy_acp_server.par");
-          if (fs.existsSync(par)) return par;
+          if (isExecutableFile(par)) return par;
           const bin = path.join(optDir, entry.name, "agy_acp_server");
-          if (fs.existsSync(bin)) return bin;
-        } else if (entry.isFile() && (entry.name === "agy_acp_server.par" || entry.name === "agy_acp_server")) {
+          if (isExecutableFile(bin)) return bin;
+        } else if ((entry.name === "agy_acp_server.par" || entry.name === "agy_acp_server") && isExecutableFile(path.join(optDir, entry.name))) {
           return path.join(optDir, entry.name);
         }
       }
@@ -39,7 +49,7 @@ export function detectAcpExecutable(customPath?: string): string | undefined {
   }
 
   const localBin = path.join(os.homedir(), ".local", "bin", "agy_acp_server");
-  if (fs.existsSync(localBin)) return localBin;
+  if (isExecutableFile(localBin)) return localBin;
 
   return undefined;
 }

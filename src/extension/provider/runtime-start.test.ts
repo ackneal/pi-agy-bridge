@@ -53,7 +53,7 @@ for (const { stage, aborts, cancelled } of cases) {
       getActiveTools: () => [],
       getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath, pluginDir: path.join(directory, "plugin"), models: [] };
+    const config = { driver: "cli" as const, agyPath, pluginDir: path.join(directory, "plugin"), models: [] };
     const bridge = new AgyBridge(pi, config);
     bridge.start();
     const context: Context = { messages: [], tools: [], systemPrompt: "" };

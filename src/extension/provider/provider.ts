@@ -1,5 +1,5 @@
 import path from "node:path";
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   AnyModel,
   AssistantMessageEventStream,
@@ -10,6 +10,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { getCurrentTools, isModelType, normalizeContext } from "@earendil-works/pi-ai";
 import { PiRuntimeOutput } from "./output.ts";
+import { restoreStoredAgyModels } from "../discovery/models.ts";
 import { AgyTurn } from "./turn.ts";
 import {
   LiveSessionRegistry,
@@ -137,6 +138,7 @@ export function streamAgyProvider(
 export class AgyBridge {
   private readonly pi: ExtensionAPI;
   private config: AgyBridgeConfig | undefined;
+  private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private pluginError: DoctorFailure | undefined;
   private discoveryError: DoctorFailure | undefined;
@@ -145,6 +147,7 @@ export class AgyBridge {
   private readonly authentication: AgyAuthentication;
   private startupAuthenticationStarted = false;
   private runtimeLifetime = new AbortController();
+  private readonly lifetime = new AbortController();
   private readonly sessionIds = new Set<string>();
   public readonly liveSessions = new LiveSessionRegistry();
   public readonly runtimeSessionSync = new RuntimeSessionSync();
@@ -215,7 +218,8 @@ export class AgyBridge {
     }
   }
 
-  public async switchDriver(driverId: DriverId): Promise<void> {
+  public async switchDriver(driverId: DriverId, modelRegistry?: ExtensionContext["modelRegistry"]): Promise<void> {
+    this.lifetime.signal.throwIfAborted();
     if (this.driver.id === driverId) return;
 
     if (driverId === "acp") {
@@ -226,16 +230,29 @@ export class AgyBridge {
       if (!cliBin) throw new Error("Antigravity CLI executable not found");
     }
 
-    await this.liveSessions.disposeAll();
+    const config = { ...this.config, driver: driverId };
+    const driver = createBridgeDriver(config);
+    const lifetime = this.runtimeLifetime.signal;
+    const models = config.models ?? await driver.discoverModels(lifetime);
+    lifetime.throwIfAborted();
 
-    this.config = { ...this.config, driver: driverId };
-    this.driver = createBridgeDriver(this.config);
-    this.authentication.setBackend(this.driver.authentication);
+    this.runtimeLifetime.abort(new Error("Antigravity bridge driver changed"));
+    await this.liveSessions.disposeAll();
+    this.lifetime.signal.throwIfAborted();
+    if (this.runtimeLifetime.signal !== lifetime) throw new Error("Antigravity driver switch was superseded");
+
+    this.config = config;
+    this.driver = driver;
+    this.authentication.setBackend(driver.authentication);
+    this.runtimeLifetime = new AbortController();
 
     this.usageRefresh = undefined;
     this.discoveryError = undefined;
     this.pluginError = undefined;
     this.usageError = undefined;
+
+    this.registerProvider(models);
+    await modelRegistry?.refresh({ providers: ["agy"], allowNetwork: false });
 
     debugLog("provider", `Switched bridge driver to: ${this.driver.label} (${driverId})`);
   }
@@ -251,14 +268,6 @@ export class AgyBridge {
   }
 
   public start(): void {
-    let models: AnyModel[] = (this.config?.models ?? []).map((model) => ({
-      ...model,
-      provider: "agy",
-      api: model.api ?? "agy",
-      baseUrl: model.baseUrl ?? "agy",
-      type: model.type ?? "chat",
-    })) as AnyModel[];
-
     this.pi.registerCommand("agy-bridge:doctor", {
       description: "Check Antigravity CLI, plugin installation, models, MCP, and quota",
       handler: async () => {
@@ -267,7 +276,7 @@ export class AgyBridge {
         if (lifetime.aborted) return;
 
         const report = await this.driver.doctor({
-          catalogModels: models,
+          catalogModels: this.models,
           pluginError: this.pluginError,
           discoveryError: this.discoveryError,
           authStatus: this.authentication.status,
@@ -287,7 +296,7 @@ export class AgyBridge {
 
     this.pi.registerCommand("agy-bridge:driver", {
       description: "Show or switch the Antigravity driver (/agy-bridge:driver [cli|acp])",
-      handler: async (args?: string) => {
+      handler: async (args, ctx) => {
         const target = args?.trim().toLowerCase();
         if (!target) {
           const acpPath = detectAcpExecutable(this.config?.acpPath);
@@ -329,7 +338,7 @@ export class AgyBridge {
         }
 
         try {
-          await this.switchDriver(target);
+          await this.switchDriver(target, ctx?.modelRegistry);
           this.pi.sendMessage({
             customType: "pi-agy-bridge:driver",
             content: `Successfully switched driver to **${this.driver.label}** (${target}).`,
@@ -370,12 +379,26 @@ export class AgyBridge {
       })();
     });
     this.pi.on("session_shutdown", async () => {
+      this.lifetime.abort(new Error("Antigravity bridge session ended"));
       this.authentication.close();
       this.runtimeLifetime.abort(new Error("Antigravity CLI bridge session ended"));
       await this.liveSessions.disposeAll();
       this.piContextAdapter.clear();
       this.sessionIds.clear();
     });
+
+    this.registerProvider();
+  }
+
+  private registerProvider(models?: readonly AnyModel[] | NonNullable<AgyBridgeConfig["models"]>): void {
+    const driver = this.driver;
+    this.models = (this.config?.models ?? models ?? driver.initialModels).map((model) => ({
+      ...model,
+      provider: "agy",
+      api: model.api ?? "agy",
+      baseUrl: model.baseUrl ?? "agy",
+      type: model.type ?? "chat",
+    })) as AnyModel[];
 
     const stream = (model: Model<any>, context: Context, options?: SimpleStreamOptions) => {
       const oauthEnvironment = getAgyBridgeAuthEnvironment(options?.apiKey);
@@ -396,32 +419,37 @@ export class AgyBridge {
       name: `${this.driver.label} [pi-agy-bridge]`,
       baseUrl: "agy",
       auth: { oauth: this.authentication.oauth, apiKey: this.authentication.method },
-      getModels: () => models.filter((model) => isModelType(model, "chat")),
-      getAllModels: () => models,
+      getModels: () => this.models.filter((model) => isModelType(model, "chat")),
+      getAllModels: () => this.models,
       filterModels: (catalog, credential) => isAgyBridgeEnabled(credential) ? catalog : [],
       filterAllModels: (catalog, credential) => isAgyBridgeEnabled(credential) ? catalog : [],
       ...(this.config?.models ? {} : {
         refreshModels: async (context) => {
-          if (context.signal.aborted) return;
+          const signal = AbortSignal.any([context.signal, this.runtimeLifetime.signal]);
+          if (signal.aborted || driver !== this.driver) return;
 
-          if (context.stored) {
-            const restored = this.driver.restoreModels(context.stored.models);
-            const accepted = await context.publish({ update: () => { models = restored; } });
-            if (!accepted) return;
+          if (context.stored && models === undefined) {
+            const restored = restoreStoredAgyModels(context.stored.models);
+            if (restored.length > 0) {
+              const accepted = await context.publish({ update: () => { if (!signal.aborted) this.models = restored; } });
+              if (!accepted) return;
+            }
           }
-          if (!context.allowNetwork) return;
+          if (!context.allowNetwork || signal.aborted) return;
 
           try {
-            const discovered = await this.driver.discoverModels(context.signal);
+            const discovered = await driver.discoverModels(signal);
+            if (signal.aborted) return;
             await context.publish({
               persist: { models: discovered },
               update: () => {
-                models = discovered;
+                if (signal.aborted) return;
+                this.models = discovered;
                 this.discoveryError = undefined;
               },
             });
           } catch (error) {
-            if (context.signal.aborted) throw error;
+            if (signal.aborted) throw error;
             this.discoveryError = {
               time: new Date().toISOString(),
               message: error instanceof Error ? error.message : String(error),

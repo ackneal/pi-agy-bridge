@@ -24,7 +24,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
       acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))],
       acpRequestTimeoutMs: 5000,
     };
-    assert.equal(new AgyBridge(pi).driver.id, "acp");
+    assert.equal(new AgyBridge(pi, { acpPath: process.execPath }).driver.id, "acp");
     assert.equal(new AgyBridge(pi, { driver: "cli" }).driver.id, "cli");
     const bridge = new AgyBridge(pi, config);
     assert.equal(bridge.driver.id, "acp");
@@ -180,7 +180,7 @@ test("agy-bridge:driver command shows status and switches active driver", async 
     on: () => {},
   } as unknown as ExtensionAPI;
 
-  const bridge = new AgyBridge(pi, { driver: "acp" });
+  const bridge = new AgyBridge(pi, { driver: "acp", models: [], acpPath: process.execPath, agyPath: process.execPath });
   bridge.start();
 
   const handler = registeredCommands.get("agy-bridge:driver");

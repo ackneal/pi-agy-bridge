@@ -121,7 +121,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
         provider = registered;
         runtime.registerNativeProvider(registered);
       },
-    } as unknown as ExtensionAPI, { models, agyPath: executable, authPath: path.join(directory, "auth.json") });
+    } as unknown as ExtensionAPI, { driver: "cli", models, agyPath: executable, authPath: path.join(directory, "auth.json") });
     await runtime.refresh({ providers: ["agy"], allowNetwork: false });
     assert.ok(provider?.auth.oauth?.login);
     assert.equal(provider.auth.oauth.isSubscription, true);

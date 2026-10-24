@@ -229,7 +229,7 @@ for (const { name, arrange, expected } of cases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
+    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
     const bridge = new AgyBridge(pi, config);
 
     t.after(async () => {

@@ -112,7 +112,7 @@ test("doctor reports installation errors without starting a model turn", async (
     sendMessage,
   } as unknown as ExtensionAPI;
   const pluginDir = path.join(directory, "missing-plugin");
-  const bridge = new AgyBridge(pi, { models: [], agyPath: "__invalid_binary_name__", pluginDir });
+  const bridge = new AgyBridge(pi, { driver: "cli" as const, models: [], agyPath: "__invalid_binary_name__", pluginDir });
   bridge.start();
   await assert.rejects(bridge.ensureAgyPluginInstalled(pluginDir), /manifest not found/);
 
@@ -150,7 +150,7 @@ test("doctor clears the recorded installation error after successful installatio
       if (name === "agy-bridge:doctor") handler = command.handler;
     },
   } as unknown as ExtensionAPI;
-  const bridge = new AgyBridge(pi, { models: [], agyPath, pluginDir });
+  const bridge = new AgyBridge(pi, { driver: "cli" as const, models: [], agyPath, pluginDir });
   bridge.start();
   await assert.rejects(bridge.ensureAgyPluginInstalled(pluginDir), /install denied/);
   assert.ok(handler);
@@ -192,7 +192,7 @@ test("registers the Antigravity CLI provider and session lifecycle without start
     },
   } as unknown as ExtensionAPI;
 
-  registerAgyProvider(pi, { agyPath: "__invalid_binary_name__" });
+  registerAgyProvider(pi, { driver: "cli" as const, agyPath: "__invalid_binary_name__" });
 
   assert.ok(commands.has("agy-bridge:doctor"));
   assert.ok(provider);
@@ -233,7 +233,7 @@ test("explicit Antigravity CLI models are native static models preserving config
   registerAgyProvider({
     on: () => {}, registerCommand: () => {},
     registerProvider: (registered: Provider) => { provider = registered; },
-  } as unknown as ExtensionAPI, { models: [configured], agyPath: "__invalid_binary_name__" });
+  } as unknown as ExtensionAPI, { driver: "cli", models: [configured], agyPath: "__invalid_binary_name__" });
 
   assert.ok(provider);
   assert.equal(provider.refreshModels, undefined);
@@ -254,7 +254,7 @@ async function createRuntimeFixture(t: TestContext) {
     }
   });
 
-  const config = { agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
+  const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
   await writeFile(config.agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.2.14; else exit 1; fi\n', { mode: 0o755 });
   const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
   let runtimeBridge = new AgyBridge(pi, config);

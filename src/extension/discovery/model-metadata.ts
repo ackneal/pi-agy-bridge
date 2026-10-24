@@ -21,6 +21,13 @@ export const UNSUPPORTED_THINKING_LEVELS = {
   max: null,
 };
 
+export function defaultModelCatalog(): Model<Api>[] {
+  return Object.keys(MODEL_METADATA.models).map((id) => ({
+    ...modelDefaults(id), id, name: id, reasoning: false,
+    thinkingLevelMap: { ...UNSUPPORTED_THINKING_LEVELS },
+  }));
+}
+
 export function modelDefaults(id: string) {
   const family = Object.entries(MODEL_METADATA.families).find(([prefix]) => id.startsWith(prefix))?.[1];
   const metadata = { ...MODEL_METADATA.default, ...family, ...MODEL_METADATA.models[id] };

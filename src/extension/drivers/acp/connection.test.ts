@@ -60,7 +60,7 @@ for (const row of [
   { name: "early exit", mode: "exit", phase: "start", error: /closed/ },
   { name: "failed spawn", mode: "normal", phase: "start", error: /ENOENT/, executable: "/nonexistent/acp-fixture" },
   { name: "startup timeout", mode: "startup-hang", phase: "start", error: /timeout/ },
-  { name: "request timeout", mode: "hang", phase: "request", error: /timeout/ },
+  { name: "request timeout", mode: "blocked-stdin", phase: "ordinary-request", error: /timeout: session\/new/ },
   { name: "process close during request", mode: "prompt-exit", phase: "request", error: /closed/ },
   { name: "startup cancellation", mode: "startup-hang", phase: "abort", error: /synthetic cancellation/ },
   { name: "dispose during startup", mode: "startup-hang", phase: "dispose", error: /disposed/ },
@@ -70,8 +70,10 @@ for (const row of [
     const controller = new AbortController();
     try {
       const starting = connection.start(controller.signal);
-      const rejected = row.phase === "request"
-        ? starting.then(() => connection.request(acp.methods.agent.session.prompt, prompt)) : starting;
+      const rejected = row.phase === "ordinary-request"
+        ? starting.then(() => connection.request(acp.methods.agent.session.new, { cwd: process.cwd(), mcpServers: [] }))
+        : row.phase === "request"
+          ? starting.then(() => connection.request(acp.methods.agent.session.prompt, prompt)) : starting;
       const assertion = assert.rejects(rejected, row.error);
       if (row.phase === "abort") controller.abort(new Error("synthetic cancellation"));
       if (row.phase === "dispose") await connection.dispose();
@@ -88,6 +90,48 @@ for (const row of [
         assert.ok(onlyPermissionErrors(error));
       }
     }
+  });
+}
+
+for (const outcome of ["complete", "cancel", "dispose"] as const) {
+  test(`prompt survives request deadline before ${outcome}`, async () => {
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: (response: acp.RequestPermissionResponse) => void;
+    const permission = new Promise<acp.RequestPermissionResponse>((resolve) => { release = resolve; });
+    const connection = create("normal", { requestTimeoutMs: 500, onPermission: () => {
+      entered();
+      return permission;
+    } });
+    const exitListeners = process.listenerCount("exit");
+    try {
+      await connection.start();
+      let settled = false;
+      const pending = connection.request(acp.methods.agent.session.prompt, prompt);
+      void pending.then(() => { settled = true; }, () => { settled = true; });
+      await waiting;
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      assert.equal(settled, false);
+      assert.equal(connection.isRunning, true);
+
+      if (outcome === "complete") {
+        release({ outcome: { outcome: "cancelled" } });
+        assert.equal((await pending).stopReason, "end_turn");
+        assert.equal(connection.isRunning, true);
+      } else {
+        const rejected = assert.rejects(pending, /disposed/);
+        if (outcome === "cancel") {
+          await connection.notify(acp.methods.agent.session.cancel, { sessionId: prompt.sessionId });
+        }
+        await connection.dispose();
+        await rejected;
+        assert.equal(connection.isRunning, false);
+      }
+    } finally {
+      release({ outcome: { outcome: "cancelled" } });
+      await connection.dispose();
+    }
+    assert.equal(process.listenerCount("exit"), exitListeners);
   });
 }
 

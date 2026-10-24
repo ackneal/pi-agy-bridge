@@ -7,7 +7,8 @@ import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import type { AgyAuthenticationBackend } from "../provider/auth.ts";
 import { collectDoctorReport, type DoctorFailure } from "../provider/doctor.ts";
 import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../discovery/plugin-install.ts";
-import { discoverAgyModels, restoreStoredAgyModels } from "../discovery/models.ts";
+import { discoverAgyModels } from "../discovery/models.ts";
+import { defaultModelCatalog } from "../discovery/model-metadata.ts";
 import { createCliAuthenticationBackend } from "./cli/auth.ts";
 import { fetchAgyUsage, type AgyUsage } from "../runtime/usage.ts";
 import { expandHome } from "../shared/paths.ts";
@@ -45,10 +46,10 @@ export interface BridgeDriver {
   readonly id: DriverId;
   readonly label: string;
   readonly authentication: AgyAuthenticationBackend;
+  readonly initialModels: readonly AnyModel[];
   validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void;
   prepareSession(input: PrepareDriverInput): Promise<{ proc: DriverSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }>;
   discoverModels(signal: AbortSignal): Promise<AnyModel[]>;
-  restoreModels(models: readonly AnyModel[]): AnyModel[];
   usage(signal: AbortSignal): Promise<AgyUsage | undefined>;
   doctor(input: DriverDiagnostics): Promise<string>;
   installPlugin(pluginDir: string): Promise<void>;
@@ -61,9 +62,6 @@ export function resolveDriverId(config?: AgyBridgeConfig): DriverId {
     }
     return config.driver;
   }
-
-  if (config?.acpPath && !config?.agyPath) return "acp";
-  if (config?.agyPath && !config?.acpPath) return "cli";
 
   const acpBin = detectAcpExecutable(config?.acpPath);
   if (acpBin) return "acp";
@@ -81,6 +79,7 @@ export function createBridgeDriver(config?: AgyBridgeConfig): BridgeDriver {
 
   return {
     id, label,
+    initialModels: id === "acp" ? defaultModelCatalog() : [],
     authentication: id === "cli" ? createCliAuthenticationBackend(config?.agyPath) : {
       label,
       probe: async (signal) => { await acpAuthentication().probe(signal); return true; },
@@ -98,18 +97,9 @@ export function createBridgeDriver(config?: AgyBridgeConfig): BridgeDriver {
       const selection = resolveModelAndEffort(input.model.id, input.options, input.model.thinkingLevelMap);
       return prepareRuntime(input.model, input.context, input.tools, input.options, config, dependencies, input.session, selection, input.preparationId);
     },
-    async discoverModels(signal) {
-      const models = id === "cli" ? await discoverAgyModels(config?.agyPath, signal) : await discoverAcpModels(resolveAcpConnectionOptions(config), signal);
-      return id === "cli" ? models : models.map((model) => ({ ...model, agyDriver: id }));
-    },
-    restoreModels(models) {
-      const matching = models.filter((model) => {
-        const driver = (model as AnyModel & { agyDriver?: DriverId }).agyDriver;
-        return driver === id || (id === "cli" && driver === undefined);
-      });
-      const restored = restoreStoredAgyModels(matching);
-      return id === "cli" ? restored : restored.map((model) => ({ ...model, agyDriver: id }));
-    },
+    discoverModels: (signal) => id === "cli"
+      ? discoverAgyModels(config?.agyPath, signal)
+      : discoverAcpModels(resolveAcpConnectionOptions(config), signal),
     usage: (signal) => id === "cli" ? fetchAgyUsage(config?.agyPath, signal) : Promise.resolve(undefined),
     async doctor(input) {
       if (id === "cli") {
