@@ -79,6 +79,49 @@ describe("LiveSession", () => {
     };
   }
 
+  for (const cleanup of ["dispose", "disposeAll", "remove"] as const) {
+    it(`awaits in-flight cleanup through ${cleanup}`, async () => {
+      const registry = new LiveSessionRegistry();
+      const session = registry.getOrCreate("pi-session-a");
+      const lifecycle: string[] = [];
+      let releaseClose!: () => void;
+      const closing = new Promise<void>((resolve) => { releaseClose = resolve; });
+      const mock = createRuntime(async () => { lifecycle.push("process"); });
+      const mcp = { close: async () => {
+        lifecycle.push("mcp");
+        await closing;
+      } } as unknown as AgyMcpServer;
+      session.setSession(mock.runtime, "key", mcp, "conversation");
+      const controller = new AbortController();
+      let initialDisposal: Promise<void> | undefined;
+      session.setAbortSignal(controller.signal, () => { initialDisposal = session.dispose(); });
+
+      controller.abort();
+      let completed = false;
+      const cleanupTask = (cleanup === "dispose" ? session.dispose()
+        : cleanup === "disposeAll" ? registry.disposeAll() : registry.remove(session.piSessionId))
+        .then(() => { completed = true; });
+
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(session.activeProcess, null);
+        assert.equal(session.activeMcpServer, null);
+        assert.equal(completed, false);
+        assert.deepEqual(lifecycle, ["mcp"]);
+
+        releaseClose();
+        await cleanupTask;
+        assert.equal(completed, true);
+        assert.deepEqual(lifecycle, ["mcp", "process"]);
+      } finally {
+        releaseClose();
+        await initialDisposal;
+        await cleanupTask;
+        await registry.disposeAll();
+      }
+    });
+  }
+
   for (const row of [
     { name: "replaces the owned handler", handlers: [0, 1], unsubscribeCalls: [1, 0], activeHandler: 1 },
     { name: "resubscribes the same handler exactly once", handlers: [0, 0], unsubscribeCalls: [1, 0], activeHandler: 0 },
@@ -219,7 +262,7 @@ describe("LiveSession", () => {
   }
 
   for (const stage of ["mcp", "process"]) {
-    it(`concurrent disposal does not repeat or wait for detached ${stage} cleanup`, async () => {
+    it(`concurrent disposal waits without repeating detached ${stage} cleanup`, async () => {
       const session = new LiveSession("pi");
       let release!: () => void;
       const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -238,8 +281,11 @@ describe("LiveSession", () => {
       const first = session.dispose({ preparationId: token, preserveResources: true, preserveConversation: true });
       const second = session.dispose({ preparationId: token, preserveResources: true, preserveConversation: true });
 
+      let completed = false;
+      void second.then(() => { completed = true; });
       try {
-        await second;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(completed, false);
         assert.deepEqual(calls, stage === "mcp" ? ["mcp"] : ["mcp", "process"]);
         assert.equal(session.activeProcess, null);
         assert.equal(session.syncKey, "");

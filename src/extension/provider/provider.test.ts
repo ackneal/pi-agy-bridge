@@ -543,14 +543,16 @@ for (const cleanupRejects of [false, true]) {
     assert.equal(session.activeProcess, null);
     assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), undefined);
     assert.equal(abort.mock.callCount(), 0, "old IPC cleanup is still pending");
-    const recovered = await runTurn("test-model", "retry request", [{ event: "result", status: "success" }]);
+    const recovery = runTurn("test-model", "retry request", [{ event: "result", status: "success" }]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(processes.length, 1, "retry waits for old runtime cleanup");
+
+    releaseClose();
+    const recovered = await recovery;
     const replacement = processes.at(-1);
     assert.ok(replacement);
     assert.equal(session.activeProcess, replacement);
     assert.notEqual(replacement, processes[0]);
-
-    releaseClose();
-    await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.equal(recovered.stopReason, "stop");
     assert.equal(recovered.errorMessage, undefined);

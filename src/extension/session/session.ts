@@ -99,6 +99,7 @@ export class LiveSession {
   private abortSignal: AbortSignal | null = null;
   private abortListener: (() => void) | null = null;
   private preparationId: symbol | undefined;
+  private disposal: Promise<void> | undefined;
 
   constructor(piSessionId: string) {
     this.piSessionId = piSessionId;
@@ -180,21 +181,34 @@ export class LiveSession {
     this.setRuntimeEventHandler(null);
     if (!options?.preserveResources) this.resources.disposeAll();
 
-    if (mcpServer) {
-      try {
-        await mcpServer.close();
-      } catch (err) {
-        debugLog("session", "Error closing Pi MCP server during reset:", err);
-      }
-    }
+    const previousDisposal = this.disposal;
+    const disposal = (async () => {
+      // Abort listeners can start disposal before registry cleanup reaches us.
+      if (previousDisposal) await previousDisposal;
 
-    if (proc) {
-      debugLog("session", "Disposing session: aborting active process");
-      try {
-        await proc.abort();
-      } catch (err) {
-        debugLog("session", "Error aborting active process during reset:", err);
+      if (mcpServer) {
+        try {
+          await mcpServer.close();
+        } catch (err) {
+          debugLog("session", "Error closing Pi MCP server during reset:", err);
+        }
       }
+
+      if (proc) {
+        debugLog("session", "Disposing session: aborting active process");
+        try {
+          await proc.abort();
+        } catch (err) {
+          debugLog("session", "Error aborting active process during reset:", err);
+        }
+      }
+    })();
+    this.disposal = disposal;
+
+    try {
+      await disposal;
+    } finally {
+      if (this.disposal === disposal) this.disposal = undefined;
     }
   }
 }
