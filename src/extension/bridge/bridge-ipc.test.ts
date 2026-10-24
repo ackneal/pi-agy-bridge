@@ -291,19 +291,14 @@ describe("AgyMcpServer", () => {
         }
         throw error;
       }
-      const environment = bridge.processEnvironment;
-      assert.equal(environment.PI_AGY_BRIDGE_MCP_RUNTIME, process.execPath);
-      assert.equal(environment.PI_AGY_BRIDGE_MCP_ENDPOINT, bridge.bridgeUri);
-      const bridgeUri = new URL(bridge.bridgeUri);
+      const uri = bridge.bridgeUri;
+      const bridgeUri = new URL(uri);
       assert.equal(bridgeUri.protocol, "unix:");
       assert.equal(bridgeUri.searchParams.get("session"), bridge.sessionId);
+      assert.equal(parseBridgeUri(uri).endpoint, bridgeUri.pathname);
 
-      child = spawn("sh", ["-c", 'exec "$PI_AGY_BRIDGE_MCP_RUNTIME" "$PI_AGY_BRIDGE_MCP_ENTRYPOINT" --endpoint "$PI_AGY_BRIDGE_MCP_ENDPOINT"'], {
+      child = spawn(process.execPath, [fileURLToPath(new URL("../../mcp/index.js", import.meta.url)), "--endpoint", uri], {
         stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          ...environment,
-        },
       });
       const responses = collectResponses(child);
 

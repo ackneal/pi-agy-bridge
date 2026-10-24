@@ -10,7 +10,6 @@ import { debugArtifact, debugLog, isDebugEnabled } from "../shared/debug.ts";
 import { CapabilityGateway, type PiToolCallBatch } from "./capabilities.ts";
 import type { SessionResources } from "../session/session.ts";
 import { formatBridgeUri } from "../../mcp/socket.js";
-import { resolveMcpEntrypoint } from "../discovery/plugin-install.ts";
 
 interface BrokerMessage {
   type: string;
@@ -54,17 +53,6 @@ export class BridgeIPC {
       endpoint: this.socketPath,
       sessionId: this.sessionId,
     });
-  }
-
-  public get processEnvironment(): NodeJS.ProcessEnv {
-    const { nodePath, entrypointPath } = resolveMcpEntrypoint();
-    return {
-      PI_AGY_BRIDGE_RECOVERY: "1",
-      PI_AGY_BRIDGE_MCP_RUNTIME: nodePath,
-      PI_AGY_BRIDGE_HOOK_RUNTIME: process.execPath,
-      PI_AGY_BRIDGE_MCP_ENTRYPOINT: entrypointPath,
-      PI_AGY_BRIDGE_MCP_ENDPOINT: this.bridgeUri,
-    };
   }
 
   public setToolCallHandler(handler: ((batch: PiToolCallBatch) => void) | null): void {

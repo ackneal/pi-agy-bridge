@@ -253,3 +253,17 @@ for (const scenario of [
     });
   });
 }
+
+test("CLI environment preserves recovery, hook runtime, and shared MCP launch values", async () => {
+  const { buildCliProcessEnvironment, resolveMcpEntrypoint } = await import("./plugin-install.ts");
+  const { nodePath, entrypointPath } = resolveMcpEntrypoint();
+  for (const endpoint of ["unix:///tmp/bridge.sock?session=test", "unix:///tmp/space and 'quotes'.sock?session=a%20b"]) {
+    assert.deepEqual(buildCliProcessEnvironment(endpoint), {
+      PI_AGY_BRIDGE_RECOVERY: "1",
+      PI_AGY_BRIDGE_MCP_RUNTIME: nodePath,
+      PI_AGY_BRIDGE_HOOK_RUNTIME: process.execPath,
+      PI_AGY_BRIDGE_MCP_ENTRYPOINT: entrypointPath,
+      PI_AGY_BRIDGE_MCP_ENDPOINT: endpoint,
+    });
+  }
+});
