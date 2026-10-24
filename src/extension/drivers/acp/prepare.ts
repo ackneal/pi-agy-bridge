@@ -11,7 +11,7 @@ import { AcpRuntimeSession } from "./runtime.ts";
 export async function prepareAcpRuntime(
   model: Model<any>, context: Context, tools: readonly Tool[], options: SimpleStreamOptions | undefined,
   config: AgyBridgeConfig | undefined,
-  dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide" | "getSyncedMessageCount"> },
+  dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide" | "getSyncedMessageCount">; sessionVersion: string },
   liveSession: LiveSession, preparationId: symbol,
 ): Promise<{ proc: AcpRuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
   const check = () => {
@@ -26,7 +26,7 @@ export async function prepareAcpRuntime(
     await liveSession.dispose({ preparationId });
     check();
   }
-  const checkpoint = await dependencies.store.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH, "acp");
+  const checkpoint = await dependencies.store.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH, dependencies.sessionVersion);
   check();
   const latest = [...context.messages].reverse().find((message) => message.role === "assistant");
   const decision = dependencies.sync.decide(liveSession, {

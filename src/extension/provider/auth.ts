@@ -2,16 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { ApiKeyAuth, Credential, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import { createCliAuthenticationBackend } from "../drivers/cli/auth.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
-import type { DoctorFailure } from "./doctor.ts";
+import type { DriverAuthentication, DriverFailure } from "../drivers/types.ts";
 
 const year = 365 * 24 * 60 * 60 * 1000;
 const prefix = "agy-bridge:";
-
-export interface AgyAuthenticationBackend {
-  label: string;
-  probe(signal: AbortSignal, onUsage: (usage: AgyUsage) => void): Promise<boolean>;
-  login(interaction: ProviderAuthInteraction, onUsage: (usage: AgyUsage) => void): Promise<void>;
-}
 
 export function createAgyBridgeCredential(loginEpoch: string = randomUUID()): OAuthCredential {
   if (!loginEpoch.trim()) throw new Error("Antigravity CLI authentication session is no longer valid");
@@ -39,7 +33,7 @@ export function getAgyBridgeAuthEnvironment(apiKey?: string): Record<string, str
 /** Pi stores consent to use the bridge, not Antigravity CLI's authentication tokens. */
 export class AgyAuthentication {
   public status: "authenticated" | "unauthenticated" | "unknown" = "unknown";
-  public failure: DoctorFailure | undefined;
+  public failure: DriverFailure | undefined;
   public usage: AgyUsage | undefined;
   public readonly method: ApiKeyAuth;
   public readonly oauth: OAuthAuth;
@@ -48,9 +42,9 @@ export class AgyAuthentication {
   private readonly lifecycle = new AbortController();
   private generation = 0;
   private loggingIn = false;
-  private backend: AgyAuthenticationBackend;
+  private backend: DriverAuthentication;
 
-  constructor(agyPath: string | undefined, beforeLogin: () => Promise<void>, backend?: AgyAuthenticationBackend) {
+  constructor(agyPath: string | undefined, beforeLogin: () => Promise<void>, backend?: DriverAuthentication) {
     this.backend = backend ?? createCliAuthenticationBackend(agyPath);
     const self = this;
     this.method = {
@@ -127,7 +121,7 @@ export class AgyAuthentication {
     };
   }
 
-  public setBackend(backend: AgyAuthenticationBackend): void {
+  public setBackend(backend: DriverAuthentication): void {
     ++this.generation;
     this.detectionCancellation.abort(new Error("Antigravity authentication backend changed"));
     this.detectionCancellation = new AbortController();

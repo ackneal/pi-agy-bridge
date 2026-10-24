@@ -10,7 +10,7 @@ test("superseded ACP preparation stops before checkpoint or resource acquisition
   live.beginPreparation();
   let reads = 0;
   await assert.rejects(prepareAcpRuntime({ id: "raw" } as Parameters<typeof prepareAcpRuntime>[0], { messages: [] }, [], undefined, undefined, {
-    store: { get: async () => { reads++; return undefined; }, delete: async () => {} }, sync: new RuntimeSessionSync(),
+    store: { get: async () => { reads++; return undefined; }, delete: async () => {} }, sync: new RuntimeSessionSync(), sessionVersion: "acp:v1",
   }, live, stale), /superseded/);
   assert.equal(reads, 0);
   assert.equal(live.activeProcess, null);

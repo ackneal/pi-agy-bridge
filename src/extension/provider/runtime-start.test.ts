@@ -6,6 +6,7 @@ import test from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { CliDriver } from "../drivers/cli/driver.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { AgyBridge, streamAgyProvider } from "./provider.ts";
 
@@ -42,7 +43,7 @@ for (const { stage, aborts, cancelled } of cases) {
       return { event: "init", conversation_id: "test-conversation" } as Awaited<ReturnType<AgyRuntime["start"]>>;
     });
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
-    const install = t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {
+    const install = t.mock.method(CliDriver.prototype, "installPlugin", async () => {
       if (stage === "plugin install") throw failure;
     });
 

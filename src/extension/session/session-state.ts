@@ -1,18 +1,17 @@
 import { createHash } from "node:crypto";
-import type { DriverId } from "../drivers/types.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { LiveSession, PiContextAdapter } from "./session.ts";
 import { debugLog, isDebugEnabled } from "../shared/debug.ts";
 
-import { MESSAGE_FORMAT, serializeMessage } from "./history.ts";
+import { serializeMessage } from "./history.ts";
 
 const ENTRY_TYPE = "pi-agy-bridge.runtime-session";
 
 export interface AgyConversationCheckpoint {
-  conversationId: string;
+  sessionId: string;
+  version: string;
   fingerprint?: string;
   messageCount?: number;
-  messageFormat?: string;
   hasPendingToolCalls?: boolean;
 }
 
@@ -23,7 +22,7 @@ export class RuntimeSessionStore {
     this.piContext = piContext;
   }
 
-  public async get(piSessionId: string, loginEpoch?: string, driver: DriverId = "cli"): Promise<AgyConversationCheckpoint | undefined> {
+  public async get(piSessionId: string, loginEpoch: string | undefined, version: string): Promise<AgyConversationCheckpoint | undefined> {
     const sessionManager = this.piContext.getSessionManager(piSessionId);
     if (!sessionManager) return undefined;
 
@@ -38,49 +37,43 @@ export class RuntimeSessionStore {
     }
     if (!entry || !isRecord(entry.data)) return undefined;
     if (entry.data.deleted === true || entry.data.loginEpoch !== loginEpoch) return undefined;
-    // Only CLI may read older conversationId formats. A malformed latest
-    // checkpoint must never expose an older branch reference.
-    const tagged = "driver" in entry.data || "version" in entry.data;
-    if (tagged && (entry.data.driver !== driver || entry.data.version !== 1)) return undefined;
-    if (!tagged && driver !== "cli") return undefined;
-    const reference = tagged && "reference" in entry.data
-      ? entry.data.reference
-      : driver === "cli" ? entry.data.conversationId : undefined;
-    if (typeof reference !== "string") return undefined;
+    if (entry.data.version !== version || typeof version !== "string") return undefined;
+    if (typeof entry.data.sessionId !== "string" || !entry.data.sessionId.trim()) return undefined;
+    if (!soundHash(entry.data)) return undefined;
+    if (entry.data.hasPendingToolCalls !== undefined && typeof entry.data.hasPendingToolCalls !== "boolean") return undefined;
 
     return {
-      conversationId: reference,
-      ...(typeof entry.data.messageFormat === "string" ? { messageFormat: entry.data.messageFormat } : {}),
-      ...(typeof entry.data.fingerprint === "string" ? { fingerprint: entry.data.fingerprint } : {}),
-      ...(typeof entry.data.messageCount === "number" ? { messageCount: entry.data.messageCount } : {}),
+      sessionId: entry.data.sessionId,
+      version,
+      fingerprint: entry.data.fingerprint as string,
+      messageCount: entry.data.messageCount as number,
       ...(typeof entry.data.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: entry.data.hasPendingToolCalls } : {}),
     };
   }
 
   public async set(
     piSessionId: string,
-    checkpoint: AgyConversationCheckpoint,
+    checkpoint: Omit<AgyConversationCheckpoint, "version">,
     messages: readonly unknown[],
-    loginEpoch?: string,
-    driver: DriverId = "cli"
+    loginEpoch: string | undefined,
+    version: string
   ): Promise<AgyConversationCheckpoint> {
     const sessionManager = this.requireSessionManager(piSessionId);
+    if (!checkpoint.sessionId.trim()) throw new Error("Checkpoint session ID must be nonempty");
     const fingerprint = fingerprintSerializedMessages(messages.map(serializeMessage));
     const messageCount = messages.length;
     const pendingMetadata = typeof checkpoint.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: checkpoint.hasPendingToolCalls } : {};
     sessionManager.appendCustomEntry(ENTRY_TYPE, {
-      driver,
-      version: 1,
-      reference: checkpoint.conversationId,
-      ...(loginEpoch ? { loginEpoch } : {}),
+      sessionId: checkpoint.sessionId,
+      version,
+      ...(loginEpoch !== undefined ? { loginEpoch } : {}),
       fingerprint,
       messageCount,
-      messageFormat: MESSAGE_FORMAT,
       ...pendingMetadata,
     });
 
     return {
-      conversationId: checkpoint.conversationId, fingerprint, messageCount, messageFormat: MESSAGE_FORMAT,
+      sessionId: checkpoint.sessionId, version, fingerprint, messageCount,
       ...pendingMetadata,
     };
   }
@@ -105,12 +98,8 @@ function matchMessages(
   messages: readonly unknown[],
   serializedMessages?: readonly string[]
 ): boolean {
-  if (checkpoint.messageFormat !== MESSAGE_FORMAT) {
-    debugLog("session", "Unsupported persisted message format", { format: checkpoint.messageFormat, expected: MESSAGE_FORMAT });
-    return false;
-  }
-  if (checkpoint.fingerprint === undefined || checkpoint.messageCount === undefined) return false;
-  if (messages.length < checkpoint.messageCount) return false;
+  if (!soundHash(checkpoint)) return false;
+  if (messages.length < checkpoint.messageCount!) return false;
   const actualFingerprint = fingerprintSerializedMessages(serializedMessages
     ? serializedMessages.slice(0, checkpoint.messageCount)
     : messages.slice(0, checkpoint.messageCount).map(serializeMessage));
@@ -123,6 +112,11 @@ function matchMessages(
     });
   }
   return actualFingerprint === checkpoint.fingerprint;
+}
+
+function soundHash(value: { fingerprint?: unknown; messageCount?: unknown }): boolean {
+  return typeof value.messageCount === "number" && Number.isSafeInteger(value.messageCount) && value.messageCount >= 0 &&
+    typeof value.fingerprint === "string" && /^[a-f0-9]{64}$/.test(value.fingerprint);
 }
 
 function fingerprintSerializedMessages(messages: readonly string[]): string {
@@ -185,10 +179,10 @@ export class RuntimeSessionSync {
     const checkpoint = input.checkpoint;
     // An older checkpoint cannot roll back a conversation whose newer live
     // messages are already known. A different branch conversation may still resume.
-    if (checkpoint && (checkpoint.conversationId !== session.conversationId || (!deadPendingRuntime && syncedCount === undefined)) &&
+    if (checkpoint && (checkpoint.sessionId !== session.conversationId || (!deadPendingRuntime && syncedCount === undefined)) &&
       this.matchesPersistedSession(checkpoint, input, serializedMessages)) {
       this.syncedMessages.set(session, serializedMessages.slice(0, checkpoint.messageCount));
-      return { action: "resume", conversationId: checkpoint.conversationId };
+      return { action: "resume", conversationId: checkpoint.sessionId };
     }
 
     debugLog("session", "Rebuilding Antigravity CLI runtime instead of reusing", {
@@ -266,7 +260,7 @@ export class RuntimeSessionSync {
     if (checkpoint.hasPendingToolCalls === true) return false;
 
     return (
-      this.matchesConversationId(checkpoint.conversationId, input.conversationId) &&
+      this.matchesConversationId(checkpoint.sessionId, input.conversationId) &&
       matchMessages(checkpoint, input.messages, serializedMessages) &&
       !this.hasUnsyncedAssistant(input.messages, checkpoint.messageCount!)
     );

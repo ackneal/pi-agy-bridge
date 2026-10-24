@@ -5,6 +5,7 @@ import test from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { CliDriver } from "../drivers/cli/driver.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { AcpSession } from "../drivers/acp/session.ts";
@@ -24,7 +25,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
       acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))],
       acpRequestTimeoutMs: 5000,
     };
-    assert.equal(new AgyBridge(pi, { acpPath: process.execPath }).driver.id, "acp");
+    assert.equal(new AgyBridge(pi).driver.id, "acp");
     assert.equal(new AgyBridge(pi, { driver: "cli" }).driver.id, "cli");
     const bridge = new AgyBridge(pi, config);
     assert.equal(bridge.driver.id, "acp");
@@ -38,7 +39,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
       t.mock.restoreAll();
     });
     t.mock.method(bridge, "getTools", () => tools);
-    const install = t.mock.method(bridge, "ensureAgyPluginInstalled", async () => { throw new Error("ACP must not install CLI plugins"); });
+    const install = t.mock.method(CliDriver.prototype, "installPlugin", async () => { throw new Error("ACP must not install CLI plugins"); });
     t.mock.method(BridgeIPC.prototype, "start", async () => {});
     t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock");
     t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", () => gateway.hasPendingCalls);
@@ -79,8 +80,8 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
     assert.equal(runtime.session.id, first.message.responseId);
     assert.equal(session.driverId, "acp");
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, "acp"))?.conversationId, runtime.session.id);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, "cli"), undefined);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, runtime.session.id);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, "cli:v1"), undefined);
 
     if (scenario === "cancel" || scenario === "failure") {
       if (scenario === "cancel") controller.abort();
@@ -88,7 +89,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(session.activeProcess, null);
       assert.equal(session.activeMcpServer, null);
-      assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, "acp"), undefined);
+      assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
       assert.equal(close.mock.callCount(), 1);
       assert.equal(resolve.mock.callCount(), 0);
@@ -110,7 +111,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
         assert.equal(second.reason, "error");
         assert.match(second.error.errorMessage!, scenario === "unknown" ? /Unknown tool result ID: unknown-call/ : scenario === "duplicate" ? /Duplicate tool result ID:/ : /Missing tool result ID:/);
         assert.equal(session.activeProcess, null);
-        assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, "acp"), undefined);
+        assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
         assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
         assert.equal(close.mock.callCount(), 1);
       }
@@ -132,7 +133,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
   const bridge = new AgyBridge(pi, config);
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
   const session = bridge.liveSessions.getOrCreate(sessionId);
-  await bridge.runtimeSessionStore.set(sessionId, { conversationId: "stale-session-id" }, [], undefined, "acp");
+  await bridge.runtimeSessionStore.set(sessionId, { sessionId: "stale-session-id" }, [], undefined, bridge.driver.sessionVersion);
   t.after(async () => {
     await bridge.liveSessions.disposeAll();
     t.mock.restoreAll();
@@ -160,7 +161,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
   assert.equal(prepareAttempts, 2);
   assert.equal(session.driverId, "acp");
   assert.equal(session.conversationId, "synthetic-session");
-  assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, "acp"))?.conversationId, "synthetic-session");
+  assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, "synthetic-session");
   assert.equal(events.at(-1)?.type, "done");
 });
 

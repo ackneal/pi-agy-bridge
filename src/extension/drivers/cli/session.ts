@@ -64,6 +64,7 @@ export async function prepareRuntime(
   dependencies: {
     store: Pick<RuntimeSessionStore, "get" | "delete">;
     sync: Pick<RuntimeSessionSync, "decide" | "getSyncedMessageCount">;
+    sessionVersion: string;
     installPlugin: (pluginDir: string) => Promise<void>;
   },
   liveSession: LiveSession,
@@ -90,7 +91,7 @@ export async function prepareRuntime(
   const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
   const rawPluginDir = config?.pluginDir ?? config?.agentDir;
   const pluginDir = rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR;
-  const checkpoint = await dependencies.store.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH);
+  const checkpoint = await dependencies.store.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH, dependencies.sessionVersion);
   checkPreparation();
   const decision = dependencies.sync.decide(liveSession, {
     syncKey,

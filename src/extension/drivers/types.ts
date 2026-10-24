@@ -1,4 +1,54 @@
-import type { AssistantMessage, Context, Message, Model, SimpleStreamOptions, ToolCall } from "@earendil-works/pi-ai";
+import type { AnyModel, AssistantMessage, Context, Message, Model, ProviderAuthInteraction, SimpleStreamOptions, Tool, ToolCall } from "@earendil-works/pi-ai";
+import type { LiveSession } from "../session/session.ts";
+import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
+import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import type { AgyUsage } from "../runtime/usage.ts";
+
+export interface DriverAuthentication {
+  label: string;
+  probe(signal: AbortSignal, onUsage: (usage: AgyUsage) => void): Promise<boolean>;
+  login(interaction: ProviderAuthInteraction, onUsage: (usage: AgyUsage) => void): Promise<void>;
+}
+
+export interface DriverFailure {
+  time: string;
+  message: string;
+}
+
+export interface PrepareDriverInput {
+  model: Model<any>;
+  context: Context;
+  tools: readonly Tool[];
+  options: SimpleStreamOptions | undefined;
+  session: LiveSession;
+  store: RuntimeSessionStore;
+  sync: RuntimeSessionSync;
+  preparationId: symbol;
+}
+
+export interface DriverDiagnostics {
+  catalogModels: AnyModel[];
+  authStatus: "authenticated" | "unauthenticated" | "unknown";
+  authError: DriverFailure | undefined;
+  discoveryError: DriverFailure | undefined;
+  usage: AgyUsage | undefined;
+  usageError: DriverFailure | undefined;
+}
+
+export interface BridgeDriver {
+  readonly id: DriverId;
+  readonly label: string;
+  /** Covers stored session fields and the shared history fingerprint algorithm. */
+  readonly sessionVersion: string;
+  readonly authentication: DriverAuthentication;
+  readonly initialModels: readonly AnyModel[];
+  validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void;
+  prepareSession(input: PrepareDriverInput): Promise<{ proc: DriverSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }>;
+  discoverModels(signal: AbortSignal): Promise<AnyModel[]>;
+  usage(signal: AbortSignal): Promise<AgyUsage | undefined>;
+  doctor(input: DriverDiagnostics): Promise<string>;
+  detectExecutable(): string | undefined;
+}
 
 export type DriverId = "cli" | "acp";
 

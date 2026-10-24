@@ -88,7 +88,7 @@ describe("AgyBridge.getTools", () => {
       const getActiveTools = t.mock.fn(() => testCase.activeNames);
       // Do not start the bridge: tool selection needs no doctor registration or runtime.
       const pi = { getAllTools, getActiveTools } satisfies Pick<ExtensionAPI, "getAllTools" | "getActiveTools">;
-      const bridge = new AgyBridge(pi as unknown as ExtensionAPI);
+      const bridge = new AgyBridge(pi as unknown as ExtensionAPI, { driver: "cli" });
 
       assert.deepEqual(bridge.getTools(testCase.context), testCase.expected);
       assert.equal(getAllTools.mock.callCount(), testCase.registryReads);

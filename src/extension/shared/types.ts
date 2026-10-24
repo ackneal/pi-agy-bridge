@@ -118,7 +118,7 @@ export type AgyEvent =
   | { event: string; [key: string]: unknown };
 
 export interface AgyBridgeConfig {
-  /** CLI remains the default; ACP must be selected explicitly. */
+  /** Defaults to ACP. CLI requires explicit selection; drivers never switch automatically. */
   driver?: "cli" | "acp";
   acpPath?: string;
   acpArgs?: string[];

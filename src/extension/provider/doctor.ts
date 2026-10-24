@@ -5,21 +5,19 @@ import { readPluginManifest, resolveMcpEntrypoint } from "../discovery/plugin-in
 import { formatDoctorQuotaLines, type AgyUsage } from "../runtime/usage.ts";
 import { resolveAgyExecutable, validateAgyVersion } from "../runtime/version.ts";
 
-export interface DoctorFailure {
-  time: string;
-  message: string;
-}
+import type { DriverFailure } from "../drivers/types.ts";
+
 export interface DoctorOptions {
   agyPath?: string | undefined;
   pluginDir: string;
   models?: readonly unknown[] | undefined;
   catalogModels?: readonly unknown[] | undefined;
-  pluginError?: DoctorFailure | undefined;
-  discoveryError?: DoctorFailure | undefined;
+  pluginError?: DriverFailure | undefined;
+  discoveryError?: DriverFailure | undefined;
   authStatus?: "authenticated" | "unauthenticated" | "unknown" | undefined;
-  authError?: DoctorFailure | undefined;
+  authError?: DriverFailure | undefined;
   usage?: AgyUsage | undefined;
-  usageError?: DoctorFailure | undefined;
+  usageError?: DriverFailure | undefined;
 }
 
 function message(error: unknown): string {
@@ -105,7 +103,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
     ["authentication", options.authError],
     ["usage", options.usageError],
   ] as const;
-  const activeFailures = failures.filter((entry): entry is [typeof entry[0], DoctorFailure] => entry[1] !== undefined);
+  const activeFailures = failures.filter((entry): entry is [typeof entry[0], DriverFailure] => entry[1] !== undefined);
   if (activeFailures.length > 0) {
     lines.push("", "Errors");
     for (const [label, failure] of activeFailures) {

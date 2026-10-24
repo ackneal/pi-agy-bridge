@@ -3,11 +3,6 @@ import test from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { LiveSession } from "../../session/session.ts";
 import { prepareRuntime, resolveModelAndEffort } from "./session.ts";
-import { resolveModelAndEffort as providerResolver } from "../../provider/provider.ts";
-
-test("provider retains the CLI model resolver export", () => {
-  assert.equal(providerResolver, resolveModelAndEffort);
-});
 
 for (const stage of ["before lookup", "after lookup"] as const) {
   for (const reason of ["abort", "supersede"] as const) {
@@ -43,6 +38,7 @@ for (const stage of ["before lookup", "after lookup"] as const) {
               decide: () => { throw new Error("sync must not run"); },
               getSyncedMessageCount: () => { throw new Error("sync must not run"); },
             },
+            sessionVersion: "cli:v1",
             installPlugin: async () => { calls.push("install"); },
           },
           session,

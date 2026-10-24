@@ -6,6 +6,7 @@ import test from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { CliDriver } from "../drivers/cli/driver.ts";
 import { buildCliProcessEnvironment } from "../discovery/plugin-install.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
@@ -51,7 +52,7 @@ for (const { decision, incremental, payload } of cases) {
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const dispatch = t.mock.method(BridgeIPC.prototype, "setToolCallHandler");
     const getBridgeUri = t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => expectedUri);
-    const install = t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
+    const install = t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
     t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
     const startProc = t.mock.method(AgyRuntime.prototype, "start", async () => ({
       event: "init", conversation_id: decision.action === "resume" ? "old-conversation" : "new-conversation",
@@ -245,7 +246,7 @@ for (const row of invalidBatchCases) {
       })),
     };
     bridge.runtimeSessionSync.record(session, []);
-    await bridge.runtimeSessionStore.set(sessionId, { conversationId: "old-conversation", hasPendingToolCalls: true }, []);
+    await bridge.runtimeSessionStore.set(sessionId, { sessionId: "old-conversation", hasPendingToolCalls: true }, [], undefined, bridge.driver.sessionVersion);
     const record = t.mock.method(bridge.runtimeSessionSync, "record", bridge.runtimeSessionSync.record.bind(bridge.runtimeSessionSync));
     const persist = t.mock.method(bridge.runtimeSessionStore, "set", bridge.runtimeSessionStore.set.bind(bridge.runtimeSessionStore));
     const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
@@ -273,7 +274,7 @@ for (const row of invalidBatchCases) {
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 0);
     assert.equal(invalidate.mock.callCount(), 1);
     assert.deepEqual(invalidate.mock.calls[0]!.arguments, [sessionId]);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
     assert.equal(session.activeProcess, null);
     assert.equal(session.activeMcpServer, null);
     assert.equal(listener, undefined);
@@ -410,7 +411,7 @@ for (const row of continueCases) {
       events.push(event);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(restore.mock.calls[0]!.arguments, [session.piSessionId, "current-login"]);
+    assert.deepEqual(restore.mock.calls[0]!.arguments, [session.piSessionId, "current-login", bridge.driver.sessionVersion]);
     assert.equal(resolve.mock.callCount(), row.pending ? 1 : 0);
     if (row.pending) assert.deepEqual(resolve.mock.calls[0]!.arguments, [
       context.messages.filter((message) => message.role === "toolResult"),
@@ -430,7 +431,7 @@ for (const row of continueCases) {
       assert.equal(events.some((event) => event.type === "error"), false);
       assert.equal(invalidate.mock.callCount(), 0);
       assert.deepEqual(persist.mock.calls[0]!.arguments, [
-        session.piSessionId, { conversationId: "old-conversation", hasPendingToolCalls: true }, context.messages, "current-login", "cli",
+        session.piSessionId, { sessionId: "old-conversation", hasPendingToolCalls: true }, context.messages, "current-login", bridge.driver.sessionVersion,
       ]);
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "done");
@@ -522,7 +523,7 @@ for (const row of pendingTerminalCases) {
     };
     const epoch = "current-login";
     bridge.runtimeSessionSync.record(session, []);
-    await bridge.runtimeSessionStore.set(sessionId, { conversationId: "old-conversation" }, [], epoch);
+    await bridge.runtimeSessionStore.set(sessionId, { sessionId: "old-conversation" }, [], epoch, bridge.driver.sessionVersion);
     const record = t.mock.method(bridge.runtimeSessionSync, "record", bridge.runtimeSessionSync.record.bind(bridge.runtimeSessionSync));
     const persist = t.mock.method(bridge.runtimeSessionStore, "set", bridge.runtimeSessionStore.set.bind(bridge.runtimeSessionStore));
     const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
@@ -571,11 +572,11 @@ for (const row of pendingTerminalCases) {
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), row.enqueued ? context.messages.length : 0);
     if (row.enqueued) {
       assert.deepEqual(record.mock.calls[0]!.arguments, [session, context.messages]);
-      assert.deepEqual(persist.mock.calls[0]!.arguments, [sessionId, { conversationId: "old-conversation", hasPendingToolCalls: true }, context.messages, epoch, "cli"]);
+      assert.deepEqual(persist.mock.calls[0]!.arguments, [sessionId, { sessionId: "old-conversation", hasPendingToolCalls: true }, context.messages, epoch, bridge.driver.sessionVersion]);
     }
     assert.equal(invalidate.mock.callCount(), 1);
     assert.deepEqual(invalidate.mock.calls[0]!.arguments, [sessionId]);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), undefined);
     assert.equal(session.activeProcess, null);
     assert.equal(session.activeMcpServer, null);
     assert.equal(unsubscribe.mock.callCount(), 1);
@@ -828,7 +829,7 @@ for (const conversionException of [false, true]) {
     assert.equal(rebuild.mock.callCount(), 0);
     assert.equal(gateway.resolveToolResults([{ role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "next answer" }], isError: false, timestamp: 3 }]), 1);
     assert.ok(JSON.stringify(await nextResult).includes("next answer"));
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, "old-conversation");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, "old-conversation");
     if (conversionException) return;
 
     // The completed toolUse adapter must not release runtime failure ownership.
@@ -844,16 +845,16 @@ for (const conversionException of [false, true]) {
     assert.equal(session.activeMcpServer, null);
     assert.equal(invalidate.mock.callCount(), 1);
     assert.deepEqual(invalidate.mock.calls[0]!.arguments, [session.piSessionId]);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
 
     const replacement = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {});
     const replacementBridge = new BridgeIPC([], session.id, session.resources);
     session.setSession(replacement, "replacement", replacementBridge, "replacement-conversation");
-    await setReference(sessionId, { conversationId: "replacement-conversation" }, context.messages);
+    await setReference(sessionId, { sessionId: "replacement-conversation" }, context.messages, undefined, bridge.driver.sessionVersion);
     failureHandler(new Error("late old callback"));
     assert.equal(session.activeProcess, replacement);
     assert.equal(session.activeMcpServer, replacementBridge);
     assert.equal(invalidate.mock.callCount(), 1);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, "replacement-conversation");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, "replacement-conversation");
   });
 }

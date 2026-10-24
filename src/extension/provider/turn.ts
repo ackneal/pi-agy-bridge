@@ -16,6 +16,7 @@ interface TurnOptions {
   preparationId: symbol;
   signal: AbortSignal | undefined;
   loginEpoch: string | undefined;
+  sessionVersion: string;
 }
 
 export class AgyTurn {
@@ -172,9 +173,9 @@ export class AgyTurn {
     if (!session.conversationId) return;
 
     await store.set(session.piSessionId, {
-      conversationId: session.conversationId,
+      sessionId: session.conversationId,
       ...(this.runtime!.mcpServer.hasPendingCalls ? { hasPendingToolCalls: true } : {}),
-    }, messages, loginEpoch, session.driverId);
+    }, messages, loginEpoch, this.options.sessionVersion);
   }
 
   private failRuntime(error: Error): void {

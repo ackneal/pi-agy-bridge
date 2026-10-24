@@ -11,6 +11,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { CliDriver } from "../drivers/cli/driver.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { AgyBridge, registerAgyProvider } from "./provider.ts";
 
@@ -201,7 +202,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     t.mock.method(BridgeIPC.prototype, "start", async () => {});
     t.mock.method(BridgeIPC.prototype, "close", async () => {});
     t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");
-    t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
+    t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
     const startRuntime = t.mock.method(AgyRuntime.prototype, "start", async () => {
       throw new Error("Authentication required. Run agy to log in.");
     });

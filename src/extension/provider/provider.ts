@@ -18,17 +18,13 @@ import {
 } from "../session/session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
-import { createBridgeDriver, type BridgeDriver } from "../drivers/driver.ts";
-import { detectAcpExecutable } from "../drivers/acp/options.ts";
-import { detectCliExecutable } from "../runtime/version.ts";
-import type { DriverId } from "../drivers/types.ts";
+import { createBridgeDriver } from "../drivers/driver.ts";
+import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
 import type { AgyBridgeConfig } from "../shared/types.ts";
-import type { DoctorFailure } from "./doctor.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
 
-export { resolveModelAndEffort } from "../drivers/cli/session.ts";
 export { formatContextPrompt, formatContextUpdate } from "./context-prompt.ts";
 
 export function streamAgyProvider(
@@ -59,7 +55,7 @@ export function streamAgyProvider(
 
   const piSessionId = options?.sessionId;
   if (!piSessionId) {
-    adapter.handleTermination("error", "Pi did not provide a sessionId for the Antigravity CLI runtime");
+    adapter.handleTermination("error", `Pi did not provide a sessionId for the ${bridge.driver.label} runtime`);
     return stream;
   }
 
@@ -82,6 +78,7 @@ export function streamAgyProvider(
     preparationId,
     signal: options?.signal,
     loginEpoch: options?.env?.AGY_BRIDGE_LOGIN_EPOCH,
+    sessionVersion: bridge.driver.sessionVersion,
   });
 
   (async () => {
@@ -89,7 +86,6 @@ export function streamAgyProvider(
       const runtime = await bridge.driver.prepareSession({
         model, context, tools, options, session: liveSession, preparationId,
         store: bridge.runtimeSessionStore, sync: bridge.runtimeSessionSync,
-        installPlugin: (pluginDir) => bridge.ensureAgyPluginInstalled(pluginDir),
       });
       const mcpServer = runtime.mcpServer;
       adapter.setModel(runtime.modelId);
@@ -119,7 +115,7 @@ export function streamAgyProvider(
       }
 
       if (mcpServer.hasPendingCalls) {
-        throw new Error("Antigravity CLI is waiting for Pi tool results, but no matching result was returned");
+        throw new Error(`${bridge.driver.label} is waiting for Pi tool results, but no matching result was returned`);
       }
 
       turn.openToolDispatch();
@@ -129,7 +125,7 @@ export function streamAgyProvider(
       turn.fail(error);
     }
   })().catch((error) => {
-    debugLog("session", "Antigravity CLI turn cleanup failed:", error);
+    debugLog("session", `${bridge.driver.label} turn cleanup failed:`, error);
   });
 
   return stream;
@@ -140,9 +136,8 @@ export class AgyBridge {
   private config: AgyBridgeConfig | undefined;
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
-  private pluginError: DoctorFailure | undefined;
-  private discoveryError: DoctorFailure | undefined;
-  private usageError: DoctorFailure | undefined;
+  private discoveryError: DriverFailure | undefined;
+  private usageError: DriverFailure | undefined;
   private usageRefresh: Promise<AgyUsage | undefined> | undefined;
   private readonly authentication: AgyAuthentication;
   private startupAuthenticationStarted = false;
@@ -159,7 +154,7 @@ export class AgyBridge {
     this.config = config;
     this.driver = createBridgeDriver(config);
     this.authentication = new AgyAuthentication(config?.agyPath, async () => {
-      this.runtimeLifetime.abort(new Error("Antigravity CLI login changed the bridge session"));
+      this.runtimeLifetime.abort(new Error(`${this.driver.label} login changed the bridge session`));
       this.usageRefresh = undefined;
       await this.liveSessions.disposeAll();
       for (const sessionId of this.sessionIds) {
@@ -193,7 +188,7 @@ export class AgyBridge {
             time: new Date().toISOString(),
             message: error instanceof Error ? error.message : String(error),
           };
-          debugLog("usage", "Antigravity CLI usage check failed:", error);
+          debugLog("usage", `${this.driver.label} usage check failed:`, error);
         }
         return undefined;
       })
@@ -205,33 +200,13 @@ export class AgyBridge {
     return task;
   }
 
-  public async ensureAgyPluginInstalled(pluginDir: string): Promise<void> {
-    try {
-      await this.driver.installPlugin(pluginDir);
-      this.pluginError = undefined;
-    } catch (error) {
-      this.pluginError = {
-        time: new Date().toISOString(),
-        message: error instanceof Error ? error.message : String(error),
-      };
-      throw error;
-    }
-  }
-
   public async switchDriver(driverId: DriverId, modelRegistry?: ExtensionContext["modelRegistry"]): Promise<void> {
     this.lifetime.signal.throwIfAborted();
     if (this.driver.id === driverId) return;
 
-    if (driverId === "acp") {
-      const acpBin = detectAcpExecutable(this.config?.acpPath);
-      if (!acpBin) throw new Error("Antigravity ACP executable not found");
-    } else {
-      const cliBin = detectCliExecutable(this.config?.agyPath);
-      if (!cliBin) throw new Error("Antigravity CLI executable not found");
-    }
-
     const config = { ...this.config, driver: driverId };
     const driver = createBridgeDriver(config);
+    if (!driver.detectExecutable()) throw new Error(`${driver.label} executable not found`);
     const lifetime = this.runtimeLifetime.signal;
     const models = config.models ?? await driver.discoverModels(lifetime);
     lifetime.throwIfAborted();
@@ -248,7 +223,6 @@ export class AgyBridge {
 
     this.usageRefresh = undefined;
     this.discoveryError = undefined;
-    this.pluginError = undefined;
     this.usageError = undefined;
 
     this.registerProvider(models);
@@ -269,7 +243,7 @@ export class AgyBridge {
 
   public start(): void {
     this.pi.registerCommand("agy-bridge:doctor", {
-      description: "Check Antigravity CLI, plugin installation, models, MCP, and quota",
+      description: "Check the selected Antigravity driver, models, tools, authentication, and quota",
       handler: async () => {
         const lifetime = this.runtimeLifetime.signal;
         const usage = await this.refreshUsage(lifetime);
@@ -277,7 +251,6 @@ export class AgyBridge {
 
         const report = await this.driver.doctor({
           catalogModels: this.models,
-          pluginError: this.pluginError,
           discoveryError: this.discoveryError,
           authStatus: this.authentication.status,
           authError: this.authentication.failure,
@@ -299,10 +272,11 @@ export class AgyBridge {
       handler: async (args, ctx) => {
         const target = args?.trim().toLowerCase();
         if (!target) {
-          const acpPath = detectAcpExecutable(this.config?.acpPath);
-          const cliPath = detectCliExecutable(this.config?.agyPath);
+          const acpPath = createBridgeDriver({ ...this.config, driver: "acp" }).detectExecutable();
+          const cliPath = createBridgeDriver({ ...this.config, driver: "cli" }).detectExecutable();
           const status = [
             `Current driver: **${this.driver.label}** (${this.driver.id})`,
+            "Default: ACP. Driver changes are explicit; automatic fallback is disabled.",
             "",
             "Available drivers:",
             `- **acp**: ${acpPath ? `✓ Found (${acpPath})` : "✗ Not found"}`,
@@ -366,7 +340,7 @@ export class AgyBridge {
             const authPath = this.config?.authPath ?? path.join(getAgentDir(), "auth.json");
             await autoConfigureAgyAuthentication(this.authentication, authPath, lifetime);
           } catch (error) {
-            debugLog("auth", "Antigravity CLI startup auto-configuration skipped:", error);
+            debugLog("auth", `${this.driver.label} startup auto-configuration skipped:`, error);
           }
         }
         if (lifetime.aborted) return;
@@ -374,14 +348,14 @@ export class AgyBridge {
         try {
           await ctx.modelRegistry.refresh({ providers: ["agy"], allowNetwork: true });
         } catch (error) {
-          debugLog("discovery", "Antigravity CLI background model refresh failed:", error);
+          debugLog("discovery", `${this.driver.label} background model refresh failed:`, error);
         }
       })();
     });
     this.pi.on("session_shutdown", async () => {
       this.lifetime.abort(new Error("Antigravity bridge session ended"));
       this.authentication.close();
-      this.runtimeLifetime.abort(new Error("Antigravity CLI bridge session ended"));
+      this.runtimeLifetime.abort(new Error(`${this.driver.label} bridge session ended`));
       await this.liveSessions.disposeAll();
       this.piContextAdapter.clear();
       this.sessionIds.clear();
@@ -405,7 +379,7 @@ export class AgyBridge {
       const env = { ...options?.env, ...oauthEnvironment };
       if (env.AGY_BRIDGE_ENABLED !== "1") {
         const adapter = new PiRuntimeOutput({ model: model.id, provider: "agy" });
-        adapter.handleTermination("error", "Antigravity CLI disabled in Pi");
+        adapter.handleTermination("error", `${this.driver.label} disabled in Pi`);
         return adapter.stream;
       }
       const signal = options?.signal
