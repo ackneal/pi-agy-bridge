@@ -125,7 +125,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     await runtime.refresh({ providers: ["agy"], allowNetwork: false });
     assert.ok(provider?.auth.oauth?.login);
     assert.equal(provider.auth.oauth.isSubscription, true);
-    assert.deepEqual(commands, ["agy-bridge:doctor"]);
+    assert.deepEqual(commands, ["agy-bridge:doctor", "agy-bridge:driver"]);
     assert.deepEqual(await runtime.getAvailable("agy"), []);
     assert.equal(processCount, 0, "availability checks must not launch authentication");
     const controller = new AbortController();
@@ -200,7 +200,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     const countBeforeExpiredRequest = processCount;
     t.mock.method(BridgeIPC.prototype, "start", async () => {});
     t.mock.method(BridgeIPC.prototype, "close", async () => {});
-    t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
+    t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");
     t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
     const startRuntime = t.mock.method(AgyRuntime.prototype, "start", async () => {
       throw new Error("Authentication required. Run agy to log in.");

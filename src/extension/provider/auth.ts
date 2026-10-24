@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { ApiKeyAuth, Credential, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "@earendil-works/pi-ai";
-import { loginAgyAuthentication, probeAgyAuthentication } from "../runtime/auth.ts";
+import { createCliAuthenticationBackend } from "../drivers/cli/auth.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
 import type { DoctorFailure } from "./doctor.ts";
 
 const year = 365 * 24 * 60 * 60 * 1000;
 const prefix = "agy-bridge:";
+
+export interface AgyAuthenticationBackend {
+  label: string;
+  probe(signal: AbortSignal, onUsage: (usage: AgyUsage) => void): Promise<boolean>;
+  login(interaction: ProviderAuthInteraction, onUsage: (usage: AgyUsage) => void): Promise<void>;
+}
 
 export function createAgyBridgeCredential(loginEpoch: string = randomUUID()): OAuthCredential {
   if (!loginEpoch.trim()) throw new Error("Antigravity CLI authentication session is no longer valid");
@@ -42,33 +48,34 @@ export class AgyAuthentication {
   private readonly lifecycle = new AbortController();
   private generation = 0;
   private loggingIn = false;
-  private readonly agyPath: string | undefined;
+  private backend: AgyAuthenticationBackend;
 
-  constructor(agyPath: string | undefined, beforeLogin: () => Promise<void>) {
-    this.agyPath = agyPath;
+  constructor(agyPath: string | undefined, beforeLogin: () => Promise<void>, backend?: AgyAuthenticationBackend) {
+    this.backend = backend ?? createCliAuthenticationBackend(agyPath);
+    const self = this;
     this.method = {
-      name: "Antigravity CLI",
+      get name() { return self.backend.label; },
       check: async ({ credential, signal }) => {
         signal.throwIfAborted();
         return isAgyBridgeEnabled(credential)
-          ? { type: "api_key", source: "Antigravity CLI" }
+          ? { type: "api_key", source: self.backend.label }
           : undefined;
       },
       resolve: async ({ credential, signal }) => {
-        if (!isAgyBridgeEnabled(credential) || this.loggingIn) return undefined;
+        if (!isAgyBridgeEnabled(credential) || self.loggingIn) return undefined;
         signal.throwIfAborted();
-        this.lifecycle.signal.throwIfAborted();
+        self.lifecycle.signal.throwIfAborted();
 
         const epoch = credential?.env?.AGY_BRIDGE_LOGIN_EPOCH;
         return {
           auth: {},
           env: { AGY_BRIDGE_ENABLED: "1", ...(typeof epoch === "string" && epoch.length > 0 ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },
-          source: "Antigravity CLI",
+          source: self.backend.label,
         };
       },
     };
     this.oauth = {
-      name: "Antigravity CLI",
+      get name() { return self.backend.label; },
       isSubscription: true,
       refresh: async (credential, signal) => {
         signal.throwIfAborted();
@@ -96,11 +103,10 @@ export class AgyAuthentication {
           signal.throwIfAborted();
           await beforeLogin();
           signal.throwIfAborted();
-          interaction.notify({ type: "progress", message: "Checking Antigravity CLI authentication status" });
+          interaction.notify({ type: "progress", message: `Checking ${this.backend.label} authentication status` });
           let capturedUsage: AgyUsage | undefined;
-          await loginAgyAuthentication(
+          await this.backend.login(
             { ...interaction, signal } satisfies ProviderAuthInteraction,
-            this.agyPath,
             (usage) => { capturedUsage = usage; }
           );
           signal.throwIfAborted();
@@ -119,6 +125,14 @@ export class AgyAuthentication {
         }
       },
     };
+  }
+
+  public setBackend(backend: AgyAuthenticationBackend): void {
+    this.backend = backend;
+    this.status = "unknown";
+    this.usage = undefined;
+    this.failure = undefined;
+    this.detection = undefined;
   }
 
   public async detect(signal: AbortSignal): Promise<OAuthCredential | undefined> {
@@ -148,8 +162,7 @@ export class AgyAuthentication {
       signal.throwIfAborted();
       if (this.loggingIn) throw new Error("Antigravity CLI status check was replaced by a newer attempt");
       let capturedUsage: AgyUsage | undefined;
-      const authenticated = await probeAgyAuthentication(
-        this.agyPath,
+      const authenticated = await this.backend.probe(
         signal,
         (usage) => { capturedUsage = usage; }
       );

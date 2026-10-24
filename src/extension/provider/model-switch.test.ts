@@ -6,6 +6,7 @@ import test from "node:test";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
 import type { AgyInput } from "../shared/types.ts";
@@ -254,7 +255,7 @@ for (const { name, arrange, expected } of cases) {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     };
     const prefix: Context["messages"] = [{ role: "user", content: "original request", timestamp: 1 }, assistant];
-    const oldProc = new AgyRuntime({ agentName: "pi-bridge", model: gemini.id });
+    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: gemini.id }, new Set(), {});
     const oldMcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(oldProc, calculateSyncKey("Rules", [], gemini.id, "", "pi-bridge"), oldMcp, "same-conversation");
     const terminalHandle = session.resources.terminals.bind("pi-terminal");
@@ -284,7 +285,7 @@ for (const { name, arrange, expected } of cases) {
     const lifecycle: string[] = [];
     t.mock.getter(AgyRuntime.prototype, "isRunning", () => arrange.outcome !== "dead" || start.mock.callCount() !== 1);
     t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp && pending; });
-    t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
+    t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");
     t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
     t.mock.method(BridgeIPC.prototype, "start", async () => {});
     t.mock.method(BridgeIPC.prototype, "close", async () => { lifecycle.push("close"); });
@@ -346,6 +347,7 @@ for (const { name, arrange, expected } of cases) {
     assert.ok(terminal?.type === "done");
     assert.equal(terminal.message.model, expected.model);
     assert.equal(terminal.message.responseId, expected.responseId);
+    assert.ok(session.activeProcess instanceof CliRuntimeSession);
     assert.equal(session.activeProcess?.options.model, expected.model);
     assert.equal(session.activeProcess?.options.conversationId, expected.runtimeConversation);
     assert.equal(session.resources.terminals.resolve(terminalHandle), expected.preservesTerminal ? "pi-terminal" : undefined);

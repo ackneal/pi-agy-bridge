@@ -29,7 +29,7 @@ for (const { stage, aborts, cancelled } of cases) {
     const failure = new Error(`injected ${stage} failure`);
     const controller = new AbortController();
     const startBridge = t.mock.method(BridgeIPC.prototype, "start", async function (this: BridgeIPC) {
-      // Supply the endpoint required by the real processEnvironment getter without opening a socket.
+      // Supply the endpoint required by the real bridgeUri getter without opening a socket.
       (this as unknown as { socketPath: string }).socketPath = path.join(directory, "bridge.sock");
       if (stage === "bridge.start") throw failure;
     });

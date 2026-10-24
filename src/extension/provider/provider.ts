@@ -9,218 +9,26 @@ import type {
   Tool,
 } from "@earendil-works/pi-ai";
 import { getCurrentTools, isModelType, normalizeContext } from "@earendil-works/pi-ai";
-import { PiEventAdapter } from "../runtime/events.ts";
-import { AgyRuntime } from "../runtime/process.ts";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { PiRuntimeOutput } from "./output.ts";
 import { AgyTurn } from "./turn.ts";
 import {
   LiveSessionRegistry,
   PiContextAdapter,
-  calculateSyncKey,
-  type LiveSession,
 } from "../session/session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
-import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../discovery/plugin-install.ts";
-import { fetchAgyUsage, type AgyUsage } from "../runtime/usage.ts";
-import { validateAgyVersion } from "../runtime/version.ts";
-import { discoverAgyModels, restoreStoredAgyModels } from "../discovery/models.ts";
+import type { AgyUsage } from "../runtime/usage.ts";
+import { createBridgeDriver, type BridgeDriver } from "../drivers/driver.ts";
+import { detectAcpExecutable } from "../drivers/acp/options.ts";
+import { detectCliExecutable } from "../runtime/version.ts";
+import type { DriverId } from "../drivers/types.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
-import { expandHome } from "../shared/paths.ts";
 import type { AgyBridgeConfig } from "../shared/types.ts";
-import { collectDoctorReport, type DoctorFailure } from "./doctor.ts";
+import type { DoctorFailure } from "./doctor.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
-import { formatContextPrompt, formatContextUpdate } from "./context-prompt.ts";
 
+export { resolveModelAndEffort } from "../drivers/cli/session.ts";
 export { formatContextPrompt, formatContextUpdate } from "./context-prompt.ts";
-
-export function resolveModelAndEffort(
-  modelId: string,
-  options?: SimpleStreamOptions,
-  thinkingLevelMap?: Model<any>["thinkingLevelMap"],
-): { baseModel: string; effort?: "low" | "medium" | "high" | undefined } {
-  const requested =
-    (options as any)?.reasoningEffort ??
-    (options as any)?.reasoning ??
-    (options as any)?.thinkingLevel;
-
-  let effort: "low" | "medium" | "high" | undefined;
-  if (requested === "low" || requested === "medium" || requested === "high") {
-    effort = requested;
-  } else if (requested !== undefined) {
-    throw new Error(`Unsupported Antigravity CLI reasoning effort: ${String(requested)}. Supported values: low, medium, high.`);
-  }
-
-  let baseModel = modelId;
-  const match = modelId.match(/^(.+)-(low|medium|high)$/i);
-  if (match?.[1]) {
-    baseModel = match[1];
-    if (!effort) {
-      effort = match[2]?.toLowerCase() as "low" | "medium" | "high" | undefined;
-    }
-  }
-
-  if (effort && thinkingLevelMap?.[effort] === null) {
-    throw new Error(`Unsupported Antigravity CLI reasoning effort for ${modelId}: ${effort}.`);
-  }
-
-  return { baseModel, effort };
-}
-
-async function prepareRuntime(
-  model: Model<any>,
-  context: Context,
-  tools: readonly Tool[],
-  options: SimpleStreamOptions | undefined,
-  config: AgyBridgeConfig | undefined,
-  bridge: AgyBridge,
-  liveSession: LiveSession,
-  selection: ReturnType<typeof resolveModelAndEffort>,
-  preparationId: symbol,
-): Promise<{ proc: AgyRuntime; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
-  const checkPreparation = () => {
-    options?.signal?.throwIfAborted();
-    if (!liveSession.ownsPreparation(preparationId)) {
-      throw new Error("Antigravity CLI runtime preparation was superseded");
-    }
-  };
-  checkPreparation();
-
-  const { baseModel, effort } = selection;
-  const agentName = config?.agentName ?? "pi-bridge";
-  const toolSyncValues = tools.map((tool) => JSON.stringify({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-  }));
-  const syncKey = calculateSyncKey(context.systemPrompt ?? "", toolSyncValues, baseModel, effort ?? "", agentName);
-  const latestAssistant = [...context.messages].reverse().find((message) => message.role === "assistant");
-  const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
-  const rawPluginDir = config?.pluginDir ?? config?.agentDir;
-  const pluginDir = rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR;
-  const checkpoint = await bridge.runtimeSessionStore.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH);
-  checkPreparation();
-  const decision = bridge.runtimeSessionSync.decide(liveSession, {
-    syncKey,
-    ...(expectedConversationId ? { conversationId: expectedConversationId } : {}),
-    messages: context.messages,
-    ...(checkpoint ? { checkpoint } : {}),
-  });
-
-  debugLog("register", "Antigravity CLI runtime decision", {
-    action: decision.action,
-    messageCount: context.messages.length,
-    syncedMessageCount: bridge.runtimeSessionSync.getSyncedMessageCount(liveSession),
-    processRunning: liveSession.activeProcess?.isRunning ?? false,
-    sessionConversationId: liveSession.conversationId,
-    expectedConversationId,
-    hasActiveProcess: liveSession.activeProcess !== null,
-  });
-
-  if (decision.action === "continue" && liveSession.activeProcess) {
-    debugLog("register", "Reusing existing Antigravity CLI process");
-    if (!liveSession.activeMcpServer) {
-      throw new Error("Antigravity CLI process or Pi MCP bridge was not initialized");
-    }
-    const proc = liveSession.activeProcess;
-    const modelMatches = proc.options.model === baseModel && proc.options.effort === effort;
-    if (liveSession.syncKey !== syncKey) {
-      debugLog("session", "Deferring runtime settings change until the pending Antigravity CLI turn finishes", {
-        activeModel: proc.options.model,
-        requestedModel: baseModel,
-      });
-    }
-    return {
-      proc,
-      mcpServer: liveSession.activeMcpServer,
-      reconstructContext: false,
-      modelId: modelMatches ? model.id : latestAssistant?.model ?? proc.options.model,
-    };
-  }
-
-  debugLog("register", "Starting a replacement Antigravity CLI process");
-  debugLog("session", "Replacing Antigravity CLI runtime", {
-    action: decision.action,
-    conversationId: liveSession.conversationId,
-    hasPendingCalls: liveSession.activeMcpServer?.hasPendingCalls ?? false,
-  });
-  await liveSession.dispose({
-    preserveConversation: decision.action === "resume",
-    preserveResources: decision.action === "resume" && decision.conversationId === liveSession.conversationId,
-    preparationId,
-  });
-  checkPreparation();
-  await validateAgyVersion(config?.agyPath);
-  checkPreparation();
-
-  const startRuntime = async (conversationId?: string) => {
-    const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
-    let proc: AgyRuntime | null = null;
-    const abortStartup = () => {
-      void mcpServer.close().catch((error) => debugLog("session", "Error closing cancelled MCP startup:", error));
-      void proc?.abort().catch((error) => debugLog("session", "Error aborting cancelled Antigravity CLI startup:", error));
-    };
-    options?.signal?.addEventListener("abort", abortStartup, { once: true });
-    try {
-      checkPreparation();
-      await mcpServer.start();
-      checkPreparation();
-      await bridge.ensureAgyPluginInstalled(pluginDir);
-      checkPreparation();
-      proc = new AgyRuntime({
-        agyPath: config?.agyPath,
-        agentName,
-        model: baseModel,
-        conversationId,
-        effort,
-        environment: mcpServer.processEnvironment,
-      });
-      const initEvent = await proc.start();
-      checkPreparation();
-      debugLog("register", "Antigravity CLI init conversation id:", initEvent.conversation_id);
-      if (conversationId && initEvent.conversation_id !== conversationId) {
-        throw new Error("Antigravity CLI did not restore the requested conversation");
-      }
-      if (!proc.isRunning) throw new Error("Antigravity CLI exited before input delivery");
-      if (!liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id, preparationId)) {
-        throw new Error("Antigravity CLI runtime preparation was superseded");
-      }
-      return { proc, mcpServer, modelId: model.id };
-    } catch (error) {
-      // Ownership transfers to liveSession only after startup succeeds.
-      await mcpServer.close().catch((cleanupError) => {
-        debugLog("session", "Error closing unowned MCP bridge:", cleanupError);
-      });
-      if (proc) {
-        await proc.abort().catch((cleanupError) => {
-          debugLog("session", "Error aborting unowned Antigravity CLI process:", cleanupError);
-        });
-      }
-      throw error;
-    } finally {
-      options?.signal?.removeEventListener("abort", abortStartup);
-    }
-  };
-
-  if (decision.action === "resume") {
-    try {
-      return { ...await startRuntime(decision.conversationId), reconstructContext: false };
-    } catch (error) {
-      checkPreparation();
-      debugLog("session", "Conversation resume failed before input delivery; rebuilding once", {
-        conversationId: decision.conversationId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await bridge.runtimeSessionStore.delete(liveSession.piSessionId).catch((failure) => {
-        debugLog("session", "Could not invalidate rejected conversation reference:", failure);
-      });
-      checkPreparation();
-      liveSession.resources.disposeAll();
-    }
-  }
-
-  return { ...await startRuntime(), reconstructContext: true };
-}
 
 export function streamAgyProvider(
   model: Model<any>,
@@ -236,11 +44,10 @@ export function streamAgyProvider(
   debugLog("mcp", "Pi provider context tools:", contextTools.map((tool) => tool.name));
   debugLog("mcp", "Pi bridge tools:", tools.map((tool) => tool.name));
   const bridgeToolNameSet = new Set(tools.map((tool) => tool.name));
-  const adapter = new PiEventAdapter({
+  const adapter = new PiRuntimeOutput({
     model: model.id,
     provider: model.provider ?? "agy",
     allowedToolNames: bridgeToolNameSet,
-    bridgeToolCallsExternally: true,
   });
   const stream = adapter.stream;
 
@@ -255,16 +62,15 @@ export function streamAgyProvider(
     return stream;
   }
 
-  let selection: ReturnType<typeof resolveModelAndEffort>;
   try {
-    selection = resolveModelAndEffort(model.id, options, model.thinkingLevelMap);
+    if (config?.driver !== undefined && config.driver !== bridge.driver.id) throw new Error("A provider instance cannot switch drivers per request");
+    bridge.driver.validateSelection(model, options);
   } catch (error) {
     adapter.handleTermination("error", error instanceof Error ? error.message : String(error));
     return stream;
   }
 
   const liveSession = bridge.liveSessions.getOrCreate(piSessionId);
-  adapter.setErrorState(liveSession.errorState);
   const preparationId = liveSession.beginPreparation();
   const turn = new AgyTurn({
     session: liveSession,
@@ -279,7 +85,11 @@ export function streamAgyProvider(
 
   (async () => {
     try {
-      const runtime = await prepareRuntime(model, context, tools, options, config, bridge, liveSession, selection, preparationId);
+      const runtime = await bridge.driver.prepareSession({
+        model, context, tools, options, session: liveSession, preparationId,
+        store: bridge.runtimeSessionStore, sync: bridge.runtimeSessionSync,
+        installPlugin: (pluginDir) => bridge.ensureAgyPluginInstalled(pluginDir),
+      });
       const mcpServer = runtime.mcpServer;
       adapter.setModel(runtime.modelId);
       turn.attach(runtime);
@@ -294,7 +104,7 @@ export function streamAgyProvider(
       // response instead so the current turn sees them before resuming.
       const hasPendingCalls = mcpServer.hasPendingCalls;
       const contextUpdate = hasPendingCalls && contextUpdates.length > 0
-        ? formatContextUpdate(contextUpdates, "pending_tool_continuation")
+        ? runtime.proc.formatContextUpdate(contextUpdates)
         : undefined;
       const enqueuedToolResults = hasPendingCalls
         ? mcpServer.resolveToolResults(toolResults, contextUpdate)
@@ -313,33 +123,7 @@ export function streamAgyProvider(
 
       turn.openToolDispatch();
 
-      let prompt = formatContextPrompt(context, !runtime.reconstructContext, syncedMessageCount);
-      // A fully synced conversation still needs an explicit request for the next response.
-      if (!prompt.trim()) prompt = "Continue from the current conversation state without repeating completed work.";
-
-      if (options?.onPayload) {
-        try {
-          const payload = { prompt };
-          const rewritten = await options.onPayload(payload, model);
-          if (rewritten && typeof rewritten === "object" && "prompt" in rewritten) {
-            prompt = (rewritten as { prompt: string }).prompt;
-          }
-        } catch (err) {
-          debugLog("register", "Error in options.onPayload:", err);
-        }
-      }
-
-      if (typeof prompt !== "string" || !prompt.trim()) {
-        throw new Error("Antigravity CLI prompt must be a non-empty string");
-      }
-
-      debugArtifact("agy-payload", {
-        sessionId: piSessionId,
-        conversationId: liveSession.conversationId,
-        reconstructContext: runtime.reconstructContext,
-        prompt,
-      });
-      await turn.send({ event: "user", message: { content: prompt } });
+      await turn.send({ model, context, options, reconstructContext: runtime.reconstructContext, syncedMessageCount });
     } catch (error) {
       turn.fail(error);
     }
@@ -352,7 +136,8 @@ export function streamAgyProvider(
 
 export class AgyBridge {
   private readonly pi: ExtensionAPI;
-  private readonly config: AgyBridgeConfig | undefined;
+  private config: AgyBridgeConfig | undefined;
+  public driver: BridgeDriver;
   private pluginError: DoctorFailure | undefined;
   private discoveryError: DoctorFailure | undefined;
   private usageError: DoctorFailure | undefined;
@@ -369,6 +154,7 @@ export class AgyBridge {
   constructor(pi: ExtensionAPI, config?: AgyBridgeConfig) {
     this.pi = pi;
     this.config = config;
+    this.driver = createBridgeDriver(config);
     this.authentication = new AgyAuthentication(config?.agyPath, async () => {
       this.runtimeLifetime.abort(new Error("Antigravity CLI login changed the bridge session"));
       this.usageRefresh = undefined;
@@ -379,20 +165,22 @@ export class AgyBridge {
         }
       }
       this.runtimeLifetime = new AbortController();
-    });
+    }, this.driver.authentication);
   }
 
   private async refreshUsage(signal: AbortSignal): Promise<AgyUsage | undefined> {
     if (signal.aborted) return undefined;
     if (this.usageRefresh) return this.usageRefresh;
 
-    const task = fetchAgyUsage(this.config?.agyPath, signal)
+    const task = this.driver.usage(signal)
       .then((usage) => {
         if (signal.aborted) return undefined;
         this.authentication.usage = usage;
         this.usageError = undefined;
-        this.authentication.status = "authenticated";
-        this.authentication.failure = undefined;
+        if (usage) {
+          this.authentication.status = "authenticated";
+          this.authentication.failure = undefined;
+        }
         return usage;
       })
       .catch((error) => {
@@ -416,7 +204,7 @@ export class AgyBridge {
 
   public async ensureAgyPluginInstalled(pluginDir: string): Promise<void> {
     try {
-      await ensureAgyPluginInstalled(this.config?.agyPath, pluginDir);
+      await this.driver.installPlugin(pluginDir);
       this.pluginError = undefined;
     } catch (error) {
       this.pluginError = {
@@ -425,6 +213,31 @@ export class AgyBridge {
       };
       throw error;
     }
+  }
+
+  public async switchDriver(driverId: DriverId): Promise<void> {
+    if (this.driver.id === driverId) return;
+
+    if (driverId === "acp") {
+      const acpBin = detectAcpExecutable(this.config?.acpPath);
+      if (!acpBin) throw new Error("Antigravity ACP executable not found");
+    } else {
+      const cliBin = detectCliExecutable(this.config?.agyPath);
+      if (!cliBin) throw new Error("Antigravity CLI executable not found");
+    }
+
+    await this.liveSessions.disposeAll();
+
+    this.config = { ...this.config, driver: driverId };
+    this.driver = createBridgeDriver(this.config);
+    this.authentication.setBackend(this.driver.authentication);
+
+    this.usageRefresh = undefined;
+    this.discoveryError = undefined;
+    this.pluginError = undefined;
+    this.usageError = undefined;
+
+    debugLog("provider", `Switched bridge driver to: ${this.driver.label} (${driverId})`);
   }
 
   public getTools(context: Context): Tool[] {
@@ -453,11 +266,7 @@ export class AgyBridge {
         const usage = await this.refreshUsage(lifetime);
         if (lifetime.aborted) return;
 
-        const rawPluginDir = this.config?.pluginDir ?? this.config?.agentDir;
-        const report = await collectDoctorReport({
-          agyPath: this.config?.agyPath,
-          pluginDir: rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR,
-          models: this.config?.models,
+        const report = await this.driver.doctor({
           catalogModels: models,
           pluginError: this.pluginError,
           discoveryError: this.discoveryError,
@@ -473,6 +282,66 @@ export class AgyBridge {
           content: report,
           display: true,
         }, { triggerTurn: false });
+      },
+    });
+
+    this.pi.registerCommand("agy-bridge:driver", {
+      description: "Show or switch the Antigravity driver (/agy-bridge:driver [cli|acp])",
+      handler: async (args?: string) => {
+        const target = args?.trim().toLowerCase();
+        if (!target) {
+          const acpPath = detectAcpExecutable(this.config?.acpPath);
+          const cliPath = detectCliExecutable(this.config?.agyPath);
+          const status = [
+            `Current driver: **${this.driver.label}** (${this.driver.id})`,
+            "",
+            "Available drivers:",
+            `- **acp**: ${acpPath ? `✓ Found (${acpPath})` : "✗ Not found"}`,
+            `- **cli**: ${cliPath ? `✓ Found (${cliPath})` : "✗ Not found"}`,
+            "",
+            "Usage: `/agy-bridge:driver cli` or `/agy-bridge:driver acp`",
+          ].join("\n");
+
+          this.pi.sendMessage({
+            customType: "pi-agy-bridge:driver",
+            content: status,
+            display: true,
+          }, { triggerTurn: false });
+          return;
+        }
+
+        if (target !== "cli" && target !== "acp") {
+          this.pi.sendMessage({
+            customType: "pi-agy-bridge:driver",
+            content: `Unknown driver "${target}". Available: cli, acp.`,
+            display: true,
+          }, { triggerTurn: false });
+          return;
+        }
+
+        if (target === this.driver.id) {
+          this.pi.sendMessage({
+            customType: "pi-agy-bridge:driver",
+            content: `Already using driver: **${this.driver.label}** (${target}).`,
+            display: true,
+          }, { triggerTurn: false });
+          return;
+        }
+
+        try {
+          await this.switchDriver(target);
+          this.pi.sendMessage({
+            customType: "pi-agy-bridge:driver",
+            content: `Successfully switched driver to **${this.driver.label}** (${target}).`,
+            display: true,
+          }, { triggerTurn: false });
+        } catch (error) {
+          this.pi.sendMessage({
+            customType: "pi-agy-bridge:driver",
+            content: `Failed to switch driver: ${error instanceof Error ? error.message : String(error)}`,
+            display: true,
+          }, { triggerTurn: false });
+        }
       },
     });
 
@@ -512,7 +381,7 @@ export class AgyBridge {
       const oauthEnvironment = getAgyBridgeAuthEnvironment(options?.apiKey);
       const env = { ...options?.env, ...oauthEnvironment };
       if (env.AGY_BRIDGE_ENABLED !== "1") {
-        const adapter = new PiEventAdapter({ model: model.id, provider: "agy" });
+        const adapter = new PiRuntimeOutput({ model: model.id, provider: "agy" });
         adapter.handleTermination("error", "Antigravity CLI disabled in Pi");
         return adapter.stream;
       }
@@ -524,7 +393,7 @@ export class AgyBridge {
 
     this.pi.registerProvider({
       id: "agy",
-      name: "Antigravity CLI [pi-agy-bridge]",
+      name: `${this.driver.label} [pi-agy-bridge]`,
       baseUrl: "agy",
       auth: { oauth: this.authentication.oauth, apiKey: this.authentication.method },
       getModels: () => models.filter((model) => isModelType(model, "chat")),
@@ -536,14 +405,14 @@ export class AgyBridge {
           if (context.signal.aborted) return;
 
           if (context.stored) {
-            const restored = restoreStoredAgyModels(context.stored.models);
+            const restored = this.driver.restoreModels(context.stored.models);
             const accepted = await context.publish({ update: () => { models = restored; } });
             if (!accepted) return;
           }
           if (!context.allowNetwork) return;
 
           try {
-            const discovered = await discoverAgyModels(this.config?.agyPath, context.signal);
+            const discovered = await this.driver.discoverModels(context.signal);
             await context.publish({
               persist: { models: discovered },
               update: () => {

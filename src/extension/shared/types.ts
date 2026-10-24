@@ -118,6 +118,13 @@ export type AgyEvent =
   | { event: string; [key: string]: unknown };
 
 export interface AgyBridgeConfig {
+  /** CLI remains the default; ACP must be selected explicitly. */
+  driver?: "cli" | "acp";
+  acpPath?: string;
+  acpArgs?: string[];
+  /** ACP server cwd, not a workspace filesystem authorization boundary. */
+  acpCwd?: string;
+  acpRequestTimeoutMs?: number;
   agyPath?: string;
   /** Pi credential path for startup auto-configuration. Defaults to getAgentDir()/auth.json. */
   authPath?: string;

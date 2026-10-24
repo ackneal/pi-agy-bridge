@@ -72,6 +72,7 @@ test("boot availability preserves stored scoped model selection without authenti
     on: () => {}, registerCommand: () => {},
     registerProvider: runtime.registerNativeProvider.bind(runtime),
   } as unknown as ExtensionAPI, {
+    driver: "cli",
     models: parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)\ngemini-3.1-pro-high  Gemini 3.1 Pro (High)"),
   });
 

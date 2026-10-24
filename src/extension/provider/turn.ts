@@ -1,16 +1,15 @@
 import type { Context } from "@earendil-works/pi-ai";
 import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import type { PiToolCallBatch } from "../bridge/capabilities.ts";
-import type { PiEventAdapter } from "../runtime/events.ts";
-import type { AgyEventSource, AgyRuntime } from "../runtime/process.ts";
+import type { PiRuntimeOutput } from "./output.ts";
+import type { DriverSession, DriverSubmission, RuntimeEvent } from "../drivers/types.ts";
 import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
-import type { AgyEvent, AgyInput } from "../shared/types.ts";
 
 interface TurnOptions {
   session: LiveSession;
-  adapter: PiEventAdapter;
+  adapter: PiRuntimeOutput;
   context: Context;
   sync: RuntimeSessionSync;
   store: RuntimeSessionStore;
@@ -20,7 +19,7 @@ interface TurnOptions {
 }
 
 export class AgyTurn {
-  private runtime: { proc: AgyRuntime; mcpServer: BridgeIPC } | undefined;
+  private runtime: { proc: DriverSession; mcpServer: BridgeIPC } | undefined;
   private completed = false;
   private sendingInput = false;
   private readonly options: TurnOptions;
@@ -29,22 +28,22 @@ export class AgyTurn {
     this.options = options;
   }
 
-  public attach(runtime: { proc: AgyRuntime; mcpServer: BridgeIPC }): void {
+  public attach(runtime: { proc: DriverSession; mcpServer: BridgeIPC }): void {
     const { session, adapter, signal, preparationId } = this.options;
     if (!session.ownsPreparation(preparationId)) {
-      throw new Error("Antigravity CLI runtime preparation was superseded");
+      throw new Error("Runtime preparation was superseded");
     }
     this.runtime = runtime;
     signal?.throwIfAborted();
     if (!this.ownsRuntime()) {
-      throw new Error("Antigravity CLI runtime was invalidated before input delivery");
+      throw new Error("Runtime was invalidated before input delivery");
     }
 
     session.releasePreparation(preparationId);
     runtime.mcpServer.setTransportFailureHandler((error) => this.failRuntime(error));
     if (adapter.isCompleted()) return;
 
-    session.setRuntimeEventHandler((event, source) => this.handleEvent(event, source));
+    session.setRuntimeEventHandler((event) => this.handleEvent(event));
     session.setAbortSignal(signal, () => this.cancel("Request aborted by user"));
   }
 
@@ -62,13 +61,18 @@ export class AgyTurn {
     await this.persist(context.messages);
   }
 
-  public async send(input: AgyInput): Promise<void> {
+  public async send(input: Omit<DriverSubmission, "beforeInput">): Promise<void> {
     if (this.options.adapter.isCompleted()) return;
-    if (!this.ownsRuntime()) throw new Error("Antigravity CLI runtime was invalidated before input delivery");
+    if (!this.ownsRuntime()) throw new Error("Runtime was invalidated before input delivery");
     this.options.signal?.throwIfAborted();
 
-    this.sendingInput = true;
-    await this.runtime!.proc.send(input);
+    await this.runtime!.proc.submit({ ...input, beforeInput: () => {
+      if (this.options.adapter.isCompleted()) return false;
+      if (!this.ownsRuntime()) throw new Error("Runtime was invalidated before input delivery");
+      this.options.signal?.throwIfAborted();
+      this.sendingInput = true;
+      return true;
+    } });
   }
 
   public fail(error: unknown): void {
@@ -97,24 +101,24 @@ export class AgyTurn {
     return this.runtime ? this.ownsRuntime() : this.options.session.ownsPreparation(this.options.preparationId);
   }
 
-  private handleEvent(event: AgyEvent, source: AgyEventSource): void {
+  private handleEvent(event: RuntimeEvent): void {
     if (!this.ownsRuntime()) return;
 
     const { adapter } = this.options;
     const mcpServer = this.runtime!.mcpServer;
     if (adapter.isCompleted()) {
       // Pi may still be executing tools after its stream ends.
-      const blockedTool = adapter.getBlockedToolName(event);
-      if (source === "runtime" || (event.event === "result" && mcpServer.hasPendingCalls) || blockedTool !== undefined) {
-        debugLog("session", "Invalidating runtime between Pi tool turns", { source, event: event.event, blockedTool });
+      if (event.type === "blocked-native-tool" ||
+        (event.type === "complete" && (!event.resumable || mcpServer.hasPendingCalls))) {
+        debugLog("session", "Invalidating runtime between Pi tool turns", event);
         this.close("invalidate");
       }
       return;
     }
 
     try {
-      adapter.handleEvent(event, source);
-      this.complete(source === "agy" && event.event === "result" && !mcpServer.hasPendingCalls);
+      adapter.handleRuntimeEvent(event);
+      this.complete(event.type === "complete" && event.resumable && !mcpServer.hasPendingCalls);
     } catch (error) {
       this.fail(error);
     }
@@ -141,7 +145,7 @@ export class AgyTurn {
     const message = adapter.message;
     const hasPendingCalls = this.runtime!.mcpServer.hasPendingCalls;
     debugArtifact("assistant-message", { sessionId: session.piSessionId, message });
-    if ((message.stopReason === "error" && !resumableError) ||
+    if (((message.stopReason === "error" || message.stopReason === "aborted") && !resumableError) ||
       (message.stopReason !== "toolUse" && hasPendingCalls)) {
       this.close("invalidate");
       return;
@@ -153,7 +157,7 @@ export class AgyTurn {
     }
     sync.record(session, context.messages, message);
     void this.persist([...context.messages, message]).catch((error) => {
-      debugLog("session", "Could not persist Antigravity CLI runtime reference:", error);
+      debugLog("session", "Could not persist runtime reference:", error);
     });
 
     this.runtime!.mcpServer.setToolCallHandler(null);
@@ -170,7 +174,7 @@ export class AgyTurn {
     await store.set(session.piSessionId, {
       conversationId: session.conversationId,
       ...(this.runtime!.mcpServer.hasPendingCalls ? { hasPendingToolCalls: true } : {}),
-    }, messages, loginEpoch);
+    }, messages, loginEpoch, session.driverId);
   }
 
   private failRuntime(error: Error): void {
@@ -197,11 +201,11 @@ export class AgyTurn {
     if (reference === "invalidate") {
       // The tombstone is written synchronously before asynchronous resource cleanup.
       void store.delete(session.piSessionId).catch((error) => {
-        debugLog("session", "Could not invalidate failed Antigravity CLI runtime reference:", error);
+        debugLog("session", "Could not invalidate failed runtime reference:", error);
       });
     }
     void session.dispose().catch((error) => {
-      debugLog("session", "Could not dispose Antigravity CLI runtime:", error);
+      debugLog("session", "Could not dispose runtime:", error);
     });
   }
 }

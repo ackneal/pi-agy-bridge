@@ -22,6 +22,26 @@ export function resolveAgyExecutable(customPath?: string): string {
   return "agy";
 }
 
+export function detectCliExecutable(customPath?: string): string | undefined {
+  if (customPath && customPath !== "agy") {
+    const resolved = expandHome(customPath);
+    if (fs.existsSync(resolved)) return resolved;
+    return undefined;
+  }
+
+  const standardLocal = path.join(os.homedir(), ".local", "bin", "agy");
+  if (fs.existsSync(standardLocal)) return standardLocal;
+
+  const pathEnv = process.env.PATH ?? "";
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, "agy");
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return undefined;
+}
+
 function parseSemver(versionStr: string): [number, number, number] {
   const match = versionStr.match(/(\d+)\.(\d+)\.(\d+)/);
   if (!match || !match[1] || !match[2] || !match[3]) {

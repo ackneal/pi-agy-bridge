@@ -43,19 +43,19 @@ describe("Antigravity CLI MCP package", () => {
         assert.ok(files.includes(required), `missing packed file: ${required}`);
       }
 
-      const moduleDirs = ["shared", "runtime", "bridge", "session", "discovery", "provider"];
+      const moduleDirs = ["shared", "runtime", "bridge", "session", "discovery", "provider", "drivers"];
       for (const dir of moduleDirs) {
         const entries = await readdir(path.join(projectDir, "src/extension", dir), { recursive: true });
         const modules = entries
           .map(String)
-          .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
+          .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts") && !file.endsWith("-fixture.ts"));
         for (const module of modules) {
           const packedPath = path.posix.join("src/extension", dir, ...module.split(path.sep));
           assert.ok(files.includes(packedPath), `missing packed module: ${packedPath}`);
         }
       }
-      assert.ok(!files.some((file) => file.includes("/.gemini/") || file.includes("/__tests__/") || file.endsWith(".test.ts")));
-      for (const developmentPath of [".github/", "scripts/", "docs/", "tests/", "bun.lock", "tsconfig.json"]) {
+      assert.ok(!files.some((file) => file.includes("/.gemini/") || file.includes("/__tests__/") || file.endsWith(".test.ts") || file.endsWith("-fixture.ts")));
+      for (const developmentPath of [".github/", "scripts/", "docs/", "experiments/", "tests/", "bun.lock", "tsconfig.json"]) {
         assert.ok(!files.some((file) => file.startsWith(developmentPath)), `packed development artifact: ${developmentPath}`);
       }
 

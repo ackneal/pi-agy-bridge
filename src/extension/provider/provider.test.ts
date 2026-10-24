@@ -7,7 +7,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { AgyRuntime, type AgyEventSource } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
-import { PiEventAdapter } from "../runtime/events.ts";
+import { PiRuntimeOutput } from "./output.ts";
 import { messagesMatch } from "../session/session-state.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
 import { AgyBridge, registerAgyProvider, resolveModelAndEffort, streamAgyProvider } from "./provider.ts";
@@ -81,7 +81,7 @@ const fixedEffortCases = ["claude-sonnet-4-6", "claude-opus-4-6-thinking"].flatM
 
 for (const row of fixedEffortCases) {
   test(row.name, async (t) => {
-    const bridge = new AgyBridge({} as ExtensionAPI);
+    const bridge = new AgyBridge({} as ExtensionAPI, { driver: "cli" });
     const runtimeLookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
       throw new Error("Runtime preparation must not begin");
     });
@@ -107,8 +107,7 @@ test("doctor reports installation errors without starting a model turn", async (
     on: () => {},
     registerProvider: () => {},
     registerCommand: (name: string, command: { handler: () => Promise<void> }) => {
-      assert.equal(name, "agy-bridge:doctor");
-      handler = command.handler;
+      if (name === "agy-bridge:doctor") handler = command.handler;
     },
     sendMessage,
   } as unknown as ExtensionAPI;
@@ -147,7 +146,9 @@ test("doctor clears the recorded installation error after successful installatio
   const sendMessage = t.mock.fn();
   const pi = {
     on: () => {}, registerProvider: () => {}, sendMessage,
-    registerCommand: (_name: string, command: { handler: () => Promise<void> }) => { handler = command.handler; },
+    registerCommand: (name: string, command: { handler: () => Promise<void> }) => {
+      if (name === "agy-bridge:doctor") handler = command.handler;
+    },
   } as unknown as ExtensionAPI;
   const bridge = new AgyBridge(pi, { models: [], agyPath, pluginDir });
   bridge.start();
@@ -265,7 +266,7 @@ async function createRuntimeFixture(t: TestContext) {
   await runtimeBridge.runtimeSessionStore.set(sessionId, { conversationId: "conversation-1" }, [], epoch);
 
   t.mock.method(BridgeIPC.prototype, "start", async () => {});
-  t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
+  t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");
   t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
   t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
   const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
@@ -465,7 +466,7 @@ for (const row of laterFailureCases) {
 for (const source of ["agy", "runtime"] as const) {
   test(`late old ${source} callback cannot affect the replacement turn`, async (t) => {
     const { bridge, session, sessionId, epoch, processes, listeners, capturedListeners, send, runTurn } = await createRuntimeFixture(t);
-    const setModel = t.mock.method(PiEventAdapter.prototype, "setModel");
+    const setModel = t.mock.method(PiRuntimeOutput.prototype, "setModel");
     let oldSending!: () => void;
     let newSending!: () => void;
     const oldSent = new Promise<void>((resolve) => { oldSending = resolve; });
@@ -477,7 +478,7 @@ for (const source of ["agy", "runtime"] as const) {
     });
     const oldTurn = runTurn("old-model", "old request", []);
     await oldSent;
-    const oldAdapter = setModel.mock.calls[0]!.this as PiEventAdapter;
+    const oldAdapter = setModel.mock.calls[0]!.this as PiRuntimeOutput;
     t.after(async () => {
       oldAdapter.handleTermination("aborted", "test cleanup");
       await oldTurn;
@@ -490,6 +491,7 @@ for (const source of ["agy", "runtime"] as const) {
     const replacementMcp = session.activeMcpServer;
     assert.ok(replacement);
     assert.notEqual(replacement, processes[0]);
+    assert.ok(replacement instanceof AgyRuntime);
     const replacementListener = listeners.get(replacement);
     assert.ok(replacementListener);
     t.after(() => replacementListener({ event: "result", status: "success" }, "agy"));
@@ -680,7 +682,7 @@ for (const terminal of ["success", "quota"] as const) {
     test(`delayed ${terminal} send rejection cannot dispose replacement with old signal aborted=${oldAborted}`, { timeout: 5000 }, async (t) => {
       const { bridge, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
       const oldController = new AbortController();
-      const setModel = t.mock.method(PiEventAdapter.prototype, "setModel");
+      const setModel = t.mock.method(PiRuntimeOutput.prototype, "setModel");
       let rejectOld!: (error: Error) => void;
       const oldSend = new Promise<void>((_resolve, reject) => { rejectOld = reject; });
       t.after(() => rejectOld(new Error("test cleanup")));
@@ -704,7 +706,7 @@ for (const terminal of ["success", "quota"] as const) {
       assert.equal(session.activeProcess, processes[0]);
       const replacementTurn = runTurn("new-model", "replacement request", []);
       t.after(async () => {
-        const adapter = setModel.mock.calls[1]?.this as PiEventAdapter | undefined;
+        const adapter = setModel.mock.calls[1]?.this as PiRuntimeOutput | undefined;
         adapter?.handleTermination("aborted", "test cleanup");
         await replacementTurn;
       });
@@ -963,7 +965,7 @@ for (const outcome of ["failure", "cancellation", "delayed success"] as const) {
     const oldStartup = new Promise<void>((resolve) => { releaseOld = resolve; });
     t.after(() => releaseOld());
     const { bridge, session, sessionId, epoch, processes, listeners, close, abort, start, send, runTurn } = await createRuntimeFixture(t);
-    const setModel = t.mock.method(PiEventAdapter.prototype, "setModel");
+    const setModel = t.mock.method(PiRuntimeOutput.prototype, "setModel");
     let oldStarting!: () => void;
     let newSending!: () => void;
     const oldStarted = new Promise<void>((resolve) => { oldStarting = resolve; });
@@ -989,7 +991,7 @@ for (const outcome of ["failure", "cancellation", "delayed success"] as const) {
     t.after(async () => {
       releaseOld();
       for (const call of setModel.mock.calls) {
-        (call.this as PiEventAdapter).handleTermination("aborted", "test cleanup");
+        (call.this as PiRuntimeOutput).handleTermination("aborted", "test cleanup");
       }
       await Promise.allSettled([oldTurn, newTurn]);
     });
@@ -998,6 +1000,7 @@ for (const outcome of ["failure", "cancellation", "delayed success"] as const) {
     const replacementMcp = session.activeMcpServer;
     assert.equal(replacement, processes[1]);
     assert.ok(replacement && replacementMcp);
+    assert.ok(replacement instanceof AgyRuntime);
     const replacementListener = listeners.get(replacement);
     assert.ok(replacementListener);
     const handle = session.resources.terminals.bind("replacement-pi-pty");
