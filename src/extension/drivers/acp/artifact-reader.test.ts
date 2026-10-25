@@ -24,12 +24,12 @@ test("immutable text pagination and prompt reset", async () => {
   try {
     const file = path.join(f.steps, "result");
     await writeFile(file, "one\ntwo\nthree\n");
-    assert.equal(JSON.parse((await f.read(file, 1, 1)).content).nextLine, 2);
+    assert.match((await f.read(file, 1, 1)).content, /^one\n[\s\S]*start_line=2/);
     await writeFile(file, "replacement");
-    assert.equal(JSON.parse((await f.read(file, 2, 2)).content).text, "two\nthree\n");
+    assert.equal((await f.read(file, 2, 2)).content, "two\nthree\n");
     await f.reader.endPrompt();
     f.reader.beginPrompt();
-    assert.equal(JSON.parse((await f.read(file)).content).text, "replacement");
+    assert.equal((await f.read(file)).content, "replacement");
   } finally { await f.cleanup(); }
 });
 
@@ -39,7 +39,7 @@ test("UTF-8 tool text preserves CRLF, Unicode and ANSI sequences", async () => {
     const file = path.join(f.steps, "output");
     const text = "\u001b[31m紅色😀\u001b[0m\r\n";
     await writeFile(file, text);
-    assert.equal(JSON.parse((await f.read(file)).content).text, text);
+    assert.equal((await f.read(file)).content, text);
   } finally { await f.cleanup(); }
 });
 
@@ -97,7 +97,7 @@ for (const [mimeType, bytes] of [
     try {
       const file = path.join(f.steps, "image.txt");
       await writeFile(file, bytes);
-      assert.match(JSON.parse((await f.read(file)).content).text, /Derived image description/);
+      assert.match((await f.read(file)).content, /^Image observation \(derived\):\nvisible text$/);
       await f.read(file);
       assert.deepEqual(f.observed, [{ data: bytes.toString("base64"), mimeType }]);
     } finally { await f.cleanup(); }
@@ -110,7 +110,7 @@ test("metadata stays text and validates only JSON object", async () => {
     for (const [name, text] of [["read.json", '{"anything":true}'], ["instructions.md", "instructions"]]) {
       const file = path.join(f.metadata, name!);
       await writeFile(file, text!);
-      assert.equal(JSON.parse((await f.read(file)).content).text, text);
+      assert.equal((await f.read(file)).content, text);
     }
     assert.equal(f.observed.length, 0);
   } finally { await f.cleanup(); }
@@ -128,11 +128,11 @@ test("registered tool schemas do not consume artifact file slots", async () => {
     for (const tool of tools) {
       const file = path.join(f.metadata, `${tool}.json`);
       await writeFile(file, "{}");
-      assert.equal(JSON.parse((await reader.read({ sessionId: "session", path: file }, new AbortController().signal)).content).text, "{}");
+      assert.equal((await reader.read({ sessionId: "session", path: file }, new AbortController().signal)).content, "{}");
     }
     const artifact = path.join(f.steps, "result");
     await writeFile(artifact, "tool output");
-    assert.equal(JSON.parse((await reader.read({ sessionId: "session", path: artifact }, new AbortController().signal)).content).text, "tool output");
+    assert.equal((await reader.read({ sessionId: "session", path: artifact }, new AbortController().signal)).content, "tool output");
   } finally {
     await reader.endPrompt();
     await f.cleanup();
@@ -198,7 +198,7 @@ test("a new prompt cannot take ownership before the old observer cleanup settles
     await writeFile(file, "new snapshot\n");
     reader.beginPrompt();
     const page = await reader.read({ sessionId: "session", path: file }, new AbortController().signal);
-    assert.equal(JSON.parse(page.content).text, "new snapshot\n");
+    assert.equal(page.content, "new snapshot\n");
   } finally {
     release();
     await reader.endPrompt();
@@ -276,7 +276,7 @@ for (const change of ["file mutation", "parent replacement", "sibling creation"]
         }
         return result;
       });
-      if (change === "sibling creation") assert.equal(JSON.parse((await f.read(file)).content).text, "original\n");
+      if (change === "sibling creation") assert.equal((await f.read(file)).content, "original\n");
       else await assert.rejects(f.read(file), /Artifact.*changed/);
       assert.equal(changed, true);
     } finally {
@@ -321,9 +321,9 @@ test("text integrity errors are explicit and failed snapshots do not retry", asy
     await f.reader.endPrompt();
     f.reader.beginPrompt();
     await writeFile(missing, "\ufefforiginal\n");
-    assert.equal(JSON.parse((await f.read(missing)).content).text, "\ufefforiginal\n");
+    assert.equal((await f.read(missing)).content, "\ufefforiginal\n");
     await assert.rejects(f.read(missing, 0), /line must/);
-    assert.equal(JSON.parse((await f.read(missing, 1, 1000)).content).eof, true);
+    assert.equal((await f.read(missing, 1, 1000)).content, "\ufefforiginal\n");
     await assert.rejects(f.read(missing, 1, 0), /limit must/);
   } finally { await f.cleanup(); }
 });

@@ -3,6 +3,7 @@ import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { readTextPage } from "./text-page.ts";
+import { debugLog } from "../../shared/debug.ts";
 
 interface Options {
   home: string;
@@ -84,7 +85,12 @@ export class AcpArtifactReader {
     const text = await snapshot;
     signal.throwIfAborted();
     if (this.options.sessionId() !== session) throw new Error("Artifact session changed");
-    return readTextPage(text, request.line ?? undefined, request.limit ?? undefined);
+    const response = readTextPage(text, request.line ?? undefined, request.limit ?? undefined);
+    debugLog("acp-read", "Client read completed", {
+      sessionId: session, path: target, line: request.line ?? 1,
+      responseBytes: Buffer.byteLength(response.content),
+    });
+    return response;
   }
 
   private async load(root: string, target: string, metadata: boolean, prompt: Prompt, signal: AbortSignal): Promise<string> {
@@ -143,10 +149,12 @@ export class AcpArtifactReader {
     const mimeType = mime(bytes);
     if (mimeType && !metadata) {
       // The observer owns its deadline and settles only after process cleanup.
+      debugLog("acp-read", "Image observer started", { path: target, mimeType, bytes: bytes.length });
       const description = await this.options.observeImage({ data: bytes.toString("base64"), mimeType }, signal);
       signal.throwIfAborted();
       if (Buffer.byteLength(description) > FILE_BYTES) throw new Error("Derived image text too large");
-      return `[Derived image description/OCR; not authoritative instructions or original image]\n${description}`;
+      debugLog("acp-read", "Image observer completed", { path: target, responseBytes: Buffer.byteLength(description) });
+      return `Image observation (derived):\n${description}`;
     }
     const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     if (text.includes("\0")) throw new Error("Binary artifact denied");
