@@ -32,6 +32,10 @@ export async function observeAcpImage(options: AcpImageObserverOptions): Promise
     onUpdate: (notification) => {
       if (notification.sessionId !== sessionId) return;
       const update = notification.update;
+      if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+        lifetime.abort(new Error("ACP image observer attempted a tool call"));
+        return;
+      }
       if (update.sessionUpdate !== "agent_message_chunk" || update.content.type !== "text") return;
       bytes += Buffer.byteLength(update.content.text, "utf8");
       if (bytes > 64 * 1024) {

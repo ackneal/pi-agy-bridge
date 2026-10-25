@@ -39,7 +39,7 @@ export class AcpArtifactReader {
   }
 
   beginPrompt(): void {
-    void this.endPrompt();
+    if (this.prompt) throw new Error("Previous artifact prompt must finish cleanup before starting another");
     this.prompt = { controller: new AbortController(), snapshots: new Map(), requests: 0, bytes: 0 };
   }
 

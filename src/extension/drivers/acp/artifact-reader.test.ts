@@ -27,6 +27,7 @@ test("immutable text pagination and prompt reset", async () => {
     assert.equal(JSON.parse((await f.read(file, 1, 1)).content).nextLine, 2);
     await writeFile(file, "replacement");
     assert.equal(JSON.parse((await f.read(file, 2, 2)).content).text, "two\nthree\n");
+    await f.reader.endPrompt();
     f.reader.beginPrompt();
     assert.equal(JSON.parse((await f.read(file)).content).text, "replacement");
   } finally { await f.cleanup(); }
@@ -158,6 +159,54 @@ test("aggregate byte budget reserves before concurrent reads", async () => {
   } finally { await f.cleanup(); }
 });
 
+test("a new prompt cannot take ownership before the old observer cleanup settles", async () => {
+  const f = await fixture();
+  let release!: () => void;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const observing = new Promise<void>(resolve => { started = resolve; });
+  let cleaned = false;
+  const reader = new AcpArtifactReader({
+    home: f.home, sessionId: () => "session", allowedToolNames: new Set(),
+    observeImage: async (_, signal) => {
+      started();
+      await new Promise<void>(resolve => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+        if (signal.aborted) resolve();
+      });
+      await released;
+      cleaned = true;
+      return "old image observation";
+    },
+  });
+  reader.beginPrompt();
+  const file = path.join(f.steps, "image");
+  await writeFile(file, "GIF89a");
+  const oldRead = reader.read({ sessionId: "session", path: file }, new AbortController().signal);
+  const rejected = assert.rejects(oldRead, /prompt ended/);
+  try {
+    await observing;
+    assert.throws(() => reader.beginPrompt(), /Previous artifact prompt/);
+    const ending = reader.endPrompt();
+    assert.throws(() => reader.beginPrompt(), /Previous artifact prompt/);
+    assert.equal(cleaned, false);
+    release();
+    await ending;
+    await rejected;
+    assert.equal(cleaned, true);
+
+    await writeFile(file, "new snapshot\n");
+    reader.beginPrompt();
+    const page = await reader.read({ sessionId: "session", path: file }, new AbortController().signal);
+    assert.equal(JSON.parse(page.content).text, "new snapshot\n");
+  } finally {
+    release();
+    await reader.endPrompt();
+    await rejected;
+    await f.cleanup();
+  }
+});
+
 test("cancellation aborts observer and denies new work; errors propagate without retry", async () => {
   const f = await fixture();
   try {
@@ -257,16 +306,19 @@ test("text integrity errors are explicit and failed snapshots do not retry", asy
       ["schema", "{", /JSON/],
       ["control", "a\0b", /Binary artifact/],
     ] as const) {
+      await f.reader.endPrompt();
       f.reader.beginPrompt();
       const file = name === "schema" ? path.join(f.metadata, "read.json") : path.join(f.steps, name);
       await writeFile(file, text);
       await assert.rejects(f.read(file), error);
     }
+    await f.reader.endPrompt();
     f.reader.beginPrompt();
     const missing = path.join(f.steps, "missing");
     await assert.rejects(f.read(missing), /ENOENT/);
     await writeFile(missing, "now exists");
     await assert.rejects(f.read(missing), /ENOENT/);
+    await f.reader.endPrompt();
     f.reader.beginPrompt();
     await writeFile(missing, "\ufefforiginal\n");
     assert.equal(JSON.parse((await f.read(missing)).content).text, "\ufefforiginal\n");
