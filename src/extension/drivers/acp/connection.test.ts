@@ -23,14 +23,22 @@ function onlyPermissionErrors(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "EPERM";
 }
 
-test("real SDK handshake, requests, notifications and persistent lifetime", async () => {
+test("large stderr does not block SDK handshake, requests, notifications or lifecycle", async () => {
   const updates: acp.SessionNotification[] = [];
   let notified!: () => void;
   const notification = new Promise<void>((resolve) => { notified = resolve; });
-  const connection = create("normal", { onUpdate: (update) => {
-    updates.push(update);
-    if (update.update.sessionUpdate === "agent_message_chunk" && update.update.content.type === "text" && update.update.content.text === "cancel") notified();
-  } });
+  const connection = create("normal", {
+    args: ["--experimental-strip-types", "--input-type=module", "-e", `
+      await new Promise((resolve, reject) => {
+        process.stderr.write("x".repeat(8 * 1024 * 1024), (error) => error ? reject(error) : resolve());
+      });
+      await import(${JSON.stringify(new URL("./connection-fixture.ts", import.meta.url).href)});
+    `, fixture, "normal"],
+    onUpdate: (update) => {
+      updates.push(update);
+      if (update.update.sessionUpdate === "agent_message_chunk" && update.update.content.type === "text" && update.update.content.text === "cancel") notified();
+    },
+  });
   const exitListeners = process.listenerCount("exit");
   try {
     assert.equal((await connection.start()).protocolVersion, acp.PROTOCOL_VERSION);
@@ -41,8 +49,6 @@ test("real SDK handshake, requests, notifications and persistent lifetime", asyn
     }
     assert.equal(updates.length, 2);
     assert.deepEqual(updates[0]?.update, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "cancelled" } });
-    assert.ok(connection.diagnostics.length <= 8192);
-    assert.ok(connection.diagnostics.endsWith("xxx"));
     await connection.notify(acp.methods.agent.session.cancel, { sessionId: "synthetic" });
     await notification;
     assert.equal(updates.length, 3);

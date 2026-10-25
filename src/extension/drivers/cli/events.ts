@@ -1,4 +1,3 @@
-import type { JsonObject, ToolCall } from "@earendil-works/pi-ai";
 import type { RuntimeEvent } from "../types.ts";
 import type { AgyEvent, AgyResultEvent, AgyStepUpdateEvent, AgyUsage } from "../../shared/types.ts";
 import { AGY_MCP_PREFIX, isAllowedPiToolName } from "../../bridge/capabilities.ts";
@@ -14,14 +13,11 @@ export interface ConversationErrorState {
 export interface CliEventTranslatorOptions {
   errorState?: ConversationErrorState | undefined;
   allowedToolNames?: ReadonlySet<string>;
-  bridgeToolCallsExternally?: boolean;
 }
 
 export class CliEventTranslator {
   private errorState: ConversationErrorState;
   private readonly allowedToolNames: ReadonlySet<string> | undefined;
-  private readonly bridgeToolCallsExternally: boolean;
-  private toolCallCount = 0;
   private hasStepUsage = false;
   private completedResponse = false;
   private hasTurnError = false;
@@ -31,20 +27,6 @@ export class CliEventTranslator {
   constructor(options: CliEventTranslatorOptions = {}) {
     this.errorState = options.errorState ?? {};
     this.allowedToolNames = options.allowedToolNames;
-    this.bridgeToolCallsExternally = options.bridgeToolCallsExternally ?? false;
-  }
-
-  public setErrorState(state: ConversationErrorState): void {
-    this.errorState = state;
-  }
-
-  public getBlockedToolName(event: AgyEvent): string | undefined {
-    if (event.event !== "step_update") return undefined;
-
-    const update = event as AgyStepUpdateEvent;
-    const step = { ...update.step_update, ...update };
-    const tool = this.selectToolName(step);
-    return tool === null ? undefined : this.getBlockedAgyToolName(tool.name);
   }
 
   public translate(event: AgyEvent, source: "agy" | "runtime", emit: (event: RuntimeEvent) => void): void {
@@ -120,15 +102,7 @@ export class CliEventTranslator {
         return;
       }
 
-      const toolCall = this.extractToolCall(step, tool.name as string);
-      if (AGY_INTERNAL_TOOL_NAMES.has(toolCall.name)) {
-        debugLog("events", `Allowing Antigravity CLI internal coordination tool: ${toolCall.name}`);
-      } else if (this.bridgeToolCallsExternally) {
-        debugLog("events", `Waiting for MCP bridge to relay tool call: ${toolCall.name}`);
-      } else {
-        this.emit({ type: "start" });
-        this.emit({ type: "tool-call", toolCall });
-      }
+      debugLog("events", `Waiting for MCP bridge or internal coordination: ${String(tool.name)}`);
       return;
     }
 
@@ -183,33 +157,6 @@ export class CliEventTranslator {
     if (AGY_INTERNAL_TOOL_NAMES.has(name) || this.isAllowedAgyTool(name)) return undefined;
 
     return name;
-  }
-
-  private extractToolCall(step: AgyStepUpdateEvent, name: string): ToolCall {
-    if (step.tool_call) {
-      const tc = step.tool_call;
-      const args = typeof tc.arguments === "string"
-        ? this.safeParseJson(tc.arguments)
-        : (tc.arguments ?? (typeof tc.input === "string" ? this.safeParseJson(tc.input) : tc.input) ?? {});
-
-      return {
-        type: "toolCall",
-        id: tc.id || `call_${Date.now()}_${++this.toolCallCount}`,
-        name,
-        arguments: args as JsonObject,
-      };
-    }
-
-    const id = (step.call_id ?? step["id"] ?? `call_${Date.now()}_${++this.toolCallCount}`) as string;
-    const rawInput = step.tool_input ?? step["input"] ?? step["arguments"] ?? {};
-    const args = typeof rawInput === "string" ? this.safeParseJson(rawInput) : rawInput;
-
-    return {
-      type: "toolCall",
-      id,
-      name,
-      arguments: args as JsonObject,
-    };
   }
 
   private isAllowedAgyTool(name: string): boolean {
@@ -300,16 +247,4 @@ export class CliEventTranslator {
     this.emit({ type: "session-reference", reference });
   }
 
-  private safeParseJson(val: string): Record<string, unknown> {
-    try {
-      const parsed = JSON.parse(val);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-      return { value: parsed };
-    } catch {
-      return { raw: val };
-    }
-  }
 }
-

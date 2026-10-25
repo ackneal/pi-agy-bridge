@@ -8,10 +8,10 @@ for (const outcome of ["success", "failure"] as const) {
     let fail!: (error: Error) => void;
     let oldSignal!: AbortSignal;
     const pending = new Promise<boolean>((resolve, reject) => { finish = resolve; fail = reject; });
-    const auth = new AgyAuthentication(undefined, async () => {}, {
+    const auth = new AgyAuthentication({
       label: "old", login: async () => {},
       probe: (signal) => { oldSignal = signal; return pending; },
-    });
+    }, async () => {});
     t.after(() => auth.close());
     const detection = auth.detect(new AbortController().signal);
     const rejected = assert.rejects(detection, /backend changed|old probe failed/);
@@ -35,10 +35,10 @@ test("backend switch cancels an in-flight login without returning an old credent
   let resume!: () => void;
   const gate = new Promise<void>((resolve) => { resume = resolve; });
   let oldSignal!: AbortSignal;
-  const auth = new AgyAuthentication(undefined, async () => {}, {
+  const auth = new AgyAuthentication({
     label: "old", probe: async () => true,
     login: async ({ signal }) => { oldSignal = signal; await gate; },
-  });
+  }, async () => {});
   t.after(() => { resume(); auth.close(); });
   const login = auth.oauth.login({ signal: new AbortController().signal, notify: () => {}, prompt: async () => "" });
   const rejected = assert.rejects(Promise.resolve(login), /backend changed/);

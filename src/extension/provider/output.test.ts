@@ -6,7 +6,6 @@ import { PiRuntimeOutput } from "./output.ts";
 const call: ToolCall = { type: "toolCall", id: "synthetic-call", name: "read", arguments: { path: "synthetic" } };
 const cases: {
   name: string;
-  legacy?: boolean;
   act: (output: PiRuntimeOutput) => void;
   reason: string;
   tools: number;
@@ -18,12 +17,8 @@ const cases: {
     output.handleRuntimeEvent({ type: "complete", reason: "stop", resumable: true });
   }, reason: "stop", tools: 0, blocked: [] },
   { name: "native facts cannot execute tools", act: (output) => {
-    output.handleRuntimeEvent({ type: "tool-call", toolCall: call });
+    output.handleRuntimeEvent({ type: "blocked-native-tool", name: call.name });
   }, reason: "error", tools: 0, blocked: ["read"] },
-  { name: "legacy direct adapter explicitly opts into native facts", legacy: true, act: (output) => {
-    output.handleRuntimeEvent({ type: "tool-call", toolCall: call });
-    output.handleRuntimeEvent({ type: "complete", reason: "stop", resumable: true });
-  }, reason: "toolUse", tools: 1, blocked: [] },
   { name: "shared bridge owns executable tool handoff", act: (output) => {
     output.handleBridgeToolCalls([call]);
   }, reason: "toolUse", tools: 1, blocked: [] },
@@ -37,7 +32,6 @@ for (const row of cases) {
     const blocked: string[] = [];
     const output = new PiRuntimeOutput({
       model: "synthetic-model", allowedToolNames: new Set(["read"]),
-      allowLegacyNativeToolCalls: row.legacy ?? false,
       onBlockedTool: (name) => { blocked.push(name); },
     });
 

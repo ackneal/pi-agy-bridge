@@ -23,7 +23,6 @@ export class AcpConnection {
   private termination: Promise<void> = Promise.resolve();
   private hostExitHandler: (() => void) | undefined;
   private readonly shutdown = new AbortController();
-  private stderr = "";
   private readonly options: AcpConnectionOptions;
 
   constructor(options: AcpConnectionOptions) {
@@ -36,8 +35,6 @@ export class AcpConnection {
   get isRunning(): boolean {
     return !!this.child && !this.stopped && !this.sdk?.signal.aborted;
   }
-
-  get diagnostics(): string { return this.stderr; }
 
   start(signal?: AbortSignal): Promise<acp.InitializeResponse> {
     if (this.startup) return this.startup;
@@ -70,9 +67,7 @@ export class AcpConnection {
       resolve();
     }));
     child.on("error", (error) => this.stop(error));
-    child.stderr.on("data", (chunk: Buffer) => {
-      this.stderr = (this.stderr + chunk.toString("utf8")).slice(-8192);
-    });
+    child.stderr.resume();
     // Stream errors also occur on failed spawn and broken pipes.
     child.stdin.on("error", (error) => this.stop(error));
     child.stdout.on("error", (error) => this.stop(error));

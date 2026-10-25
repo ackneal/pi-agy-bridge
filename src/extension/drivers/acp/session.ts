@@ -48,7 +48,6 @@ export class AcpSession {
 
   get isRunning(): boolean { return !this.preparing && this.connection.isRunning; }
   get hasActivePrompt(): boolean { return this.activePrompt !== undefined; }
-  get configuration(): readonly acp.SessionConfigOption[] { return this.configOptions; }
 
   prepare(signal?: AbortSignal): Promise<void> {
     this.preparation ??= this.prepareSession(signal);

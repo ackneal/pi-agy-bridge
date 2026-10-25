@@ -1,3 +1,4 @@
+import type { DriverAuthentication } from "../drivers/types.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -8,6 +9,12 @@ import { ModelRegistry, ModelRuntime, readStoredCredential } from "@earendil-wor
 import { parseModelsOutput } from "../discovery/models.ts";
 import { AgyAuthentication, createAgyBridgeCredential } from "./auth.ts";
 import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
+
+const noProbeBackend: DriverAuthentication = {
+  label: "Antigravity CLI",
+  probe: async () => { throw new Error("Unexpected authentication probe"); },
+  login: async () => { throw new Error("Unexpected authentication login"); },
+};
 
 const noRequests = {
   stream: () => { throw new Error("network forbidden"); },
@@ -36,7 +43,7 @@ for (const scenario of [
     t.after(() => rm(directory, { recursive: true, force: true }));
     const authPath = path.join(directory, "auth.json");
     const controller = new AbortController();
-    const authentication = new AgyAuthentication(undefined, async () => { throw new Error("real login forbidden"); });
+    const authentication = new AgyAuthentication(noProbeBackend, async () => { throw new Error("real login forbidden"); });
     const runtime = await ModelRuntime.create({ authPath, modelsPath: null, refreshOnCreate: false });
     const models = parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)");
     runtime.registerNativeProvider({ ...noRequests, id: "agy", name: "Antigravity CLI", getModels: () => models, auth: { oauth: authentication.oauth } });
@@ -96,7 +103,7 @@ for (const row of [
     const credentials = new InMemoryCredentialStore();
     if (row.initial) await credentials.modify("agy", async () => row.initial);
     await writeFile(authPath, JSON.stringify(row.initial ? { agy: row.initial } : {}));
-    const authentication = new AgyAuthentication(undefined, async () => { throw new Error("login forbidden"); });
+    const authentication = new AgyAuthentication(noProbeBackend, async () => { throw new Error("login forbidden"); });
     t.after(() => authentication.close());
     t.mock.method(authentication, "detect", async () => createAgyBridgeCredential("detected"));
     const create = ModelRuntime.create.bind(ModelRuntime);

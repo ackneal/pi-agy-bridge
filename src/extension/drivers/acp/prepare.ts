@@ -12,7 +12,7 @@ import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructio
 export async function prepareAcpRuntime(
   model: Model<any>, context: Context, tools: readonly Tool[], options: SimpleStreamOptions | undefined,
   config: AgyBridgeConfig | undefined,
-  dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide" | "getSyncedMessageCount">; sessionVersion: string },
+  dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide">; sessionVersion: string },
   liveSession: LiveSession, preparationId: symbol,
 ): Promise<{ proc: AcpRuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
   const check = () => {

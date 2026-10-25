@@ -19,7 +19,7 @@ export class CliRuntimeSession extends AgyRuntime implements DriverSession {
 
   onRuntimeEvent(handler: (event: RuntimeEvent) => void): () => void {
     const translator = new CliEventTranslator({
-      allowedToolNames: this.allowedToolNames, errorState: this.errorState, bridgeToolCallsExternally: true,
+      allowedToolNames: this.allowedToolNames, errorState: this.errorState,
     });
     return this.onEvent((event, source) => translator.translate(event, source, handler));
   }

@@ -5,7 +5,7 @@ import path from "node:path";
 import test, { describe, it } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { LiveSession, PiContextAdapter } from "./session.ts";
-import { messagesMatch, RuntimeSessionStore, RuntimeSessionSync, type AgyConversationCheckpoint } from "./session-state.ts";
+import { RuntimeSessionStore, RuntimeSessionSync, type AgyConversationCheckpoint } from "./session-state.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import type { DriverSession } from "../drivers/types.ts";
 import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
@@ -124,7 +124,6 @@ describe("RuntimeSessionStore", () => {
       }, [{ role: "user", content: "hello" }], "epoch", driver);
 
       assert.deepEqual(await store.get(sessionId, "epoch", driver), checkpoint);
-      assert.equal(messagesMatch(checkpoint, [{ role: "user", content: "hello" }]), true);
       assert.equal(await store.get(sessionId, "other", driver), undefined);
       assert.equal(await store.get(sessionId, undefined, driver), undefined);
       assert.equal(await store.get(sessionId, "epoch", driver === "cli:v1" ? "acp:v1" : "cli:v1"), undefined);
@@ -181,8 +180,13 @@ test("metadata changes preserve live pending tool results and versioned persiste
   const context = new PiContextAdapter();
   const sessionId = context.bind(manager);
   const ref = await new RuntimeSessionStore(context).set(sessionId, { sessionId: "agy-conversation" }, [user, assistant], undefined, "cli:v1");
-  assert.equal(messagesMatch(ref, [user, replay, toolResult]), true);
-  assert.equal(messagesMatch(ref, [user, { ...replay, content: [] }]), false);
+  const restoredSync = new RuntimeSessionSync();
+  assert.deepEqual(restoredSync.decide(new LiveSession(sessionId), {
+    syncKey: "sync-key", messages: [user, replay, toolResult], checkpoint: ref,
+  }), { action: "resume", conversationId: ref.sessionId });
+  assert.deepEqual(restoredSync.decide(new LiveSession(sessionId), {
+    syncKey: "sync-key", messages: [user, { ...replay, content: [] }], checkpoint: ref,
+  }), { action: "rebuild" });
 });
 
 describe("RuntimeSessionSync", () => {
@@ -259,8 +263,6 @@ describe("RuntimeSessionSync", () => {
         sync.record(session, row.messages);
       }
       const messages = [...row.messages, ...(row.appended ?? [])];
-      assert.equal(messagesMatch(checkpoint!, messages), true);
-
       const decision = sync.decide(session, {
         ...input, syncKey: row.keyChange ? "other-key" : input.syncKey, messages, checkpoint,
       });
@@ -285,9 +287,18 @@ describe("RuntimeSessionSync", () => {
 
       assert.equal(restored?.fingerprint, "73ff574ccd10772c91f4a26307ecd687a77db8250e24c170c386f5236448ad00");
       assert.equal(written.fingerprint, restored?.fingerprint);
-      assert.equal(messagesMatch(restored!, pendingHistory), true);
-      assert.equal(messagesMatch(restored!, [...pendingHistory, ...results]), true);
-      assert.equal(messagesMatch(restored!, [pendingHistory[0]!, { ...pendingHistory[1]!, stopReason: "error" }]), false);
+      for (const scenario of [
+        { name: "unchanged semantic history", messages: pendingHistory, compatible: true },
+        { name: "appended tool results", messages: [...pendingHistory, ...results], compatible: true },
+        { name: "changed assistant outcome", messages: [pendingHistory[0]!, { ...pendingHistory[1]!, stopReason: "error" }], compatible: false },
+      ]) {
+        const decision = new RuntimeSessionSync().decide(new LiveSession(sessionId), {
+          syncKey: "sync-key", messages: scenario.messages, checkpoint: restored!,
+        });
+        assert.deepEqual(decision, metadata.hasPendingToolCalls !== true && scenario.compatible
+          ? { action: "resume", conversationId: written.sessionId }
+          : { action: "rebuild" }, scenario.name);
+      }
     });
   }
 
@@ -541,11 +552,16 @@ for (const row of [
   { count: 0, matches: true },
   { count: 1, matches: false },
 ]) {
-  test(`hash matcher validates prefix count ${row.count}`, async () => {
+  test(`persisted recovery validates prefix count ${row.count}`, async () => {
     const manager = SessionManager.inMemory("/workspace");
     const context = new PiContextAdapter();
     const id = context.bind(manager);
     const checkpoint = await new RuntimeSessionStore(context).set(id, { sessionId: "opaque" }, [], undefined, "arbitrary-version");
-    assert.equal(messagesMatch({ ...checkpoint, messageCount: row.count }, []), row.matches);
+    const decision = new RuntimeSessionSync().decide(new LiveSession(id), {
+      syncKey: "sync-key", messages: [], checkpoint: { ...checkpoint, messageCount: row.count },
+    });
+    assert.deepEqual(decision, row.matches
+      ? { action: "resume", conversationId: checkpoint.sessionId }
+      : { action: "rebuild" });
   });
 }

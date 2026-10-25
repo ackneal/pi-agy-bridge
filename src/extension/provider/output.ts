@@ -6,7 +6,6 @@ import { PiEventWriter, type PiEventWriterOptions } from "./events.ts";
 export interface PiRuntimeOutputOptions extends PiEventWriterOptions {
   allowedToolNames?: ReadonlySet<string>;
   onBlockedTool?: (name: string) => void;
-  allowLegacyNativeToolCalls?: boolean;
 }
 
 /** Shared Pi output and MCP handoff policy. Native drivers supply only facts. */
@@ -35,10 +34,6 @@ export class PiRuntimeOutput {
       case "session-reference": this.writer.setResponseId(event.reference); break;
       case "text-delta": this.writer.appendTextDelta(event.delta); break;
       case "usage": this.writer.setUsage(event.usage); break;
-      case "tool-call":
-        if (this.options.allowLegacyNativeToolCalls) this.writer.appendToolCall(event.toolCall);
-        else this.blockTool(event.toolCall.name);
-        break;
       case "complete":
         if (event.reason === "error" || event.reason === "aborted") {
           this.writer.handleTermination(event.reason, event.error);

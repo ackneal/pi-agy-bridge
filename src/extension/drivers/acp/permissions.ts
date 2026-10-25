@@ -24,11 +24,7 @@ export class AcpMcpPermissions {
     const update = notification.update;
     if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return;
     const id = update.toolCallId;
-    if (!this.calls.has(id) && this.calls.size >= LIMIT) {
-      this.calls.clear();
-      this.overflow = true;
-      return;
-    }
+    if (!this.reserve(id)) return;
     const prior = this.calls.get(id);
     if (prior === null) return;
     const merged = this.merge(prior, update);
@@ -39,6 +35,7 @@ export class AcpMcpPermissions {
     const cancelled: RequestPermissionResponse = { outcome: { outcome: "cancelled" } };
     if (request.sessionId !== this.sessionId || this.overflow) return cancelled;
     const id = request.toolCall.toolCallId;
+    if (!this.reserve(id)) return cancelled;
     const prior = this.calls.get(id);
     // Retain a tombstone so duplicate announcements cannot re-arm a consumed ID.
     this.calls.set(id, null);
@@ -52,6 +49,14 @@ export class AcpMcpPermissions {
   reset(): void {
     this.calls.clear();
     this.overflow = false;
+  }
+
+  private reserve(id: string): boolean {
+    if (this.calls.has(id) || this.calls.size < LIMIT) return true;
+
+    this.calls.clear();
+    this.overflow = true;
+    return false;
   }
 
   private merge(prior: ToolCallUpdate | undefined, update: ToolCallUpdate): ToolCallUpdate | null {

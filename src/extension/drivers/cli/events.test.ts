@@ -28,26 +28,24 @@ for (const row of [
   });
 }
 
-for (const external of [false, true]) {
-  test(`native policy and legacy tool facts (external=${external})`, () => {
-    const translator = new CliEventTranslator({ allowedToolNames: new Set(["read"]), bridgeToolCallsExternally: external });
+{
+  test("native policy never emits executable tool facts", () => {
+    const translator = new CliEventTranslator({ allowedToolNames: new Set(["read"]) });
     const facts: RuntimeEvent[] = [];
     translator.translate({ event: "step_update", tool_call: { id: "call", name: "read", arguments: '{"path":"a"}' } }, "agy", (fact) => facts.push(fact));
-    assert.deepEqual(facts, external ? [] : [{ type: "start" }, { type: "tool-call", toolCall: { type: "toolCall", id: "call", name: "read", arguments: { path: "a" } } }]);
+    assert.equal(facts.length, 0);
 
     facts.length = 0;
     const blocked = { event: "step_update", tool_call: { name: "write" } };
     translator.translate(blocked, "agy", (fact) => facts.push(fact));
     assert.deepEqual(facts, [{ type: "blocked-native-tool", name: "write" }]);
-    assert.equal(translator.getBlockedToolName(blocked), "write");
   });
 }
 
 for (const source of ["agy", "runtime"] as const) {
   test(`error completion and mutable historical state (${source})`, () => {
-    const translator = new CliEventTranslator();
     const state = { conversationId: "session", lastError: "old" as string | undefined };
-    translator.setErrorState(state);
+    const translator = new CliEventTranslator({ errorState: state });
     const facts: RuntimeEvent[] = [];
     translator.translate({ event: "result", status: "error", conversation_id: "session", error: "new" }, source, (fact) => facts.push(fact));
     assert.deepEqual(facts.at(-1), { type: "complete", reason: "error", error: "new", resumable: source === "agy" });

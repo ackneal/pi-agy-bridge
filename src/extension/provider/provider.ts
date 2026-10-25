@@ -153,7 +153,7 @@ export class AgyBridge {
     this.pi = pi;
     this.config = config;
     this.driver = createBridgeDriver(config);
-    this.authentication = new AgyAuthentication(config?.agyPath, async () => {
+    this.authentication = new AgyAuthentication(this.driver.authentication, async () => {
       this.runtimeLifetime.abort(new Error(`${this.driver.label} login changed the bridge session`));
       this.usageRefresh = undefined;
       await this.liveSessions.disposeAll();
@@ -163,7 +163,7 @@ export class AgyBridge {
         }
       }
       this.runtimeLifetime = new AbortController();
-    }, this.driver.authentication);
+    });
   }
 
   private async refreshUsage(signal: AbortSignal): Promise<AgyUsage | undefined> {

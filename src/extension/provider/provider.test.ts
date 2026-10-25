@@ -10,12 +10,22 @@ import { CliDriver } from "../drivers/cli/driver.ts";
 import { resolveModelAndEffort } from "../drivers/cli/session.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { PiRuntimeOutput } from "./output.ts";
-import { messagesMatch } from "../session/session-state.ts";
+import { RuntimeSessionSync, type AgyConversationCheckpoint } from "../session/session-state.ts";
+import { LiveSession } from "../session/session.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
 import { AgyBridge, registerAgyProvider, streamAgyProvider } from "./provider.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+function assertRestorableHistory(checkpoint: AgyConversationCheckpoint | undefined, messages: readonly unknown[]): void {
+  assert.ok(checkpoint);
+  assert.equal(checkpoint.messageCount, messages.length);
+  const decision = new RuntimeSessionSync().decide(new LiveSession("checkpoint-verification"), {
+    syncKey: "verification", messages, checkpoint,
+  });
+  assert.deepEqual(decision, { action: "resume", conversationId: checkpoint.sessionId });
+}
 
 const allNullThinkingLevels = {
   off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null,
@@ -355,7 +365,7 @@ for (const failure of modelErrors) {
       const failedRef = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
       assert.equal(failedRef?.sessionId, "conversation-1");
       assert.equal(failedRef?.messageCount, 2);
-      assert.ok(failedRef && messagesMatch(failedRef, manager.buildSessionContext().messages), "persist the failed assistant, not just the request");
+      assertRestorableHistory(failedRef, manager.buildSessionContext().messages);
       assert.equal(session.activeProcess, processes[0]);
       assert.ok(session.activeMcpServer);
       assert.equal(listeners.size, 0);
@@ -379,7 +389,7 @@ for (const failure of modelErrors) {
       assert.equal(recoveredProcess.options.conversationId, "conversation-1");
       const recoveredRef = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
       assert.equal(recoveredRef?.sessionId, "conversation-1");
-      assert.ok(recoveredRef && messagesMatch(recoveredRef, manager.buildSessionContext().messages));
+      assertRestorableHistory(recoveredRef, manager.buildSessionContext().messages);
       assert.equal(send.mock.callCount(), 2, "only the explicit retry adds input");
       assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
       assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "retry request");
@@ -413,7 +423,7 @@ for (const failure of [modelErrors[0]!, modelErrors[1]!]) {
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), undefined);
     const saved = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
     assert.equal(saved?.sessionId, "conversation-1");
-    assert.ok(saved && messagesMatch(saved, manager.buildSessionContext().messages));
+    assertRestorableHistory(saved, manager.buildSessionContext().messages);
 
     const recovered = await runTurn("other-model", "new request", [{ event: "result", status: "success" }]);
 
@@ -952,7 +962,7 @@ for (const { source, payloadSource } of [
       assert.equal(session.activeProcess, processes[0]);
       assert.ok(session.activeMcpServer);
       assert.equal(reference?.sessionId, "conversation-1");
-      assert.ok(reference && messagesMatch(reference, manager.buildSessionContext().messages));
+      assertRestorableHistory(reference, manager.buildSessionContext().messages);
       assert.equal(close.mock.callCount(), 0);
       assert.equal(abort.mock.callCount(), 0);
     } else {

@@ -57,6 +57,42 @@ const cases: Case[] = [
   { name: "reset clears overflow", arrange: (g) => {
     for (let i = 0; i <= 1024; i++) observe(g, call({ toolCallId: String(i) })); g.reset(); observe(g);
   }, allowed: true },
+  ...[
+    { name: "request-only overflow denies legitimate later announcement", notifications: 0, requests: 1025 },
+    { name: "mixed boundary accepts 1024 IDs", notifications: 511, requests: 512, allowed: true },
+    { name: "mixed request overflow denies legitimate later announcement", notifications: 512, requests: 513 },
+    { name: "mixed notification overflow denies legitimate later announcement", notifications: 513, requests: 512, requestFirst: true },
+    { name: "duplicate tombstones at capacity do not overflow or re-arm", notifications: 0, requests: 1023, duplicates: true, allowed: true },
+    { name: "duplicate announcements at capacity do not overflow", notifications: 1023, requests: 0, duplicates: true, allowed: true },
+    { name: "reset clears request-only overflow", notifications: 0, requests: 1025, reset: true, allowed: true },
+    { name: "foreign requests do not consume capacity", notifications: 1023, requests: 1025, foreign: true, allowed: true },
+  ].map((row): Case => ({ name: row.name, allowed: row.allowed === true, arrange: (g) => {
+    if (!row.requestFirst) {
+      for (let i = 0; i < row.notifications; i++) observe(g, call({ toolCallId: `notification-${i}` }));
+    }
+    for (let i = 0; i < row.requests; i++) {
+      assert.deepEqual(g.reply(request({
+        sessionId: row.foreign ? "foreign" : "session",
+        toolCall: call({ toolCallId: `request-${i}` }),
+      })), { outcome: { outcome: "cancelled" } });
+    }
+    if (row.requestFirst) {
+      for (let i = 0; i < row.notifications; i++) observe(g, call({ toolCallId: `notification-${i}` }));
+    }
+    if (row.reset) g.reset();
+    observe(g);
+
+    if (row.duplicates) {
+      observe(g);
+      if (row.requests) {
+        observe(g, call({ toolCallId: "request-0" }));
+        assert.deepEqual(g.reply(request({ toolCall: call({ toolCallId: "request-0" }) })),
+          { outcome: { outcome: "cancelled" } });
+      } else {
+        observe(g, call({ toolCallId: "notification-0" }));
+      }
+    }
+  } })),
 ];
 for (const row of cases) test(row.name, () => {
   const gate = new AcpMcpPermissions("session", new Set(["custom"]));

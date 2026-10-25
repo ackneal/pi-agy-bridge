@@ -95,10 +95,6 @@ export class RuntimeSessionStore {
   }
 }
 
-export function messagesMatch(checkpoint: AgyConversationCheckpoint, messages: readonly unknown[]): boolean {
-  return matchMessages(checkpoint, messages);
-}
-
 function matchMessages(
   checkpoint: AgyConversationCheckpoint,
   messages: readonly unknown[],

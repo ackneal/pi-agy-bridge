@@ -1,4 +1,4 @@
-import type { AnyModel, AssistantMessage, Context, Message, Model, ProviderAuthInteraction, SimpleStreamOptions, Tool, ToolCall } from "@earendil-works/pi-ai";
+import type { AnyModel, AssistantMessage, Context, Message, Model, ProviderAuthInteraction, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
 import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
 import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
@@ -21,8 +21,8 @@ export interface PrepareDriverInput {
   tools: readonly Tool[];
   options: SimpleStreamOptions | undefined;
   session: LiveSession;
-  store: RuntimeSessionStore;
-  sync: RuntimeSessionSync;
+  store: Pick<RuntimeSessionStore, "get" | "delete">;
+  sync: Pick<RuntimeSessionSync, "decide" | "getSyncedMessageCount">;
   preparationId: symbol;
 }
 
@@ -82,6 +82,4 @@ export type RuntimeEvent =
   | { type: "text-delta"; delta: string }
   | { type: "usage"; usage: AssistantMessage["usage"] }
   | { type: "complete"; reason: "stop" | "toolUse" | "error" | "aborted"; error?: string | undefined; resumable: boolean }
-  | { type: "blocked-native-tool"; name: string }
-  // Only legacy direct adapters execute native tool facts; shared MCP owns execution.
-  | { type: "tool-call"; toolCall: ToolCall };
+  | { type: "blocked-native-tool"; name: string };

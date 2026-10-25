@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { ApiKeyAuth, Credential, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "@earendil-works/pi-ai";
-import { createCliAuthenticationBackend } from "../drivers/cli/auth.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
 import type { DriverAuthentication, DriverFailure } from "../drivers/types.ts";
 
@@ -42,10 +41,11 @@ export class AgyAuthentication {
   private readonly lifecycle = new AbortController();
   private generation = 0;
   private loggingIn = false;
+
   private backend: DriverAuthentication;
 
-  constructor(agyPath: string | undefined, beforeLogin: () => Promise<void>, backend?: DriverAuthentication) {
-    this.backend = backend ?? createCliAuthenticationBackend(agyPath);
+  constructor(backend: DriverAuthentication, beforeLogin: () => Promise<void>) {
+    this.backend = backend;
     const self = this;
     this.method = {
       get name() { return self.backend.label; },

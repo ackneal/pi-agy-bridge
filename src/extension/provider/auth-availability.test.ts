@@ -1,3 +1,4 @@
+import type { DriverAuthentication } from "../drivers/types.ts";
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
@@ -11,6 +12,12 @@ import { parseModelsOutput } from "../discovery/models.ts";
 import { AgyAuthentication, createAgyBridgeCredential, isAgyBridgeEnabled } from "./auth.ts";
 import { registerAgyProvider } from "./provider.ts";
 
+const noProbeBackend: DriverAuthentication = {
+  label: "Antigravity CLI",
+  probe: async () => { throw new Error("Unexpected authentication probe"); },
+  login: async () => { throw new Error("Unexpected authentication login"); },
+};
+
 const marker: ApiKeyCredential = { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1" } };
 const credentials = [
   { name: "enabled", credential: marker, enabled: true },
@@ -22,7 +29,7 @@ for (const status of ["unknown", "authenticated", "unauthenticated"] as const) {
   for (const scenario of credentials) {
     for (const aborted of [false, true]) {
       test(`availability check: ${status}, ${scenario.name}, aborted=${aborted}`, async (t) => {
-        const authentication = new AgyAuthentication(undefined, async () => {});
+        const authentication = new AgyAuthentication(noProbeBackend, async () => {});
         t.after(() => authentication.close());
         authentication.status = status;
         const spawn = t.mock.method(cp, "spawn", () => { throw new Error("Antigravity CLI authentication timed out"); });
@@ -98,7 +105,7 @@ test("boot availability preserves stored scoped model selection without authenti
 });
 
 test("request resolve rejects after bridge shutdown", async () => {
-  const authentication = new AgyAuthentication(undefined, async () => {});
+  const authentication = new AgyAuthentication(noProbeBackend, async () => {});
   authentication.close();
   await assert.rejects(Promise.resolve(authentication.method.resolve({
     ctx: defaultProviderAuthContext(), credential: marker, signal: new AbortController().signal,
