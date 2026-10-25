@@ -302,3 +302,80 @@ test("blocked notification writes time out and permit disposal", async () => {
     assert.equal(connection.isRunning, false);
   } finally { await connection.dispose(); }
 });
+
+for (const mode of ["absent", "read", "shutdown"] as const) {
+  test(`client read capability and callback: ${mode}`, async () => {
+    const request = { sessionId: "synthetic", path: "/synthetic/artifact", line: 2, limit: 3 };
+    let entered!: () => void;
+    const reading = new Promise<void>((resolve) => { entered = resolve; });
+    let readSignal: AbortSignal | undefined;
+    const calls: acp.ReadTextFileRequest[] = [];
+    const reports: Array<{ capabilities: unknown; result: { code?: number; message?: string; content?: string } }> = [];
+    const connection = create("normal", {
+      args: ["--experimental-strip-types", "--input-type=module", "-e", `
+        import { Readable, Writable } from 'node:stream';
+        import * as acp from '@agentclientprotocol/sdk';
+        let wire = '';
+        const { Transform } = await import('node:stream');
+        const input = new Transform({ transform(chunk, encoding, callback) {
+          wire += chunk.toString();
+          callback(null, chunk);
+        } });
+        process.stdin.pipe(input);
+        let capabilities;
+        const connection = acp.agent()
+          .onRequest(acp.methods.agent.initialize, () => {
+            capabilities = wire.split('\\n').filter(Boolean).map(line => JSON.parse(line))
+              .find(message => message.method === 'initialize').params.clientCapabilities;
+            return { protocolVersion: acp.PROTOCOL_VERSION };
+          })
+          .onRequest(acp.methods.agent.session.prompt, async ({ client }) => {
+            let result;
+            try { result = await client.request(acp.methods.client.fs.readTextFile, ${JSON.stringify(request)}); }
+            catch (error) { result = { code: error.code, message: error.message }; }
+            await client.notify(acp.methods.client.session.update, {
+              sessionId: 'synthetic', update: { sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: JSON.stringify({ capabilities, result }) } }
+            });
+            return { stopReason: 'end_turn' };
+          })
+          .connect(acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(input)));
+        await connection.closed;
+      `],
+      ...(mode === "absent" ? {} : { onRead: async (params: acp.ReadTextFileRequest, signal: AbortSignal) => {
+        calls.push(params);
+        readSignal = signal;
+        entered();
+        if (mode === "shutdown") await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        return { content: "bounded page" };
+      } }),
+      onUpdate: (notification) => {
+        const update = notification.update;
+        if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+          reports.push(JSON.parse(update.content.text));
+        }
+      },
+    });
+    try {
+      await connection.start();
+      const pending = connection.request(acp.methods.agent.session.prompt, prompt);
+      if (mode === "shutdown") {
+        const rejected = assert.rejects(pending, /disposed/);
+        await reading;
+        assert.equal(readSignal?.aborted, false);
+        await connection.dispose();
+        await rejected;
+        assert.equal(readSignal?.aborted, true);
+      } else await pending;
+      assert.deepEqual(calls, mode === "absent" ? [] : [request]);
+      assert.equal(reports.length, mode === "shutdown" ? 0 : 1);
+      for (const report of reports) {
+        assert.deepEqual(report.capabilities, mode === "absent" ? {} : { fs: { readTextFile: true } });
+        if (mode === "absent") {
+          assert.equal(report.result.code, -32601);
+          assert.match(report.result.message ?? "", /reads are unavailable/);
+        } else assert.deepEqual(report.result, { content: "bounded page" });
+      }
+    } finally { await connection.dispose(); }
+  });
+}

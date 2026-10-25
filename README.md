@@ -115,7 +115,9 @@ Run `/agy-bridge:doctor` in Pi for a shared report of the selected backend's ver
 - **Unauthenticated models**: Default ACP model entries or cached models may appear before login; their presence does not confirm authentication, connectivity, or request success. Run `/login` for the selected backend.
 - **Missing models**: Retry `/login` and `/model`, then inspect doctor output. For explicitly selected CLI, `agy models` checks availability directly.
 - **Sign-in failures**: Retry `/login`; if ACP requires unsupported terminal authentication, authenticate externally and retry. For CLI, sign in using `agy` in a terminal.
-- **Offload limitations**: ACP restricted artifact reads, text pagination, and image observer recovery are pending PR2. Do not assume full image/offload support or real-server full validation.
+- **Restricted ACP reads**: Client reads only allow the active conversation's offloaded artifacts and registered Pi MCP tool schemas/instructions. Workspace reads still use Pi tools. The reader uses canonical paths, symlink rejection, and file/directory change checks; it trusts the local directory owner and is not a sandbox against a hostile same-user process.
+- **Paged artifact text**: Responses contain JSON with verbatim `text`, line ranges, `nextLine`, and `eof`. Reads return at most 256 lines and 24 KiB of serialized response; larger ranges receive a partial page with continuation instructions. ACP uses 1-based `line` and `limit`, not Pi read's `offset`. Overlong individual lines fail explicitly. Pages use an immutable snapshot for each native prompt.
+- **Image observations**: Authorized image artifacts are sent as image content to a separate, tool-free ACP session using the selected model and original user objective. It returns a description, full legible transcription, and answers to explicit image questions as derived text, not original-image access for the main model. This makes an additional model request; observer lifetime is limited to 60 seconds. Real-backend end-to-end validation is not claimed.
 
 ### Diagnostic Logs
 

@@ -24,8 +24,15 @@ export class AcpSession {
 
   constructor(options: AcpSessionOptions) {
     this.options = options;
+    const onRead = options.onRead;
     this.connection = new AcpConnection({
       ...options,
+      ...(onRead ? { onRead: (request: acp.ReadTextFileRequest, signal: AbortSignal) => {
+        if (this.preparing || request.sessionId !== this.sessionId || !this.activePrompt) {
+          throw new acp.RequestError(-32000, "ACP read is outside the active conversation prompt");
+        }
+        return onRead(request, signal);
+      } } : {}),
       onPermission: (request) => {
         if (!this.preparing && request.sessionId === this.sessionId && options.onPermission) {
           return options.onPermission(request);

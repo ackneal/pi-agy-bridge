@@ -11,6 +11,7 @@ export interface AcpConnectionOptions {
   onUpdate?: (notification: acp.SessionNotification) => void | Promise<void>;
   onClose?: (error: unknown) => void;
   onPermission?: (request: acp.RequestPermissionRequest) => acp.RequestPermissionResponse | Promise<acp.RequestPermissionResponse>;
+  onRead?: (request: acp.ReadTextFileRequest, signal: AbortSignal) => Promise<acp.ReadTextFileResponse>;
 }
 
 export class AcpConnection {
@@ -76,8 +77,9 @@ export class AcpConnection {
       .onNotification(acp.methods.client.session.update, ({ params }) => {
         if (!this.stopped) return this.options.onUpdate?.(params);
       })
-      .onRequest(acp.methods.client.fs.readTextFile, () => {
-        throw new acp.RequestError(-32601, "ACP offload artifact recovery is unsupported in PR1");
+      .onRequest(acp.methods.client.fs.readTextFile, ({ params }) => {
+        if (this.stopped || !this.options.onRead) throw new acp.RequestError(-32601, "ACP client reads are unavailable");
+        return this.options.onRead(params, this.shutdown.signal);
       })
       .onRequest(acp.methods.client.session.requestPermission, ({ params }) =>
         !this.stopped && this.options.onPermission
@@ -91,7 +93,8 @@ export class AcpConnection {
     if (signal?.aborted) abort();
     try {
       return await this.request(acp.methods.agent.initialize, {
-        protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {},
+        protocolVersion: acp.PROTOCOL_VERSION,
+        clientCapabilities: this.options.onRead ? { fs: { readTextFile: true } } : {},
         clientInfo: { name: "pi-agy-bridge", version: "0.4.0" },
       });
     } catch (error) {

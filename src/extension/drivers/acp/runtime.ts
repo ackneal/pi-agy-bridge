@@ -1,4 +1,6 @@
 import type { ContentBlock, SessionNotification } from "@agentclientprotocol/sdk";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
 import { AcpSession, type AcpSessionOptions } from "./session.ts";
@@ -7,6 +9,9 @@ import { AcpMcpPermissions } from "./permissions.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { fingerprintAcpSystemPrompt } from "./instructions.ts";
 import { serializeMessage } from "../../session/history.ts";
+import { expandHome } from "../../shared/paths.ts";
+import { AcpArtifactReader } from "./artifact-reader.ts";
+import { observeAcpImage } from "./image-observer.ts";
 
 /** Historical tools are data, never executable native notifications. */
 export function acpContext(messages: readonly Message[]): ContentBlock[] {
@@ -38,16 +43,33 @@ export class AcpRuntimeSession implements DriverSession {
   private submitting = false;
   private completion: Promise<void> | undefined;
   private failure: Promise<void> | undefined;
-  readonly options: Omit<AcpSessionOptions, "onUpdate">;
-  constructor(options: Omit<AcpSessionOptions, "onUpdate">, allowedToolNames: ReadonlySet<string> = new Set()) {
+  private userPrompt = "";
+  private readonly reader: AcpArtifactReader;
+  readonly options: Omit<AcpSessionOptions, "onUpdate" | "onRead">;
+  constructor(options: Omit<AcpSessionOptions, "onUpdate" | "onRead">, allowedToolNames: ReadonlySet<string> = new Set()) {
     this.options = options;
     this.compatibilityKey = options.systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
     this.allowedToolNames = allowedToolNames;
+    this.reader = new AcpArtifactReader({
+      home: resolve(expandHome(process.env.GEMINI_HOME ?? `${homedir()}/.gemini`)),
+      sessionId: () => this.session.id,
+      allowedToolNames,
+      observeImage: (image, signal) => observeAcpImage({
+        executable: options.executable, cwd: options.cwd, model: options.model,
+        ...(options.args !== undefined ? { args: options.args } : {}),
+        ...(options.effort !== undefined ? { effort: options.effort } : {}),
+        image, userPrompt: this.userPrompt, signal,
+      }),
+    });
     this.session = new AcpSession({ ...options,
+      onRead: (request, signal) => this.reader.read(request, signal),
       onPermission: (request) => this.permissions?.reply(request) ?? { outcome: { outcome: "cancelled" } },
       onClose: (error) => {
         this.permissions?.reset();
-        if (!this.completion) this.completion = this.fail(error);
+        // An in-flight turn already owns completion, including read cleanup.
+        if (!this.completion) {
+          this.completion = this.fail(error);
+        }
       },
       onUpdate: (update: SessionNotification) => {
         this.permissions?.observe(update);
@@ -64,10 +86,12 @@ export class AcpRuntimeSession implements DriverSession {
   private fail(error: unknown): Promise<void> {
     // Claim failure ownership before cleanup can synchronously trigger onClose.
     this.failure ??= Promise.resolve().then(async () => {
+      await this.reader.endPrompt();
       try {
         await this.session.dispose();
       } catch (cleanupError) {
         debugLog("session", "ACP runtime cleanup failed:", cleanupError);
+        error = new Error(`${String(error)}; cleanup failed: ${String(cleanupError)}`);
       }
       this.completion = undefined;
       this.emit({ type: "complete", reason: "error", error: String(error), resumable: false });
@@ -108,21 +132,30 @@ export class AcpRuntimeSession implements DriverSession {
         throw new Error("ACP payload supports text and image content blocks");
       });
       if (!input.beforeInput()) return;
+      const user = [...input.context.messages].reverse().find((message) => message.role === "user");
+      this.userPrompt = typeof user?.content === "string" ? user.content :
+        user?.content.filter((part) => part.type === "text").map((part) => part.text).join("\n") ?? "";
+      this.reader.beginPrompt();
       this.emit({ type: "start" });
       this.emit({ type: "session-reference", reference: this.session.id });
       // Do not await the native prompt: MCP can suspend it across Pi turns.
-      this.completion = this.session.prompt(prompt).then((response) => {
+      this.completion = this.session.prompt(prompt).finally(async () => {
+        await this.reader.endPrompt();
+        this.userPrompt = "";
+      }).then((response) => {
         this.completion = undefined;
         this.translator?.complete(response, this.emit);
       }, (error: unknown) => this.fail(error));
     } finally { this.submitting = false; }
   }
   async abort(): Promise<void> {
+    const readsClosed = this.reader.endPrompt();
     this.listeners.clear();
     this.permissions?.reset();
     try {
       await this.session.cancel();
     } finally {
+      await readsClosed;
       await this.completion;
     }
   }
