@@ -52,6 +52,12 @@ const connection = acp.agent()
   })
   .onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
     if (scenario === "hang-prompt") await new Promise(() => {});
+    if (scenario === "native-execute") {
+      await client.notify(acp.methods.client.session.update, {
+        sessionId: params.sessionId,
+        update: { sessionUpdate: "tool_call", toolCallId: "native", title: "run_command", kind: "execute", status: "in_progress" },
+      });
+    }
     await client.notify(acp.methods.client.session.update, {
       sessionId: "another-session",
       update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "unrelated" } },

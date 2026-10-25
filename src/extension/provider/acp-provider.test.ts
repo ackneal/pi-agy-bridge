@@ -18,6 +18,39 @@ const model = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 } as Model<any>;
 
+test("announced native execution without a permission request invalidates the ACP runtime", async (t) => {
+  const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
+  const config = {
+    driver: "acp" as const, acpPath: process.execPath, acpCwd: tmpdir(),
+    acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url)), "native-execute"],
+    acpRequestTimeoutMs: 5000,
+  };
+  const bridge = new AgyBridge(pi, config);
+  const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
+  const session = bridge.liveSessions.getOrCreate(sessionId);
+  t.after(() => bridge.liveSessions.disposeAll());
+  t.mock.method(bridge, "getTools", () => []);
+  t.mock.method(BridgeIPC.prototype, "start", async () => {});
+  t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock");
+  const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
+
+  const events: AssistantMessageEvent[] = [];
+  for await (const event of streamAgyProvider(model, {
+    messages: [{ role: "user", content: "Use only Pi tools", timestamp: 0 }],
+  }, { sessionId }, config, bridge)) events.push(event);
+
+  const terminal = events.filter(event => event.type === "done" || event.type === "error");
+  assert.equal(terminal.length, 1);
+  assert.equal(terminal[0]?.type, "error");
+  assert.ok(terminal[0]?.type === "error");
+  assert.match(terminal[0].error.errorMessage!, /run_command/);
+  assert.equal(session.activeProcess, null);
+  assert.equal(session.activeMcpServer, null);
+  assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
+  await session.dispose();
+  assert.equal(close.mock.callCount(), 1);
+});
+
 for (const scenario of ["completion", "cancel", "failure", "unknown", "missing", "duplicate"] as const) {
   test(`ACP provider tool gap: ${scenario}`, { timeout: 10000 }, async (t) => {
     const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;

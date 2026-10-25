@@ -6,6 +6,50 @@ import { AcpEventTranslator } from "./events.ts";
 
 const textUpdate: SessionUpdate = { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } };
 
+for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
+  for (const kind of ["execute", "edit", "delete", "move"] as const) {
+    for (const scope of ["live", "replay", "foreign"] as const) {
+      test(`native notification without permission: ${sessionUpdate} ${kind} ${scope}`, () => {
+        const facts: RuntimeEvent[] = [];
+        const translator = new AcpEventTranslator("session");
+        translator.translate({
+          sessionId: scope === "foreign" ? "other" : "session",
+          update: { sessionUpdate, toolCallId: "call", title: "display only", kind, status: "pending" },
+        }, scope === "replay" ? "replay" : "live", (fact) => facts.push(fact));
+        assert.deepEqual(facts, scope === "live" ? [{ type: "blocked-native-tool", name: "display only" }] : []);
+      });
+    }
+  }
+}
+
+for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
+  for (const row of [
+    { name: "client read", kind: "read", title: "read" },
+    { name: "MCP other", kind: "other", title: "pi-agy-bridge_pi_edit", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "edit" } } },
+    { name: "partial announcement", title: "execute" },
+    { name: "other without metadata", kind: "other", title: "delete" },
+  ] satisfies { name: string; kind?: "read" | "other"; title: string; _meta?: Record<string, unknown> }[]) {
+    test(`non-authoritative announcement unchanged: ${sessionUpdate} ${row.name}`, () => {
+      const { name: _name, ...call } = row;
+      const facts: RuntimeEvent[] = [];
+      new AcpEventTranslator("session").translate({
+        sessionId: "session", update: sessionUpdate === "tool_call"
+          ? { sessionUpdate, toolCallId: "call", status: "pending", ...call }
+          : { sessionUpdate, toolCallId: "call", status: "pending", ...call },
+      }, "live", (fact) => facts.push(fact));
+      assert.deepEqual(facts, []);
+    });
+  }
+}
+
+test("native update without title uses kind for display", () => {
+  const facts: RuntimeEvent[] = [];
+  new AcpEventTranslator("session").translate({
+    sessionId: "session", update: { sessionUpdate: "tool_call_update", toolCallId: "call", kind: "execute" },
+  }, "live", (fact) => facts.push(fact));
+  assert.deepEqual(facts, [{ type: "blocked-native-tool", name: "execute" }]);
+});
+
 for (const row of [
   { name: "text delta", update: textUpdate, source: "live", sessionId: "session", expected: [{ type: "session-reference", reference: "session" }, { type: "text-delta", delta: "hello" }] },
   { name: "empty text delta", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "" } }, source: "live", sessionId: "session", expected: [{ type: "session-reference", reference: "session" }] },

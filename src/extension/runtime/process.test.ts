@@ -517,13 +517,22 @@ process.stdin.resume();
     const before = process.listeners("exit");
     const proc = new AgyProcess({ agyPath: executable, agentName: "test", model: "test", initTimeoutMs: 500 });
     t.after(() => proc.abort());
+    // Child startup is real; only lifecycle deadlines use the controlled clock.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
     const starting = proc.start();
     const child = (proc as unknown as { child: ChildProcess }).child;
     const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
 
+    const rejection = row.init ? null : assert.rejects(starting, (error: unknown) => {
+      assert.ok(error instanceof AgyProcessError);
+      assert.match(error.message, /Timed out waiting for Antigravity CLI init event after 500ms: waiting for initialization/);
+      assert.equal(error.stderr, "waiting for initialization");
+      return true;
+    });
+
     if (row.init) {
       assert.equal((await starting).event, "init");
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      t.mock.timers.tick(500);
       assert.equal(proc.isRunning, true);
       await proc.abort();
     } else {
@@ -532,12 +541,12 @@ process.stdin.resume();
       assert.equal(child.exitCode, null);
       assert.equal(child.signalCode, null);
 
-      await assert.rejects(starting, (error: unknown) => {
-        assert.ok(error instanceof AgyProcessError);
-        assert.match(error.message, /Timed out waiting for Antigravity CLI init event after 500ms: waiting for initialization/);
-        assert.equal(error.stderr, "waiting for initialization");
-        return true;
-      });
+      t.mock.timers.tick(499);
+      assert.equal(child.killed, false);
+      t.mock.timers.tick(1);
+      assert.equal(child.killed, true);
+      if (row.ignoreInterrupt) t.mock.timers.tick(2000);
+      await rejection;
     }
     await closed;
 

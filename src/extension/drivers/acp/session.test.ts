@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import type * as acp from "@agentclientprotocol/sdk";
 import { AcpSession } from "./session.ts";
+import { AcpConnection } from "./connection.ts";
 
 const cases = [
   { name: "missing append capability", scenario: "no-append", sessionId: undefined, error: /must advertise agentCapabilities\._meta\.antigravity\.systemPrompt\.append === true/ },
@@ -64,6 +65,42 @@ for (const row of cases) {
     ]);
   });
 }
+
+test("cancellation backpressure cannot delay native process disposal", async (t) => {
+  const session = new AcpSession({
+    executable: process.execPath,
+    args: ["--experimental-strip-types", fileURLToPath(new URL("./session-fixture.ts", import.meta.url)), "hang-prompt"],
+    cwd: tmpdir(), mcp: { command: "/synthetic/node", args: ["/synthetic/mcp.js", "--endpoint", "unix:///synthetic.sock"] },
+    model: "selected", onUpdate: () => {}, requestTimeoutMs: 5000,
+  });
+  await session.prepare();
+  const rejected = assert.rejects(session.prompt([{ type: "text", text: "pending request" }]));
+  const dispose = AcpConnection.prototype.dispose;
+  let disposing!: () => void;
+  const disposalStarted = new Promise<void>(resolve => { disposing = resolve; });
+  t.mock.method(AcpConnection.prototype, "dispose", function (this: AcpConnection) {
+    disposing();
+    return dispose.call(this);
+  });
+  // Model transport backpressure, not a slow or unresponsive model request.
+  t.mock.method(AcpConnection.prototype, "notify", () => new Promise<void>(() => {}));
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const cancelled = session.cancel();
+    await Promise.race([disposalStarted, new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => reject(new Error("Cancellation transport blocked process disposal")), 1000);
+    })]);
+    await cancelled;
+    await rejected;
+    assert.equal(session.isRunning, false);
+    assert.equal(session.hasActivePrompt, false);
+  } finally {
+    clearTimeout(deadline);
+    t.mock.restoreAll();
+    await session.dispose();
+    await rejected;
+  }
+});
 
 for (const stage of ["preparation", "prompt"] as const) {
   test(`ACP session cancellation: ${stage}`, async (t) => {

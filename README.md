@@ -86,7 +86,9 @@ One `agy` provider shares model caching, tools, Pi output, and session ownership
 
 The bridge exposes Pi's current tools through a local MCP server. Requests travel from the selected backend through the server and a Unix socket to Pi, where tools run under Pi's policies. Results return along the same path.
 
-Pi also manages custom tools and skills. Native backend executable tools are blocked, keeping tool execution in Pi.
+Pi also manages custom tools and skills. Pi tool calls execute through the MCP bridge.
+
+The ACP driver requests `enabledTools: []`, denies non-MCP permission requests, and exposes no client write or terminal capability. These are configuration and protocol checks, not a sandbox around AGY. Backend enforcement of native-tool filtering and system-instruction delivery still needs real-backend validation.
 
 ### Sessions and Context
 

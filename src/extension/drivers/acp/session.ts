@@ -144,11 +144,18 @@ export class AcpSession {
 
   async cancel(): Promise<void> {
     // Cancellation invalidates this connection; never revive unresolved MCP state.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (this.connection.isRunning && this.sessionId) {
-        await this.connection.notify(acp.methods.agent.session.cancel, { sessionId: this.sessionId });
+        // Give normal cancellation a chance to flush, but never let pipe
+        // backpressure defer process cleanup until the general request timeout.
+        await Promise.race([
+          this.connection.notify(acp.methods.agent.session.cancel, { sessionId: this.sessionId }),
+          new Promise<void>(resolve => { timer = setTimeout(resolve, 200); }),
+        ]);
       }
     } finally {
+      clearTimeout(timer);
       await this.dispose();
     }
   }

@@ -12,7 +12,12 @@ export class AcpEventTranslator {
     if (source === "replay" || notification.sessionId !== this.sessionId) return;
 
     const update = notification.update;
-    if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+    // Only explicit execution/mutation kinds are unambiguous here. Missing MCP
+    // metadata and display titles do not establish native tool identity.
+    if ((update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") &&
+      (update.kind === "execute" || update.kind === "edit" || update.kind === "delete" || update.kind === "move")) {
+      emit({ type: "blocked-native-tool", name: update.title || update.kind });
+    } else if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
       emit({ type: "session-reference", reference: this.sessionId });
       if (update.content.text.length > 0) emit({ type: "text-delta", delta: update.content.text });
     } else if (update.sessionUpdate === "usage_update" && Number.isFinite(update.used) && update.used >= 0) {
