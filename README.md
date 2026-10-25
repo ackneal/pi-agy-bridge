@@ -96,6 +96,8 @@ Switching Antigravity models preserves the conversation. If tools are still runn
 
 After compaction, branching, a response from another provider, or a failed restore, the bridge starts a new conversation from Pi's current instructions and history. Your Pi session remains unchanged.
 
+ACP resolves Pi's current system instructions, including section updates and removals, and sends them with ACP-specific integration instructions through Antigravity's system-prompt append extension. The server must advertise support for this extension. Instruction changes rebuild the ACP conversation, including during a tool handoff; completed Pi tool results remain history and are not executed again. Saved ACP references without matching instruction metadata also rebuild. CLI instruction handling is unchanged.
+
 ### Model Discovery
 
 The bridge reads the selected backend's model catalog and caches it in Pi across restarts. If a refresh fails, it retains the cached catalog. Your Pi model overrides take precedence over the bridge's defaults.

@@ -6,6 +6,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import { AcpSession } from "./session.ts";
 
 const cases = [
+  { name: "missing append capability", scenario: "no-append", sessionId: undefined, error: /must advertise agentCapabilities\._meta\.antigravity\.systemPrompt\.append === true/ },
   { name: "new session", scenario: "normal", sessionId: undefined, error: undefined },
   { name: "load suppresses replay and reapplies settings", scenario: "normal", sessionId: "loaded-session", error: undefined },
   { name: "missing mode config", scenario: "missing-settings", sessionId: undefined, error: /configuration is unavailable: mode/ },

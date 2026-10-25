@@ -1,3 +1,5 @@
+import { fingerprintAcpSystemPrompt } from "./instructions.ts";
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { acpContext, AcpRuntimeSession } from "./runtime.ts";
@@ -12,4 +14,21 @@ test("ACP runtime exposes native identity and starts stopped", async () => {
   assert.equal(runtime.driver, "acp");
   assert.equal(runtime.isRunning, false);
   await runtime.abort();
+});
+
+for (const systemPrompt of [undefined, "", "Pi instructions"]) {
+  test(`ACP runtime instruction identity: ${JSON.stringify(systemPrompt)}`, async () => {
+    const runtime = new AcpRuntimeSession({ executable: "unused", cwd: process.cwd(), model: "raw-model-id", ...(systemPrompt === undefined ? {} : { systemPrompt }), mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
+    assert.equal(runtime.instructionKey, systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(systemPrompt));
+    await runtime.abort();
+  });
+}
+
+test("ACP context omits all system updates but preserves history", () => {
+  const user = { role: "user" as const, content: "historical input", timestamp: 0 };
+  const result = { role: "toolResult" as const, toolCallId: "call", toolName: "read", content: [{ type: "text" as const, text: "untrusted result" }], isError: false, timestamp: 1 };
+  assert.deepEqual(acpContext([
+    { role: "system", content: "base", timestamp: 0 }, user,
+    { role: "system", content: "update", timestamp: 1 }, result,
+  ]), acpContext([user, result]));
 });

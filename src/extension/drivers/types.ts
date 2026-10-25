@@ -66,6 +66,8 @@ export interface DriverSubmission {
 export interface DriverSession {
   readonly driver: DriverId;
   readonly isRunning: boolean;
+  /** Opt-in compatibility for drivers with session-scoped instructions. */
+  readonly instructionKey?: string | undefined;
   onRuntimeEvent(handler: (event: RuntimeEvent) => void): () => void;
   formatContextUpdate(messages: readonly Message[]): string;
   submit(input: DriverSubmission): Promise<void>;

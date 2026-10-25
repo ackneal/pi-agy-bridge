@@ -9,6 +9,7 @@ import { CliDriver } from "../drivers/cli/driver.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { AcpSession } from "../drivers/acp/session.ts";
+import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "../drivers/acp/instructions.ts";
 import { AgyBridge, streamAgyProvider } from "./provider.ts";
 
 const model = {
@@ -133,7 +134,10 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
   const bridge = new AgyBridge(pi, config);
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
   const session = bridge.liveSessions.getOrCreate(sessionId);
-  await bridge.runtimeSessionStore.set(sessionId, { sessionId: "stale-session-id" }, [], undefined, bridge.driver.sessionVersion);
+  await bridge.runtimeSessionStore.set(sessionId, {
+    sessionId: "stale-session-id",
+    instructionKey: fingerprintAcpSystemPrompt(composeAcpSystemPrompt({ messages: [] })),
+  }, [], undefined, bridge.driver.sessionVersion);
   t.after(async () => {
     await bridge.liveSessions.disposeAll();
     t.mock.restoreAll();

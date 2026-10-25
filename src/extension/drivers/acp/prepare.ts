@@ -7,6 +7,7 @@ import type { AgyBridgeConfig } from "../../shared/types.ts";
 import { resolveAcpConnectionOptions, resolveAcpEffort } from "./options.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { AcpRuntimeSession } from "./runtime.ts";
+import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructions.ts";
 
 export async function prepareAcpRuntime(
   model: Model<any>, context: Context, tools: readonly Tool[], options: SimpleStreamOptions | undefined,
@@ -21,7 +22,9 @@ export async function prepareAcpRuntime(
   check();
   const connection = resolveAcpConnectionOptions(config);
   const requested = resolveAcpEffort(model, options);
-  const syncKey = calculateSyncKey(context.systemPrompt, tools.map((tool) => JSON.stringify(tool)), model.id, requested, "acp");
+  const systemPrompt = composeAcpSystemPrompt(context);
+  const instructionKey = fingerprintAcpSystemPrompt(systemPrompt);
+  const syncKey = calculateSyncKey(systemPrompt, tools.map((tool) => JSON.stringify(tool)), model.id, requested, "acp");
   if (liveSession.driverId !== "acp") {
     await liveSession.dispose({ preparationId });
     check();
@@ -30,7 +33,7 @@ export async function prepareAcpRuntime(
   check();
   const latest = [...context.messages].reverse().find((message) => message.role === "assistant");
   const decision = dependencies.sync.decide(liveSession, {
-    syncKey, messages: context.messages,
+    syncKey, instructionKey, messages: context.messages,
     ...(latest?.responseId ? { conversationId: latest.responseId } : {}),
     ...(checkpoint ? { checkpoint } : {}),
   });
@@ -59,7 +62,7 @@ export async function prepareAcpRuntime(
         mcp: createMcpLaunchDescriptor(bridge.bridgeUri),
         model: model.id,
         ...(requested ? { effort: requested } : {}),
-        ...(context.systemPrompt ? { systemPrompt: context.systemPrompt } : {}),
+        systemPrompt,
         ...(conversationId ? { sessionId: conversationId } : {}),
       }, new Set(tools.map((tool) => tool.name)));
       await proc.prepare(options?.signal);

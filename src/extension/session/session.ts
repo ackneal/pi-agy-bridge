@@ -94,6 +94,7 @@ export class LiveSession {
   public activeMcpServer: BridgeIPC | null = null;
   public syncKey: string = "";
   public conversationId: string | undefined;
+  public instructionKey: string | undefined;
   public readonly resources = new SessionResources();
   private unsubscribeRuntimeEvents: (() => void) | null = null;
   private abortSignal: AbortSignal | null = null;
@@ -133,6 +134,7 @@ export class LiveSession {
     this.activeMcpServer = mcpServer ?? null;
     this.syncKey = syncKey;
     this.conversationId = conversationId;
+    this.instructionKey = process.instructionKey;
     return true;
   }
 
@@ -176,7 +178,10 @@ export class LiveSession {
     this.activeProcess = null;
     this.activeMcpServer = null;
     this.syncKey = "";
-    if (!options?.preserveConversation) this.conversationId = undefined;
+    if (!options?.preserveConversation) {
+      this.conversationId = undefined;
+      this.instructionKey = undefined;
+    }
     this.clearAbortSignal();
     this.setRuntimeEventHandler(null);
     if (!options?.preserveResources) this.resources.disposeAll();

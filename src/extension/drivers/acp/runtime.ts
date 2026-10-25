@@ -5,11 +5,13 @@ import { AcpSession, type AcpSessionOptions } from "./session.ts";
 import { AcpEventTranslator } from "./events.ts";
 import { AcpMcpPermissions } from "./permissions.ts";
 import { debugLog } from "../../shared/debug.ts";
+import { fingerprintAcpSystemPrompt } from "./instructions.ts";
 import { serializeMessage } from "../../session/history.ts";
 
 /** Historical tools are data, never executable native notifications. */
 export function acpContext(messages: readonly Message[]): ContentBlock[] {
   return messages.flatMap((message): ContentBlock[] => {
+    if (message.role === "system") return [];
     const metadata: Record<string, unknown> = JSON.parse(serializeMessage(message));
     delete metadata.content;
     delete metadata.role;
@@ -28,6 +30,7 @@ export function acpContext(messages: readonly Message[]): ContentBlock[] {
 export class AcpRuntimeSession implements DriverSession {
   readonly driver = "acp" as const;
   readonly session: AcpSession;
+  readonly instructionKey: string | undefined;
   private translator: AcpEventTranslator | undefined;
   private permissions: AcpMcpPermissions | undefined;
   private readonly allowedToolNames: ReadonlySet<string>;
@@ -36,6 +39,7 @@ export class AcpRuntimeSession implements DriverSession {
   readonly options: Omit<AcpSessionOptions, "onUpdate">;
   constructor(options: Omit<AcpSessionOptions, "onUpdate">, allowedToolNames: ReadonlySet<string> = new Set()) {
     this.options = options;
+    this.instructionKey = options.systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(options.systemPrompt);
     this.allowedToolNames = allowedToolNames;
     this.session = new AcpSession({ ...options,
       onPermission: (request) => this.permissions?.reply(request) ?? { outcome: { outcome: "cancelled" } },

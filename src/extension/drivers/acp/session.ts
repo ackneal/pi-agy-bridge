@@ -62,12 +62,20 @@ export class AcpSession {
       signal?.throwIfAborted();
       const initialized = await this.connection.start(signal);
       signal?.throwIfAborted();
+      if (this.options.systemPrompt !== undefined) {
+        const antigravity = initialized.agentCapabilities?._meta?.antigravity;
+        if (!antigravity || typeof antigravity !== "object" || !("systemPrompt" in antigravity) ||
+          !antigravity.systemPrompt || typeof antigravity.systemPrompt !== "object" ||
+          !("append" in antigravity.systemPrompt) || antigravity.systemPrompt.append !== true) {
+          throw new Error("ACP server must advertise agentCapabilities._meta.antigravity.systemPrompt.append === true to deliver system instructions");
+        }
+      }
       const params: acp.NewSessionRequest = {
         cwd: this.options.cwd,
         mcpServers: [{ name: "pi-agy-bridge_pi", command: this.options.mcp.command, args: this.options.mcp.args, env: [] }],
         _meta: { antigravity: {
           enabledTools: [],
-          ...(this.options.systemPrompt ? { systemPrompt: { append: this.options.systemPrompt } } : {}),
+          ...(this.options.systemPrompt !== undefined ? { systemPrompt: { append: this.options.systemPrompt } } : {}),
         } },
       };
       if (this.options.sessionId) {

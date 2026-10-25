@@ -21,7 +21,7 @@ function checkSession(params: acp.NewSessionRequest | acp.LoadSessionRequest): v
 const connection = acp.agent()
   .onRequest(acp.methods.agent.initialize, () => ({
     protocolVersion: acp.PROTOCOL_VERSION,
-    agentCapabilities: { loadSession: scenario !== "no-load" },
+    agentCapabilities: { loadSession: scenario !== "no-load", _meta: scenario === "no-append" ? {} : { antigravity: { systemPrompt: { append: true } } } },
   }))
   .onRequest(acp.methods.agent.session.new, async ({ params, client }) => {
     checkSession(params);

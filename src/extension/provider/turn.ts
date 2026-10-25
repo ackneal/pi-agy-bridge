@@ -174,6 +174,7 @@ export class AgyTurn {
 
     await store.set(session.piSessionId, {
       sessionId: session.conversationId,
+      ...(this.runtime!.proc.instructionKey !== undefined ? { instructionKey: this.runtime!.proc.instructionKey } : {}),
       ...(this.runtime!.mcpServer.hasPendingCalls ? { hasPendingToolCalls: true } : {}),
     }, messages, loginEpoch, this.options.sessionVersion);
   }
