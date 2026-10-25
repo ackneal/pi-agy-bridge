@@ -34,6 +34,23 @@ for (const mode of ["catalog", "missing", "empty", "required", "failure", "hang"
   });
 }
 
+for (const grouped of [false, true]) {
+  test(`ACP discovery preserves server-advertised Claude models (${grouped ? "grouped" : "flat"})`, async (t) => {
+    const values = [
+      { value: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      { value: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+    ];
+    t.mock.method(AcpConnection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
+    t.mock.method(AcpConnection.prototype, "dispose", async () => {});
+    t.mock.method(AcpConnection.prototype, "request", async () => ({
+      sessionId: "synthetic", configOptions: [{ id: "model", name: "Model", type: "select", currentValue: values[0]!.value,
+        options: grouped ? [{ group: "available", name: "Available models", options: values }] : values }],
+    }));
+    const models = await discoverAcpModels({ executable: "unused", cwd: process.cwd() });
+    assert.deepEqual(models.map(({ id, name }) => ({ id, name })), values.map(({ value, name }) => ({ id: value, name })));
+  });
+}
+
 for (const scenario of [
   { name: "SDK auth-required", error: acp.RequestError.authRequired(), fallback: true },
   { name: "message alone", error: new acp.RequestError(-32603, "Authentication required"), fallback: false },
