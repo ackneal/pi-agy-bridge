@@ -16,7 +16,7 @@ export function debugLog(scope: string, ...args: unknown[]): void {
   }
 
   const timestamp = new Date().toISOString();
-  const prefix = `[${timestamp}] [Antigravity CLI:${scope}]`;
+  const prefix = `[${timestamp}] [pi-agy-bridge:${scope}]`;
 
   const message = args.length > 0
     ? ` ${args.map(formatDebugValue).join(" ")}`

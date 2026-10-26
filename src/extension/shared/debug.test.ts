@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { debugArtifact, debugLog } from "./debug.ts";
 
-test("debug logs use the Antigravity CLI label", (t) => {
+test("debug logs use the driver-neutral bridge label", (t) => {
   const write = t.mock.method(process.stderr, "write", () => true);
   const previousDebug = process.env["AGY_BRIDGE_DEBUG"];
 
@@ -15,10 +15,10 @@ test("debug logs use the Antigravity CLI label", (t) => {
       { enabled: "1", count: 1 },
     ]) {
       process.env["AGY_BRIDGE_DEBUG"] = row.enabled;
-      debugLog("events", "Antigravity CLI result outcome:", { status: "ERROR" });
+      debugLog("events", "Runtime result outcome:", { status: "ERROR" });
       assert.equal(write.mock.callCount(), row.count);
     }
-    assert.match(String(write.mock.calls[0]!.arguments[0]), /\[Antigravity CLI:events\] Antigravity CLI result outcome:/);
+    assert.match(String(write.mock.calls[0]!.arguments[0]), /\[pi-agy-bridge:events\] Runtime result outcome:/);
   } finally {
     if (previousDebug === undefined) delete process.env["AGY_BRIDGE_DEBUG"];
     else process.env["AGY_BRIDGE_DEBUG"] = previousDebug;

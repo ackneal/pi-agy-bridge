@@ -379,6 +379,7 @@ export class Bridge {
       return streamAgyProvider(model, context, { ...options, env, signal }, this);
     };
 
+    debugLog("provider", "Registering bridge provider", { driver: driver.id });
     this.pi.registerProvider({
       id: "agy",
       name: `${this.driver.label} [pi-agy-bridge]`,
