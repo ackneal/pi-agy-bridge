@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { prepareAcpRuntime } from "./prepare.ts";
 import { AcpDriver } from "./driver.ts";
 import { CliRuntimeSession } from "../cli/runtime.ts";
@@ -7,6 +10,14 @@ import { LiveSession } from "../../session/session.ts";
 import { RuntimeSessionSync } from "../../session/state.ts";
 
 test("ACP clears the previous driver once before checkpoint lookup", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "agy-acp-prepare-"));
+  const previousHome = process.env.GEMINI_HOME;
+  process.env.GEMINI_HOME = home;
+  t.after(async () => {
+    if (previousHome === undefined) delete process.env.GEMINI_HOME;
+    else process.env.GEMINI_HOME = previousHome;
+    await rm(home, { recursive: true, force: true });
+  });
   const live = new LiveSession("test");
   t.after(() => live.dispose());
   const previous = new CliRuntimeSession({ agentName: "pi-bridge", model: "raw" }, new Set(), {});
@@ -23,7 +34,7 @@ test("ACP clears the previous driver once before checkpoint lookup", async (t) =
   });
 
   await assert.rejects(driver.prepareSession({
-    cwd: process.cwd(), model: { id: "raw" } as Parameters<typeof prepareAcpRuntime>[0],
+    model: { id: "raw" } as Parameters<typeof prepareAcpRuntime>[0],
     context: { messages: [] }, tools: [], options: undefined, session: live,
     store: { get, delete: async () => {} }, sync: new RuntimeSessionSync(),
     preparationId: live.beginPreparation(),

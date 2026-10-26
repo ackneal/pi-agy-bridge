@@ -8,6 +8,7 @@ import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@e
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
+import { prepareDriverCwd } from "../drivers/cwd.ts";
 import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
@@ -227,6 +228,12 @@ const cases: ModelSwitchCase[] = [
 for (const { name, arrange, expected } of cases) {
   test(`provider model switching: ${name}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-model-switch-"));
+    const originalGeminiHome = process.env.GEMINI_HOME;
+    process.env.GEMINI_HOME = directory;
+    t.after(() => {
+      if (originalGeminiHome === undefined) delete process.env.GEMINI_HOME;
+      else process.env.GEMINI_HOME = originalGeminiHome;
+    });
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
@@ -258,7 +265,7 @@ for (const { name, arrange, expected } of cases) {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     };
     const prefix: Context["messages"] = [{ role: "user", content: "original request", timestamp: 1 }, assistant];
-    const compatibilityKey = createHash("sha256").update(path.resolve(directory)).digest("hex");
+    const compatibilityKey = createHash("sha256").update(prepareDriverCwd("cli")).digest("hex");
     const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: gemini.id }, new Set(), {}, compatibilityKey);
     const oldMcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(oldProc, calculateSyncKey("Rules", [], gemini.id, "", "pi-bridge"), oldMcp, "same-conversation");

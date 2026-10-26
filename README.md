@@ -67,7 +67,7 @@ To keep using CLI after upgrading, explicitly switch in Pi:
 
 Run `/agy-bridge:driver` without arguments for status. A switch applies to the current bridge instance only and is not automatically saved across restart.
 
-Each driver locates its own executable and handles startup. Set `AGY_ACP_BIN` to override ACP executable discovery. Native sessions use Pi's workspace directory; this working directory is not a filesystem authorization boundary.
+Each driver locates its own executable and handles startup. Set `AGY_ACP_BIN` to override ACP executable discovery. Both drivers use `${GEMINI_HOME:-~/.gemini}` as the base directory. Native sessions run in its `antigravity-cli/` or `antigravity-acp/` subdirectory, creating it if needed. Project file access goes through Pi MCP tools, not the native working directory.
 
 ## How It Works
 
@@ -89,7 +89,7 @@ Switching Antigravity models preserves the conversation. If tools are still runn
 
 After compaction, branching, a response from another provider, or a failed restore, the bridge starts a new conversation from Pi's current instructions and history. Your Pi session remains unchanged.
 
-ACP resolves Pi's current system instructions, including section updates and removals, and sends them with ACP-specific integration instructions through Antigravity's system-prompt append extension. The server must advertise support for this extension. Instruction changes rebuild the ACP conversation, including during a tool handoff; completed Pi tool results remain history and are not executed again. Saved references must match the current workspace and, for ACP, the current instructions. CLI instruction handling is unchanged.
+ACP resolves Pi's current system instructions, including section updates and removals, and sends them with ACP-specific integration instructions through Antigravity's system-prompt append extension. The server must advertise support for this extension. Instruction changes rebuild the ACP conversation, including during a tool handoff; completed Pi tool results remain history and are not executed again. Saved references must match the native working directory and, for ACP, the current instructions. CLI instruction handling is unchanged.
 
 ### Model Discovery
 

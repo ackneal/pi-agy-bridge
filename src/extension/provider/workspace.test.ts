@@ -9,7 +9,7 @@ for (const row of [
   { name: "bound session workspace", cwd: "/workspace/project" },
   { name: "process directory before a session is bound", cwd: undefined },
 ]) {
-  test(`runtime preparation receives the ${row.name}`, async (t) => {
+  test(`runtime preparation does not receive the ${row.name}`, async (t) => {
     const driver = new CliDriver();
     const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
     const bridge = new Bridge(pi, driver);
@@ -18,15 +18,15 @@ for (const row of [
       ? bridge.piContextAdapter.bind(SessionManager.inMemory(row.cwd))
       : "unbound-session";
     const preparation = t.mock.method(driver, "prepareSession", async (_input: Parameters<CliDriver["prepareSession"]>[0]) => {
-      throw new Error("Stopped after workspace capture");
+      throw new Error("Stopped after input capture");
     });
     const model = { id: "test-model", provider: "agy" } as Model<any>;
 
     const result = await streamAgyProvider(model, { messages: [], tools: [] }, { sessionId }, bridge).result();
 
     assert.equal(preparation.mock.callCount(), 1);
-    assert.equal(preparation.mock.calls[0]!.arguments[0].cwd, row.cwd ?? process.cwd());
+    assert.equal(Object.hasOwn(preparation.mock.calls[0]!.arguments[0], "cwd"), false);
     assert.equal(result.stopReason, "error");
-    assert.equal(result.errorMessage, "Stopped after workspace capture");
+    assert.equal(result.errorMessage, "Stopped after input capture");
   });
 }

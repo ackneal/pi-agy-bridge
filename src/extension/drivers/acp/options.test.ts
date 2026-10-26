@@ -83,12 +83,45 @@ for (const source of ["explicit", "environment"] as const) {
   });
 }
 
-for (const executable of [undefined, "", "  ", "/driver/owned/acp"]) {
-  test(`connection options use only the supplied executable: ${JSON.stringify(executable)}`, () => {
-    if (!executable?.trim()) {
-      assert.throws(() => resolveAcpConnectionOptions("/workspace", executable), /executable not found/);
+const connectionRows = [
+  { name: "missing executable", executable: undefined },
+  { name: "empty executable", executable: "" },
+  { name: "blank executable", executable: "  " },
+  { name: "default home", executable: "/driver/owned/acp" },
+  { name: "empty override uses home", executable: "/driver/owned/acp", override: "" },
+  { name: "absolute override", executable: "/driver/owned/acp", override: "absolute" },
+  { name: "tilde override", executable: "/driver/owned/acp", override: "~/custom" },
+];
+
+for (const row of connectionRows) {
+  test(`connection options: ${row.name}`, (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "acp-cwd-"));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    t.mock.method(os, "homedir", () => home);
+    const previous = process.env.GEMINI_HOME;
+    t.after(() => {
+      if (previous === undefined) delete process.env.GEMINI_HOME;
+      else process.env.GEMINI_HOME = previous;
+    });
+    const override = row.override === "absolute" ? path.join(home, "override", "nested") : row.override;
+    if (override === undefined) delete process.env.GEMINI_HOME;
+    else process.env.GEMINI_HOME = override;
+
+    if (!row.executable?.trim()) {
+      // An unusable home must not obscure executable validation or create directories.
+      process.env.GEMINI_HOME = path.join(home, "invalid");
+      fs.writeFileSync(process.env.GEMINI_HOME, "not a directory");
+      assert.throws(() => resolveAcpConnectionOptions(row.executable), /executable not found/);
+      assert.deepEqual(fs.readdirSync(home), ["invalid"]);
       return;
     }
-    assert.deepEqual(resolveAcpConnectionOptions("/workspace", executable), { cwd: path.resolve("/workspace"), executable });
+
+    const result = resolveAcpConnectionOptions(row.executable);
+
+    const root = override === "~/custom" ? path.join(home, "custom") : override || path.join(home, ".gemini");
+    assert.deepEqual(result, { executable: row.executable, cwd: path.join(root, "antigravity-acp") });
+    assert.notEqual(result.cwd, process.cwd());
+    assert.ok(fs.statSync(result.cwd).isDirectory());
+    assert.deepEqual(resolveAcpConnectionOptions(row.executable), result);
   });
 }

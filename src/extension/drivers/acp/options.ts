@@ -2,6 +2,7 @@ import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { prepareDriverCwd } from "../cwd.ts";
 import { expandHome } from "../../shared/paths.ts";
 import type { AcpConnectionOptions } from "./connection.ts";
 
@@ -62,8 +63,8 @@ export function resolveAcpEffort(model: Model<any>, options: SimpleStreamOptions
   return effort;
 }
 
-export function resolveAcpConnectionOptions(cwd: string, executable?: string): AcpConnectionOptions {
+export function resolveAcpConnectionOptions(executable?: string): AcpConnectionOptions {
   if (!executable?.trim()) throw new Error("Antigravity ACP executable not found; please install agy-acp or set AGY_ACP_BIN");
 
-  return { executable, cwd: path.resolve(cwd) };
+  return { executable, cwd: prepareDriverCwd("acp") };
 }

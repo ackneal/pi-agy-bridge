@@ -5,6 +5,7 @@ import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../../discover
 import { discoverAgyModels } from "../../discovery/models.ts";
 import { fetchAgyUsage } from "../../runtime/usage.ts";
 import { detectCliExecutable } from "../../runtime/version.ts";
+import { prepareDriverCwd } from "../cwd.ts";
 import { createCliAuthenticationBackend } from "./auth.ts";
 import { prepareCliRuntime, resolveModelAndEffort } from "./session.ts";
 
@@ -39,7 +40,8 @@ export class CliDriver implements BridgeDriver {
       installPlugin: (pluginDir: string) => this.installPlugin(pluginDir),
     };
     const selection = resolveModelAndEffort(input.model.id, input.options, input.model.thinkingLevelMap);
-    return prepareCliRuntime(input.model, input.context, input.tools, input.options, input.cwd, dependencies, input.session, selection, input.preparationId);
+    const cwd = prepareDriverCwd(this.id);
+    return prepareCliRuntime(input.model, input.context, input.tools, input.options, cwd, dependencies, input.session, selection, input.preparationId);
   }
 
   discoverModels(signal: AbortSignal) {

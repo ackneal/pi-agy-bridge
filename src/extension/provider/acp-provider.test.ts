@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import test, { afterEach, beforeEach } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
@@ -14,6 +14,19 @@ import { AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { AcpSession } from "../drivers/acp/session.ts";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "../drivers/acp/instructions.ts";
 import { Bridge, streamAgyProvider } from "./provider.ts";
+
+let home: string;
+let previousHome: string | undefined;
+beforeEach(async () => {
+  home = await mkdtemp(path.join(tmpdir(), "agy-native-home-"));
+  previousHome = process.env.GEMINI_HOME;
+  process.env.GEMINI_HOME = home;
+});
+afterEach(async () => {
+  if (previousHome === undefined) delete process.env.GEMINI_HOME;
+  else process.env.GEMINI_HOME = previousHome;
+  await rm(home, { recursive: true, force: true });
+});
 
 const model = {
   id: "selected", name: "Synthetic", api: "agy", provider: "agy", baseUrl: "agy",
@@ -172,7 +185,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
   const session = bridge.liveSessions.getOrCreate(sessionId);
   await bridge.runtimeSessionStore.set(sessionId, {
     sessionId: "stale-session-id",
-    compatibilityKey: fingerprintAcpSystemPrompt(JSON.stringify([tmpdir(), composeAcpSystemPrompt({ messages: [] })])),
+    compatibilityKey: fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt({ messages: [] })])),
   }, [], undefined, bridge.driver.sessionVersion);
   t.after(async () => {
     await bridge.liveSessions.disposeAll();

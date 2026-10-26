@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { afterEach, beforeEach } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
@@ -17,6 +17,19 @@ import type { RuntimeSessionDecision } from "../session/state.ts";
 import type { AgyInput, AgyResultEvent } from "../shared/types.ts";
 import { formatContextUpdate } from "./context-prompt.ts";
 import { Bridge, streamAgyProvider } from "./provider.ts";
+
+let home: string;
+let previousHome: string | undefined;
+beforeEach(async () => {
+  home = await mkdtemp(path.join(os.tmpdir(), "agy-native-home-"));
+  previousHome = process.env.GEMINI_HOME;
+  process.env.GEMINI_HOME = home;
+});
+afterEach(async () => {
+  if (previousHome === undefined) delete process.env.GEMINI_HOME;
+  else process.env.GEMINI_HOME = previousHome;
+  await rm(home, { recursive: true, force: true });
+});
 
 const cases: { decision: RuntimeSessionDecision; incremental?: boolean; payload?: "replace" | "unchanged" | "reject" }[] = [
   { decision: { action: "continue" } },
@@ -628,7 +641,7 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
     bridge.start();
     const session = bridge.liveSessions.getOrCreate("mixed-pending");
-    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {}, createHash("sha256").update(process.cwd()).digest("hex"));
+    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {}, createHash("sha256").update(path.join(process.env.GEMINI_HOME!, "antigravity-cli")).digest("hex"));
     const oldMcp = new BridgeIPC([], session.id, session.resources);
     const model = {
       id: "test-model", name: "Test model", api: "agy", provider: "agy",

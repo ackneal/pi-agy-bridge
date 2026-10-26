@@ -9,6 +9,7 @@ import { AgyRuntime, type AgyEventSource } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { DEFAULT_AGY_PLUGIN_DIR } from "../discovery/plugin-install.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
+import { prepareDriverCwd } from "../drivers/cwd.ts";
 import { resolveModelAndEffort } from "../drivers/cli/session.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { PiRuntimeOutput } from "./output.ts";
@@ -250,6 +251,12 @@ test("registers the Antigravity CLI provider and session lifecycle without start
 
 async function createRuntimeFixture(t: TestContext) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-provider-test-"));
+  const originalGeminiHome = process.env.GEMINI_HOME;
+  process.env.GEMINI_HOME = directory;
+  t.after(() => {
+    if (originalGeminiHome === undefined) delete process.env.GEMINI_HOME;
+    else process.env.GEMINI_HOME = originalGeminiHome;
+  });
   let bridge: Bridge | undefined;
   t.after(async () => {
     try {
@@ -270,7 +277,7 @@ async function createRuntimeFixture(t: TestContext) {
   const sessionId = runtimeBridge.piContextAdapter.bind(manager);
   const session = runtimeBridge.liveSessions.getOrCreate(sessionId);
   const epoch = "test-login";
-  await runtimeBridge.runtimeSessionStore.set(sessionId, { sessionId: "conversation-1", compatibilityKey: createHash("sha256").update(path.resolve("/workspace")).digest("hex") }, [], epoch, runtimeBridge.driver.sessionVersion);
+  await runtimeBridge.runtimeSessionStore.set(sessionId, { sessionId: "conversation-1", compatibilityKey: createHash("sha256").update(prepareDriverCwd("cli")).digest("hex") }, [], epoch, runtimeBridge.driver.sessionVersion);
 
   t.mock.method(BridgeIPC.prototype, "start", async () => {});
   t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");

@@ -80,7 +80,6 @@ export function streamAgyProvider(
     try {
       const runtime = await bridge.driver.prepareSession({
         model, context, tools, options, session: liveSession, preparationId,
-        cwd: bridge.getCwd(piSessionId),
         store: bridge.runtimeSessionStore, sync: bridge.runtimeSessionSync,
       });
       const mcpServer = runtime.mcpServer;
@@ -129,7 +128,6 @@ export function streamAgyProvider(
 
 export class Bridge {
   private readonly pi: ExtensionAPI;
-  private sessionManager: ExtensionContext["sessionManager"] | undefined;
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private discoveryError: DriverFailure | undefined;
@@ -147,7 +145,7 @@ export class Bridge {
 
   constructor(pi: ExtensionAPI, driver?: BridgeDriver) {
     this.pi = pi;
-    this.driver = driver ?? createBridgeDriver("acp", () => this.getCwd());
+    this.driver = driver ?? createBridgeDriver("acp");
     this.authentication = new AgyAuthentication(this.driver.authentication, async () => {
       this.runtimeLifetime.abort(new Error(`${this.driver.label} login changed the bridge session`));
       this.usageRefresh = undefined;
@@ -199,7 +197,7 @@ export class Bridge {
     this.lifetime.signal.throwIfAborted();
     if (this.driver.id === driverId) return;
 
-    const driver = createBridgeDriver(driverId, () => this.getCwd());
+    const driver = createBridgeDriver(driverId);
     if (!driver.detectExecutable()) throw new Error(`${driver.label} executable not found`);
     const lifetime = this.runtimeLifetime.signal;
     const models = await driver.discoverModels(lifetime);
@@ -222,11 +220,6 @@ export class Bridge {
     await modelRegistry?.refresh({ providers: ["agy"], allowNetwork: false });
 
     debugLog("provider", `Switched bridge driver to: ${this.driver.label} (${driverId})`);
-  }
-
-  public getCwd(sessionId?: string): string {
-    const manager = sessionId ? this.piContextAdapter.getSessionManager(sessionId) : this.sessionManager;
-    return manager?.getCwd() ?? process.cwd();
   }
 
   public getTools(context: Context): Tool[] {
@@ -327,7 +320,6 @@ export class Bridge {
     });
 
     this.pi.on("session_start", (event, ctx) => {
-      this.sessionManager = ctx.sessionManager;
       this.sessionIds.add(this.piContextAdapter.bind(ctx.sessionManager));
       const lifetime = this.runtimeLifetime.signal;
       const autoConfigure = event.reason === "startup" && !this.startupAuthenticationStarted;
@@ -357,7 +349,6 @@ export class Bridge {
       this.runtimeLifetime.abort(new Error(`${this.driver.label} bridge session ended`));
       await this.liveSessions.disposeAll();
       this.piContextAdapter.clear();
-      this.sessionManager = undefined;
       this.sessionIds.clear();
     });
 

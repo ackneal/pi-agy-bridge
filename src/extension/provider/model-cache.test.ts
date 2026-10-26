@@ -68,7 +68,13 @@ test("new ACP session restores a legacy cached scoped model without network or l
 for (const allowNetwork of [false, true]) {
   test(`ACP scoped models remain available without cache or login: network=${allowNetwork}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-noauth-scope-"));
-    t.after(() => rm(directory, { recursive: true, force: true }));
+    const previousHome = process.env.GEMINI_HOME;
+    process.env.GEMINI_HOME = directory;
+    t.after(async () => {
+      if (previousHome === undefined) delete process.env.GEMINI_HOME;
+      else process.env.GEMINI_HOME = previousHome;
+      await rm(directory, { recursive: true, force: true });
+    });
     const authPath = path.join(directory, "auth.json");
     await writeFile(authPath, JSON.stringify({ agy: { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1" } } }));
     const runtime = await ModelRuntime.create({ authPath, modelsPath: path.join(directory, "models.json"), refreshOnCreate: false });
@@ -77,7 +83,7 @@ for (const allowNetwork of [false, true]) {
     const bridge = new Bridge({
       on: () => {}, registerCommand: () => {},
       registerProvider: runtime.registerNativeProvider.bind(runtime),
-    } as unknown as ExtensionAPI, new AcpDriver(() => directory));
+    } as unknown as ExtensionAPI, new AcpDriver());
     t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
     bridge.start();
     await runtime.refresh({ providers: ["agy"], allowNetwork: false });

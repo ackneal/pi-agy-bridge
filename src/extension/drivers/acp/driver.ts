@@ -14,11 +14,8 @@ export class AcpDriver implements BridgeDriver {
   readonly initialModels = defaultModelCatalog();
   readonly authentication: DriverAuthentication;
 
-  private readonly getCwd: () => string;
-
-  constructor(getCwd: () => string = process.cwd) {
-    this.getCwd = getCwd;
-    const authentication = () => createAcpAuthenticationBackend(resolveAcpConnectionOptions(this.getCwd(), this.detectExecutable()));
+  constructor() {
+    const authentication = () => createAcpAuthenticationBackend(resolveAcpConnectionOptions(this.detectExecutable()));
     this.authentication = {
       label: this.label,
       probe: async (signal) => { await authentication().probe(signal); return true; },
@@ -38,11 +35,11 @@ export class AcpDriver implements BridgeDriver {
     input.options?.signal?.throwIfAborted();
 
     const dependencies = { store: input.store, sync: input.sync, sessionVersion: this.sessionVersion };
-    return prepareAcpRuntime(input.model, input.context, input.tools, input.options, resolveAcpConnectionOptions(input.cwd, this.detectExecutable()), dependencies, input.session, input.preparationId);
+    return prepareAcpRuntime(input.model, input.context, input.tools, input.options, resolveAcpConnectionOptions(this.detectExecutable()), dependencies, input.session, input.preparationId);
   }
 
   discoverModels(signal: AbortSignal) {
-    return discoverAcpModels(resolveAcpConnectionOptions(this.getCwd(), this.detectExecutable()), signal);
+    return discoverAcpModels(resolveAcpConnectionOptions(this.detectExecutable()), signal);
   }
 
   usage(_signal: AbortSignal): Promise<AgyUsage | undefined> {

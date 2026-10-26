@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,15 +13,27 @@ import { CliDriver } from "./driver.ts";
 import { CliRuntimeSession } from "./runtime.ts";
 
 for (const row of [
-  { name: "same-workspace live reuse", persisted: false, changed: false, legacy: false, action: "continue" },
-  { name: "changed-workspace live rebuild", persisted: false, changed: true, legacy: false, action: "rebuild" },
-  { name: "changed-workspace checkpoint rebuild", persisted: true, changed: true, legacy: false, action: "rebuild" },
+  { name: "default dedicated cwd", persisted: false, changed: false, legacy: false, action: "continue", home: "default" },
+  { name: "home-expanded dedicated cwd", persisted: false, changed: false, legacy: false, action: "continue", home: "tilde" },
+  { name: "same-runtime-cwd live reuse", persisted: false, changed: false, legacy: false, action: "continue" },
+  { name: "changed-runtime-cwd live rebuild", persisted: false, changed: true, legacy: false, action: "rebuild" },
+  { name: "changed-runtime-cwd checkpoint rebuild", persisted: true, changed: true, legacy: false, action: "rebuild" },
   { name: "legacy checkpoint rebuild", persisted: true, changed: false, legacy: true, action: "rebuild" },
-  { name: "matching-workspace checkpoint resume", persisted: true, changed: false, legacy: false, action: "resume" },
+  { name: "matching-runtime-cwd checkpoint resume", persisted: true, changed: false, legacy: false, action: "resume" },
 ] as const) {
   test(row.name, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-cli-workspace-"));
     const sessions: LiveSession[] = [];
+    t.mock.method(os, "homedir", () => directory);
+    const home = "home" in row ? row.home : "custom";
+    const geminiHome = path.join(directory, home === "default" ? ".gemini" : "gemini");
+    const previousHome = process.env.GEMINI_HOME;
+    t.after(() => {
+      if (previousHome === undefined) delete process.env.GEMINI_HOME;
+      else process.env.GEMINI_HOME = previousHome;
+    });
+    if (home === "default") delete process.env.GEMINI_HOME;
+    else process.env.GEMINI_HOME = home === "tilde" ? "~/gemini" : geminiHome;
     t.after(async () => {
       try {
         await Promise.all(sessions.map((session) => session.dispose()));
@@ -53,15 +65,14 @@ for (const row of [
     const original = new LiveSession(id);
     sessions.push(original);
     const model = { id: "test-model" } as Model<any>;
-    const prepare = (session: LiveSession, cwd: string) => driver.prepareSession({
-      cwd, model, context: { messages: [] }, tools: [], options: undefined,
+    const prepare = (session: LiveSession) => driver.prepareSession({
+      model, context: { messages: [] }, tools: [], options: undefined,
       session, store, sync, preparationId: session.beginPreparation(),
     });
-    const workspace = path.join(directory, "project");
-    await Promise.all([workspace, path.join(directory, "other-project")].map((cwd) => mkdir(cwd)));
-    const first = await prepare(original, workspace);
+    const first = await prepare(original);
     assert.ok(first.proc instanceof CliRuntimeSession);
-    assert.equal(first.proc.options.cwd, workspace);
+    assert.equal(first.proc.options.cwd, path.join(geminiHome, "antigravity-cli"));
+    assert.ok((await stat(first.proc.options.cwd!)).isDirectory());
     assert.equal(first.reconstructContext, true);
     sync.record(original, []);
     let target = original;
@@ -77,11 +88,12 @@ for (const row of [
     const startsBefore = start.mock.callCount();
     const abortsBefore = abort.mock.callCount();
     const closesBefore = close.mock.callCount();
-    const requestedCwd = row.changed ? path.join(directory, "other", "..", "other-project") : workspace;
+    const requestedHome = row.changed ? path.join(directory, "other", "..", "other-gemini") : geminiHome;
+    process.env.GEMINI_HOME = requestedHome;
 
-    const result = await prepare(target, requestedCwd);
+    const result = await prepare(target);
 
-    assert.equal(result.proc.options.cwd, path.resolve(requestedCwd));
+    assert.equal(result.proc.options.cwd, path.resolve(requestedHome, "antigravity-cli"));
     assert.equal(target.activeProcess, result.proc);
     assert.equal(target.activeMcpServer, result.mcpServer);
     assert.equal(target.compatibilityKey, result.proc.compatibilityKey);
