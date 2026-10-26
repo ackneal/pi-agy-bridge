@@ -16,7 +16,7 @@ import {
   LiveSessionRegistry,
   PiContextAdapter,
 } from "../session/session.ts";
-import { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
+import { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
 import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts";

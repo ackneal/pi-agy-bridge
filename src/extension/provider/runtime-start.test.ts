@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { Bridge, streamAgyProvider } from "./provider.ts";

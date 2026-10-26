@@ -3,7 +3,7 @@ import test from "node:test";
 import os from "node:os";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessageEvent, Context } from "@earendil-works/pi-ai";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
 import type { DriverSession, PrepareDriverInput, RuntimeEvent } from "../drivers/types.ts";

@@ -5,10 +5,10 @@ import path from "node:path";
 import test, { describe, it } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { LiveSession, PiContextAdapter } from "./session.ts";
-import { RuntimeSessionStore, RuntimeSessionSync, type AgyConversationCheckpoint } from "./session-state.ts";
+import { RuntimeSessionStore, RuntimeSessionSync, type AgyConversationCheckpoint } from "./state.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import type { DriverSession } from "../drivers/types.ts";
-import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import type { BridgeIPC } from "../bridge/ipc.ts";
 
 function runtime(isRunning: boolean): DriverSession {
   return {

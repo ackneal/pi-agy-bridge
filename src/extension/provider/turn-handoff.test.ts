@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Context } from "@earendil-works/pi-ai";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
 import type { DriverSession, DriverSubmission, RuntimeEvent } from "../drivers/types.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { LiveSession, PiContextAdapter } from "../session/session.ts";
-import { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
+import { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { PiRuntimeOutput } from "./output.ts";
 import { Turn } from "./turn.ts";
 

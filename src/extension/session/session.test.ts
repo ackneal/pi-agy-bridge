@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { calculateSyncKey, LiveSession, LiveSessionRegistry, PiContextAdapter } from "./session.ts";
 import type { DriverSession } from "../drivers/types.ts";
-import type { AgyMcpServer } from "../bridge/bridge-ipc.ts";
+import type { AgyMcpServer } from "../bridge/ipc.ts";
 
 describe("calculateSyncKey", () => {
   it("is deterministic, canonicalizes tool order, and includes all key components", () => {

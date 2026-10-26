@@ -6,13 +6,13 @@ import type { Provider, Model, Context, SimpleStreamOptions } from "@earendil-wo
 import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { AgyRuntime, type AgyEventSource } from "../runtime/process.ts";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
 import { DEFAULT_AGY_PLUGIN_DIR } from "../discovery/plugin-install.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { resolveModelAndEffort } from "../drivers/cli/session.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { PiRuntimeOutput } from "./output.ts";
-import { RuntimeSessionSync, type AgyConversationCheckpoint } from "../session/session-state.ts";
+import { RuntimeSessionSync, type AgyConversationCheckpoint } from "../session/state.ts";
 import { LiveSession } from "../session/session.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
 import { Bridge, streamAgyProvider } from "./provider.ts";

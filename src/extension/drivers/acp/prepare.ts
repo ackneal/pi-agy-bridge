@@ -1,8 +1,8 @@
 import type { Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
-import { BridgeIPC } from "../../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../../bridge/ipc.ts";
 import { createMcpLaunchDescriptor } from "../../bridge/mcp-launch.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
-import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/session-state.ts";
+import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/state.ts";
 import type { AcpConnectionOptions } from "./connection.ts";
 import { resolveAcpEffort } from "./options.ts";
 import { debugLog } from "../../shared/debug.ts";

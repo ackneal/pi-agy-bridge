@@ -8,7 +8,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { AcpSession } from "../drivers/acp/session.ts";

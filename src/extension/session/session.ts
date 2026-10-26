@@ -1,7 +1,7 @@
 import type { DriverId, DriverSession, RuntimeEvent } from "../drivers/types.ts";
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
-import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import type { BridgeIPC } from "../bridge/ipc.ts";
 import { debugLog } from "../shared/debug.ts";
 
 export class TerminalRegistry {

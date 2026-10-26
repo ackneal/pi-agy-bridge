@@ -1,10 +1,10 @@
 import type { Context } from "@earendil-works/pi-ai";
-import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { PiToolCallBatch } from "../bridge/capabilities.ts";
 import type { PiRuntimeOutput } from "./output.ts";
 import type { DriverSession, DriverSubmission, RuntimeEvent } from "../drivers/types.ts";
 import type { LiveSession } from "../session/session.ts";
-import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
+import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
 
 interface TurnOptions {

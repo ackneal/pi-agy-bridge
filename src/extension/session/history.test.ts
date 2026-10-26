@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { DriverSession } from "../drivers/types.ts";
 import { serializeMessage } from "./history.ts";
-import { RuntimeSessionSync } from "./session-state.ts";
+import { RuntimeSessionSync } from "./state.ts";
 import { LiveSession } from "./session.ts";
 
 const assistant = { role: "assistant", content: [{ type: "text", text: "answer" }], stopReason: "stop" };

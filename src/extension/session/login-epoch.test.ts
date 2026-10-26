@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { LiveSession, PiContextAdapter } from "./session.ts";
-import { RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
+import { RuntimeSessionStore, RuntimeSessionSync } from "./state.ts";
 
 for (const scenario of [
   { name: "checkpoint and credential without login epochs", stored: undefined, current: undefined, accepted: true },

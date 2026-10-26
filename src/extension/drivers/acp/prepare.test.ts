@@ -4,7 +4,7 @@ import { prepareAcpRuntime } from "./prepare.ts";
 import { AcpDriver } from "./driver.ts";
 import { CliRuntimeSession } from "../cli/runtime.ts";
 import { LiveSession } from "../../session/session.ts";
-import { RuntimeSessionSync } from "../../session/session-state.ts";
+import { RuntimeSessionSync } from "../../session/state.ts";
 
 test("ACP clears the previous driver once before checkpoint lookup", async (t) => {
   const live = new LiveSession("test");

@@ -3,8 +3,8 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { DriverSession } from "../drivers/types.ts";
 import { LiveSession, PiContextAdapter } from "./session.ts";
-import { RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { RuntimeSessionStore, RuntimeSessionSync } from "./state.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
 
 const original = "a".repeat(64);
 const changed = "b".repeat(64);

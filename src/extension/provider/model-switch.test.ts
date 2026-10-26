@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";

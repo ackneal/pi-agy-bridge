@@ -1,7 +1,7 @@
 import type { AnyModel, AssistantMessage, Context, Message, Model, ProviderAuthInteraction, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
 import type { LiveSession } from "../session/session.ts";
-import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/session-state.ts";
-import type { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
+import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
 
 export interface DriverAuthentication {
