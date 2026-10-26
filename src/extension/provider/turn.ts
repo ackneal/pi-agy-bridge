@@ -86,8 +86,11 @@ export class Turn {
       this.cancel(message);
     } else {
       adapter.handleTermination("error", message);
-      // Preparation cleans its local resources; it has not acquired this runtime.
-      if (this.runtime) this.close("invalidate");
+      if (this.ownsRuntime()) {
+        // A later turn may own the output while reusing this runtime.
+        session.notifyRuntimeFailure(message);
+        this.close("invalidate");
+      }
     }
     session.releasePreparation(preparationId);
   }

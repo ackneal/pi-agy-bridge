@@ -79,6 +79,34 @@ describe("LiveSession", () => {
     };
   }
 
+  for (const row of [
+    { state: "current", recipient: "original" },
+    { state: "replaced", recipient: "replacement" },
+    { state: "cleared", recipient: undefined },
+    { state: "disposed", recipient: undefined },
+  ] as const) {
+    it(`routes runtime failure only to the installed handler: ${row.state}`, async (t) => {
+      const session = new LiveSession("failure-routing");
+      t.after(() => session.dispose());
+      const runtime = createRuntime();
+      session.setSession(runtime.runtime, "settings");
+      const received: { recipient: string; event: Parameters<EventHandler>[0] }[] = [];
+      session.setRuntimeEventHandler((event) => { received.push({ recipient: "original", event }); });
+      if (row.state === "replaced") {
+        session.setRuntimeEventHandler((event) => { received.push({ recipient: "replacement", event }); });
+      }
+      if (row.state === "cleared") session.setRuntimeEventHandler(null);
+      if (row.state === "disposed") await session.dispose();
+
+      session.notifyRuntimeFailure("submission failed");
+
+      assert.deepEqual(received, row.recipient ? [{ recipient: row.recipient,
+        event: { type: "complete", reason: "error", error: "submission failed", resumable: false },
+      }] : []);
+      assert.equal(runtime.subscriptions[0]!.unsubscribeCalls, row.state === "current" ? 0 : 1);
+    });
+  }
+
   for (const cleanup of ["dispose", "disposeAll", "remove"] as const) {
     it(`awaits in-flight cleanup through ${cleanup}`, async () => {
       const registry = new LiveSessionRegistry();

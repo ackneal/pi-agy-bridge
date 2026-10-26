@@ -97,6 +97,7 @@ export class LiveSession {
   public compatibilityKey: string | undefined;
   public readonly resources = new SessionResources();
   private unsubscribeRuntimeEvents: (() => void) | null = null;
+  private runtimeEventHandler: ((event: RuntimeEvent) => void) | null = null;
   private abortSignal: AbortSignal | null = null;
   private abortListener: (() => void) | null = null;
   private preparationId: symbol | undefined;
@@ -141,11 +142,17 @@ export class LiveSession {
   public setRuntimeEventHandler(handler: ((event: RuntimeEvent) => void) | null): void {
     const unsubscribe = this.unsubscribeRuntimeEvents;
     this.unsubscribeRuntimeEvents = null;
+    this.runtimeEventHandler = null;
     unsubscribe?.();
 
     if (handler && this.activeProcess) {
+      this.runtimeEventHandler = handler;
       this.unsubscribeRuntimeEvents = this.activeProcess.onRuntimeEvent(handler);
     }
+  }
+
+  public notifyRuntimeFailure(message: string): void {
+    this.runtimeEventHandler?.({ type: "complete", reason: "error", error: message, resumable: false });
   }
 
   public setAbortSignal(signal: AbortSignal | undefined, onAbort: () => void): void {
