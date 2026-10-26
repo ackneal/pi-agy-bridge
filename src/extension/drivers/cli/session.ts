@@ -82,7 +82,7 @@ export async function prepareCliRuntime(
   const { baseModel, effort } = selection;
   const agentName = "pi-bridge";
   cwd = path.resolve(cwd);
-  const instructionKey = createHash("sha256").update(cwd).digest("hex");
+  const compatibilityKey = createHash("sha256").update(cwd).digest("hex");
   const toolSyncValues = tools.map((tool) => JSON.stringify({
     name: tool.name,
     description: tool.description,
@@ -95,7 +95,7 @@ export async function prepareCliRuntime(
   const checkpoint = await dependencies.store.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH, dependencies.sessionVersion);
   checkPreparation();
   const decision = dependencies.sync.decide(liveSession, {
-    syncKey, instructionKey,
+    syncKey, compatibilityKey,
     ...(expectedConversationId ? { conversationId: expectedConversationId } : {}),
     messages: context.messages,
     ...(checkpoint ? { checkpoint } : {}),
@@ -170,7 +170,7 @@ export async function prepareCliRuntime(
         conversationId,
         effort,
         environment: buildCliProcessEnvironment(mcpServer.bridgeUri),
-      }, new Set(tools.map((tool) => tool.name)), errorState, instructionKey);
+      }, new Set(tools.map((tool) => tool.name)), errorState, compatibilityKey);
       const initEvent = await proc.start();
       checkPreparation();
       debugLog("register", "Antigravity CLI init conversation id:", initEvent.conversation_id);

@@ -270,7 +270,7 @@ async function createRuntimeFixture(t: TestContext) {
   const sessionId = runtimeBridge.piContextAdapter.bind(manager);
   const session = runtimeBridge.liveSessions.getOrCreate(sessionId);
   const epoch = "test-login";
-  await runtimeBridge.runtimeSessionStore.set(sessionId, { sessionId: "conversation-1", instructionKey: createHash("sha256").update(path.resolve("/workspace")).digest("hex") }, [], epoch, runtimeBridge.driver.sessionVersion);
+  await runtimeBridge.runtimeSessionStore.set(sessionId, { sessionId: "conversation-1", compatibilityKey: createHash("sha256").update(path.resolve("/workspace")).digest("hex") }, [], epoch, runtimeBridge.driver.sessionVersion);
 
   t.mock.method(BridgeIPC.prototype, "start", async () => {});
   t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");

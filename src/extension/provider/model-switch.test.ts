@@ -258,14 +258,14 @@ for (const { name, arrange, expected } of cases) {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     };
     const prefix: Context["messages"] = [{ role: "user", content: "original request", timestamp: 1 }, assistant];
-    const instructionKey = createHash("sha256").update(path.resolve(directory)).digest("hex");
-    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: gemini.id }, new Set(), {}, instructionKey);
+    const compatibilityKey = createHash("sha256").update(path.resolve(directory)).digest("hex");
+    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: gemini.id }, new Set(), {}, compatibilityKey);
     const oldMcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(oldProc, calculateSyncKey("Rules", [], gemini.id, "", "pi-bridge"), oldMcp, "same-conversation");
     const terminalHandle = session.resources.terminals.bind("pi-terminal");
     bridge.runtimeSessionSync.record(session, prefix);
     assistant.responseId = arrange.conversationId;
-    if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { sessionId: arrange.conversationId, instructionKey }, prefix, undefined, bridge.driver.sessionVersion);
+    if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { sessionId: arrange.conversationId, compatibilityKey }, prefix, undefined, bridge.driver.sessionVersion);
     if (arrange.omitPriorError) prefix.splice(1, 1);
     if (arrange.foreignHistory) {
       const { responseId: _responseId, ...foreignAssistant } = assistant;
@@ -279,7 +279,7 @@ for (const { name, arrange, expected } of cases) {
       assistant.stopReason = "toolUse";
       assistant.content = [{ type: "toolCall", id: "pending-call", name: "test-tool", arguments: {} }];
       bridge.runtimeSessionSync.record(session, prefix);
-      await bridge.runtimeSessionStore.set(sessionId, { sessionId: "same-conversation", instructionKey }, prefix, undefined, bridge.driver.sessionVersion);
+      await bridge.runtimeSessionStore.set(sessionId, { sessionId: "same-conversation", compatibilityKey }, prefix, undefined, bridge.driver.sessionVersion);
     }
     const context: Context = { systemPrompt: "Rules", tools: [], messages: [...prefix, pending
       ? { role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 5 }

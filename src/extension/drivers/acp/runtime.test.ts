@@ -17,9 +17,9 @@ test("ACP runtime exposes native identity and starts stopped", async () => {
 });
 
 for (const systemPrompt of [undefined, "", "Pi instructions"]) {
-  test(`ACP runtime instruction identity: ${JSON.stringify(systemPrompt)}`, async () => {
+  test(`ACP runtime compatibility identity: ${JSON.stringify(systemPrompt)}`, async () => {
     const runtime = new AcpRuntimeSession({ executable: "unused", cwd: process.cwd(), model: "raw-model-id", ...(systemPrompt === undefined ? {} : { systemPrompt }), mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
-    assert.equal(runtime.instructionKey, systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([process.cwd(), systemPrompt])));
+    assert.equal(runtime.compatibilityKey, systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([process.cwd(), systemPrompt])));
     await runtime.abort();
   });
 }
@@ -38,5 +38,5 @@ test("ACP persisted identity distinguishes workspaces with identical instruction
     new AcpRuntimeSession({ executable: "unused", cwd, model: "raw", systemPrompt: "same instructions", mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } }));
   t.after(() => Promise.all(runtimes.map((runtime) => runtime.abort())));
 
-  assert.notEqual(runtimes[0]!.instructionKey, runtimes[1]!.instructionKey);
+  assert.notEqual(runtimes[0]!.compatibilityKey, runtimes[1]!.compatibilityKey);
 });

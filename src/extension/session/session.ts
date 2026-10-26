@@ -90,11 +90,11 @@ export class LiveSession {
   public readonly id = randomUUID();
   public readonly piSessionId: string;
   public activeProcess: DriverSession | null = null;
-  public driverId: DriverId = "cli";
+  public driverId: DriverId | undefined;
   public activeMcpServer: BridgeIPC | null = null;
   public syncKey: string = "";
   public conversationId: string | undefined;
-  public instructionKey: string | undefined;
+  public compatibilityKey: string | undefined;
   public readonly resources = new SessionResources();
   private unsubscribeRuntimeEvents: (() => void) | null = null;
   private abortSignal: AbortSignal | null = null;
@@ -134,7 +134,7 @@ export class LiveSession {
     this.activeMcpServer = mcpServer ?? null;
     this.syncKey = syncKey;
     this.conversationId = conversationId;
-    this.instructionKey = process.instructionKey;
+    this.compatibilityKey = process.compatibilityKey;
     return true;
   }
 
@@ -179,8 +179,9 @@ export class LiveSession {
     this.activeMcpServer = null;
     this.syncKey = "";
     if (!options?.preserveConversation) {
+      this.driverId = undefined;
       this.conversationId = undefined;
-      this.instructionKey = undefined;
+      this.compatibilityKey = undefined;
     }
     this.clearAbortSignal();
     this.setRuntimeEventHandler(null);

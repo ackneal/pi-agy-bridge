@@ -487,3 +487,38 @@ describe("LiveSessionRegistry", () => {
     assert.equal(registry.get("pi-session-b"), undefined);
   });
 });
+
+for (const { driver, stage } of [
+  { driver: "cli", stage: "initial" },
+  { driver: "cli", stage: "attached" },
+  { driver: "acp", stage: "preserved" },
+  { driver: "acp", stage: "fully disposed" },
+] as const) {
+  it(`tracks conversation provenance: ${stage}`, async (t) => {
+    const session = new LiveSession("identity");
+    t.after(() => session.dispose());
+    const key = "a".repeat(64);
+    const process: DriverSession = {
+      driver, compatibilityKey: key, isRunning: true,
+      onRuntimeEvent: () => () => {}, formatContextUpdate: () => "",
+      submit: async () => {}, abort: async () => {},
+    };
+    if (stage !== "initial") session.setSession(process, "settings", undefined, "conversation");
+    if (stage === "preserved" || stage === "fully disposed") {
+      await session.dispose({ preserveConversation: true });
+      assert.equal(session.activeProcess, null);
+      assert.equal(session.driverId, driver);
+      assert.equal(session.conversationId, "conversation");
+      assert.equal(session.compatibilityKey, key);
+      // Repeated process-free preservation must not erase provenance.
+      await session.dispose({ preserveConversation: true });
+    }
+    if (stage === "fully disposed") await session.dispose();
+
+    const retained = stage === "attached" || stage === "preserved";
+    assert.equal(session.driverId, retained ? driver : undefined);
+    assert.equal(session.conversationId, retained ? "conversation" : undefined);
+    assert.equal(session.compatibilityKey, retained ? key : undefined);
+    assert.equal(session.activeProcess, stage === "attached" ? process : null);
+  });
+}

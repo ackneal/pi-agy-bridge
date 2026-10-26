@@ -29,7 +29,9 @@ export class CliDriver implements BridgeDriver {
   }
 
   async prepareSession(input: PrepareDriverInput) {
-    if (input.session.driverId !== this.id) await input.session.dispose({ preparationId: input.preparationId });
+    if (input.session.driverId !== undefined && input.session.driverId !== this.id) {
+      await input.session.dispose({ preparationId: input.preparationId });
+    }
     input.options?.signal?.throwIfAborted();
 
     const dependencies = {

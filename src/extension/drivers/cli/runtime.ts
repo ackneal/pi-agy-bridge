@@ -7,14 +7,14 @@ import type { DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts"
 
 /** CLI protocol and prompt policy stay outside the shared turn coordinator. */
 export class CliRuntimeSession extends AgyRuntime implements DriverSession {
-  readonly instructionKey: string | undefined;
+  readonly compatibilityKey: string | undefined;
   readonly driver = "cli" as const;
   private readonly allowedToolNames: ReadonlySet<string>;
   private readonly errorState: ConversationErrorState;
 
-  constructor(options: ConstructorParameters<typeof AgyRuntime>[0], allowedToolNames: ReadonlySet<string>, errorState: ConversationErrorState, instructionKey?: string) {
+  constructor(options: ConstructorParameters<typeof AgyRuntime>[0], allowedToolNames: ReadonlySet<string>, errorState: ConversationErrorState, compatibilityKey?: string) {
     super(options);
-    this.instructionKey = instructionKey;
+    this.compatibilityKey = compatibilityKey;
     this.allowedToolNames = allowedToolNames;
     this.errorState = errorState;
   }

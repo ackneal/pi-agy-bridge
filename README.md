@@ -89,7 +89,7 @@ Switching Antigravity models preserves the conversation. If tools are still runn
 
 After compaction, branching, a response from another provider, or a failed restore, the bridge starts a new conversation from Pi's current instructions and history. Your Pi session remains unchanged.
 
-ACP resolves Pi's current system instructions, including section updates and removals, and sends them with ACP-specific integration instructions through Antigravity's system-prompt append extension. The server must advertise support for this extension. Instruction changes rebuild the ACP conversation, including during a tool handoff; completed Pi tool results remain history and are not executed again. Saved ACP references without matching instruction metadata also rebuild. CLI instruction handling is unchanged.
+ACP resolves Pi's current system instructions, including section updates and removals, and sends them with ACP-specific integration instructions through Antigravity's system-prompt append extension. The server must advertise support for this extension. Instruction changes rebuild the ACP conversation, including during a tool handoff; completed Pi tool results remain history and are not executed again. Saved references must match the current workspace and, for ACP, the current instructions. CLI instruction handling is unchanged.
 
 ### Model Discovery
 
@@ -111,7 +111,7 @@ If a runtime or tool failure makes the conversation unsafe to reuse, the next re
 
 Run `/agy-bridge:doctor` in Pi for selected-backend diagnostics. CLI reports plugin status and queries quota on demand; a successful query confirms authentication. Backend capabilities differ; missing quota is not fabricated.
 
-- **ACP unavailable**: Check `acpPath`, `AGY_ACP_BIN`, and executable permissions. Missing/non-executable ACP or startup, authentication, and network failures never choose CLI. Fix ACP or explicitly run `/agy-bridge:driver cli`.
+- **ACP unavailable**: Check `AGY_ACP_BIN` and executable permissions. Missing/non-executable ACP or startup, authentication, and network failures never choose CLI. Fix ACP or explicitly run `/agy-bridge:driver cli`.
 - **Unauthenticated models**: Default ACP model entries or cached models may appear before login; their presence does not confirm authentication, connectivity, or request success. Run `/login` for the selected backend.
 - **Missing models**: Retry `/login` and `/model`, then inspect doctor output. For explicitly selected CLI, `agy models` checks availability directly.
 - **Sign-in failures**: Retry `/login`; if ACP requires unsupported terminal authentication, authenticate externally and retry. For CLI, sign in using `agy` in a terminal.

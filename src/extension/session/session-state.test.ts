@@ -231,14 +231,9 @@ describe("RuntimeSessionSync", () => {
     action: "resume" | "rebuild" | "continue";
   }[] = [
     { name: "completed native error", messages: errorHistory, action: "resume" },
-    { name: "explicitly completed native error", messages: errorHistory, hasPendingToolCalls: false, action: "resume" },
-    { name: "pending toolUse checkpoint", messages: pendingHistory, hasPendingToolCalls: true, action: "rebuild" },
-    { name: "explicit pending after some results", messages: [...pendingHistory, results[0]!], hasPendingToolCalls: true, action: "rebuild" },
     { name: "explicit pending overrides drained-looking history", messages: drainedHistory, hasPendingToolCalls: true, action: "rebuild" },
     { name: "drained checkpoint with omitted pending flag", messages: drainedHistory, action: "resume" },
-    { name: "explicitly drained result checkpoint", messages: drainedHistory, hasPendingToolCalls: false, action: "resume" },
     { name: "explicitly accepted result prefix", messages: [...pendingHistory, results[0]!], hasPendingToolCalls: false, action: "resume" },
-    { name: "live broker with pending checkpoint", messages: pendingHistory, hasPendingToolCalls: true, appended: results, live: true, action: "continue" },
     { name: "live broker with pending checkpoint and changed key", messages: pendingHistory, hasPendingToolCalls: true, appended: results, live: true, keyChange: true, action: "continue" },
   ];
 

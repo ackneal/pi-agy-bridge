@@ -68,7 +68,7 @@ for (const row of [
     if (row.persisted) {
       await store.set(id, {
         sessionId: original.conversationId!,
-        ...(!row.legacy ? { instructionKey: first.proc.instructionKey! } : {}),
+        ...(!row.legacy ? { compatibilityKey: first.proc.compatibilityKey! } : {}),
       }, [], undefined, driver.sessionVersion);
       await original.dispose();
       target = new LiveSession(id);
@@ -84,7 +84,7 @@ for (const row of [
     assert.equal(result.proc.options.cwd, path.resolve(requestedCwd));
     assert.equal(target.activeProcess, result.proc);
     assert.equal(target.activeMcpServer, result.mcpServer);
-    assert.equal(target.instructionKey, result.proc.instructionKey);
+    assert.equal(target.compatibilityKey, result.proc.compatibilityKey);
     assert.equal(result.reconstructContext, row.action === "rebuild");
     assert.equal(start.mock.callCount() - startsBefore, row.action === "continue" ? 0 : 1);
     if (row.action === "continue") {

@@ -172,7 +172,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
   const session = bridge.liveSessions.getOrCreate(sessionId);
   await bridge.runtimeSessionStore.set(sessionId, {
     sessionId: "stale-session-id",
-    instructionKey: fingerprintAcpSystemPrompt(JSON.stringify([tmpdir(), composeAcpSystemPrompt({ messages: [] })])),
+    compatibilityKey: fingerprintAcpSystemPrompt(JSON.stringify([tmpdir(), composeAcpSystemPrompt({ messages: [] })])),
   }, [], undefined, bridge.driver.sessionVersion);
   t.after(async () => {
     await bridge.liveSessions.disposeAll();

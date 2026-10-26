@@ -174,7 +174,7 @@ export class Turn {
 
     await store.set(session.piSessionId, {
       sessionId: session.conversationId,
-      ...(this.runtime!.proc.instructionKey !== undefined ? { instructionKey: this.runtime!.proc.instructionKey } : {}),
+      ...(this.runtime!.proc.compatibilityKey !== undefined ? { compatibilityKey: this.runtime!.proc.compatibilityKey } : {}),
       ...(this.runtime!.mcpServer.hasPendingCalls ? { hasPendingToolCalls: true } : {}),
     }, messages, loginEpoch, this.options.sessionVersion);
   }

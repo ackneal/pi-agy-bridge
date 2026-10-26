@@ -22,9 +22,9 @@ export async function prepareAcpRuntime(
   check();
   const requested = resolveAcpEffort(model, options);
   const systemPrompt = composeAcpSystemPrompt(context);
-  const instructionKey = fingerprintAcpSystemPrompt(JSON.stringify([connection.cwd, systemPrompt]));
+  const compatibilityKey = fingerprintAcpSystemPrompt(JSON.stringify([connection.cwd, systemPrompt]));
   const syncKey = calculateSyncKey(systemPrompt, tools.map((tool) => JSON.stringify(tool)), model.id, requested, "acp");
-  if (liveSession.driverId !== "acp") {
+  if (liveSession.driverId !== undefined && liveSession.driverId !== "acp") {
     await liveSession.dispose({ preparationId });
     check();
   }
@@ -32,7 +32,7 @@ export async function prepareAcpRuntime(
   check();
   const latest = [...context.messages].reverse().find((message) => message.role === "assistant");
   const decision = dependencies.sync.decide(liveSession, {
-    syncKey, instructionKey, messages: context.messages,
+    syncKey, compatibilityKey, messages: context.messages,
     ...(latest?.responseId ? { conversationId: latest.responseId } : {}),
     ...(checkpoint ? { checkpoint } : {}),
   });

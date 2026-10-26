@@ -13,7 +13,7 @@ export interface AgyConversationCheckpoint {
   fingerprint?: string;
   messageCount?: number;
   hasPendingToolCalls?: boolean;
-  instructionKey?: string;
+  compatibilityKey?: string;
 }
 
 export class RuntimeSessionStore {
@@ -42,7 +42,7 @@ export class RuntimeSessionStore {
     if (typeof entry.data.sessionId !== "string" || !entry.data.sessionId.trim()) return undefined;
     if (!soundHash(entry.data)) return undefined;
     if (entry.data.hasPendingToolCalls !== undefined && typeof entry.data.hasPendingToolCalls !== "boolean") return undefined;
-    if (entry.data.instructionKey !== undefined && (typeof entry.data.instructionKey !== "string" || !/^[a-f0-9]{64}$/.test(entry.data.instructionKey))) return undefined;
+    if (entry.data.compatibilityKey !== undefined && (typeof entry.data.compatibilityKey !== "string" || !/^[a-f0-9]{64}$/.test(entry.data.compatibilityKey))) return undefined;
 
     return {
       sessionId: entry.data.sessionId,
@@ -50,7 +50,7 @@ export class RuntimeSessionStore {
       fingerprint: entry.data.fingerprint as string,
       messageCount: entry.data.messageCount as number,
       ...(typeof entry.data.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: entry.data.hasPendingToolCalls } : {}),
-      ...(typeof entry.data.instructionKey === "string" ? { instructionKey: entry.data.instructionKey } : {}),
+      ...(typeof entry.data.compatibilityKey === "string" ? { compatibilityKey: entry.data.compatibilityKey } : {}),
     };
   }
 
@@ -66,7 +66,7 @@ export class RuntimeSessionStore {
     const fingerprint = fingerprintSerializedMessages(messages.map(serializeMessage));
     const messageCount = messages.length;
     const pendingMetadata = typeof checkpoint.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: checkpoint.hasPendingToolCalls } : {};
-    const instructionMetadata = checkpoint.instructionKey !== undefined ? { instructionKey: checkpoint.instructionKey } : {};
+    const compatibilityMetadata = checkpoint.compatibilityKey !== undefined ? { compatibilityKey: checkpoint.compatibilityKey } : {};
     sessionManager.appendCustomEntry(ENTRY_TYPE, {
       sessionId: checkpoint.sessionId,
       version,
@@ -74,13 +74,13 @@ export class RuntimeSessionStore {
       fingerprint,
       messageCount,
       ...pendingMetadata,
-      ...instructionMetadata,
+      ...compatibilityMetadata,
     });
 
     return {
       sessionId: checkpoint.sessionId, version, fingerprint, messageCount,
       ...pendingMetadata,
-      ...instructionMetadata,
+      ...compatibilityMetadata,
     };
   }
 
@@ -151,8 +151,9 @@ export type RuntimeSessionDecision =
   | { action: "rebuild" };
 
 export interface RuntimeSessionSyncInput {
+  /** Settings changes can resume a conversation or wait for pending tool calls. */
   syncKey: string;
-  instructionKey?: string;
+  compatibilityKey?: string;
   conversationId?: string;
   messages: readonly unknown[];
   checkpoint?: AgyConversationCheckpoint;
@@ -169,8 +170,8 @@ export class RuntimeSessionSync {
     const deadPendingRuntime = session.activeMcpServer?.hasPendingCalls && !session.activeProcess?.isRunning;
     const syncedCount = this.getSyncedMessageCount(session);
 
-    const liveInstructionsMatch = input.instructionKey === undefined || session.instructionKey === input.instructionKey;
-    if (liveInstructionsMatch && !deadPendingRuntime && this.matchesLiveSession(session, input, serializedMessages)) {
+    const liveCompatibilityMatches = input.compatibilityKey === undefined || session.compatibilityKey === input.compatibilityKey;
+    if (liveCompatibilityMatches && !deadPendingRuntime && this.matchesLiveSession(session, input, serializedMessages)) {
       if (session.activeProcess?.isRunning &&
         (session.syncKey === input.syncKey || session.activeMcpServer?.hasPendingCalls)) {
         return { action: "continue" };
@@ -189,7 +190,7 @@ export class RuntimeSessionSync {
       return { action: "resume", conversationId: checkpoint.sessionId };
     }
 
-    debugLog("session", "Rebuilding Antigravity CLI runtime instead of reusing", {
+    debugLog("session", "Rebuilding runtime instead of reusing", {
       syncKeyMatches: session.syncKey === input.syncKey,
       messageCount: input.messages.length,
       syncedMessageCount: syncedCount,
@@ -262,7 +263,7 @@ export class RuntimeSessionSync {
     serializedMessages: readonly string[]
   ): boolean {
     if (checkpoint.hasPendingToolCalls === true) return false;
-    if (input.instructionKey !== undefined && checkpoint.instructionKey !== input.instructionKey) return false;
+    if (input.compatibilityKey !== undefined && checkpoint.compatibilityKey !== input.compatibilityKey) return false;
 
     return (
       this.matchesConversationId(checkpoint.sessionId, input.conversationId) &&
