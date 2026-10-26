@@ -52,7 +52,7 @@ export class AcpDriver implements BridgeDriver {
   async doctor(input: DriverDiagnostics): Promise<string> {
     return [
       "Antigravity ACP bridge", "driver: acp", `authentication: ${input.authStatus}`,
-      `models: ${input.catalogModels.length}`, "quota: not reported by ACP", "offload recovery: unsupported (PR1)",
+      `models: ${input.catalogModels.length}`, "quota: unavailable via ACP", "offload recovery: unsupported (PR1)",
       ...[input.authError, input.discoveryError].filter((error) => error !== undefined).map((error) => `! ${error.message}`),
     ].join("\n");
   }
