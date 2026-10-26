@@ -188,7 +188,7 @@ test("doctor clears the recorded installation error after successful installatio
   await handler();
 
   const report = sendMessage.mock.calls[1]!.arguments[0].content;
-  assert.ok(report.includes(`✓ Plugin ${manifest.version}`));
+  assert.ok(report.includes(`✓ Antigravity CLI 1.2.14 (Plugin ${manifest.version})`));
   assert.doesNotMatch(report, /! plugin \(/);
   assert.match(report, /! usage \(/);
 });

@@ -1,7 +1,6 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { BridgeDriver, DriverDiagnostics, DriverFailure, PrepareDriverInput } from "../types.ts";
-import { collectDoctorReport } from "../../provider/doctor.ts";
-import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../../discovery/plugin-install.ts";
+import type { BridgeDriver, DriverFailure, PrepareDriverInput } from "../types.ts";
+import { ensureAgyPluginInstalled } from "../../discovery/plugin-install.ts";
 import { discoverAgyModels } from "../../discovery/models.ts";
 import { fetchAgyUsage } from "../../runtime/usage.ts";
 import { detectCliExecutable } from "../../runtime/version.ts";
@@ -15,7 +14,7 @@ export class CliDriver implements BridgeDriver {
   readonly sessionVersion = "cli:v1";
   readonly initialModels = [];
   readonly authentication;
-  private pluginError: DriverFailure | undefined;
+  pluginError: DriverFailure | undefined;
 
   constructor() {
     this.authentication = createCliAuthenticationBackend(() => this.detectExecutable());
@@ -50,13 +49,6 @@ export class CliDriver implements BridgeDriver {
 
   usage(signal: AbortSignal) {
     return fetchAgyUsage(this.detectExecutable(), signal);
-  }
-
-  doctor(input: DriverDiagnostics): Promise<string> {
-    return collectDoctorReport({
-      ...input, pluginError: this.pluginError, agyPath: this.detectExecutable(),
-      pluginDir: DEFAULT_AGY_PLUGIN_DIR,
-    });
   }
 
   async installPlugin(pluginDir: string): Promise<void> {

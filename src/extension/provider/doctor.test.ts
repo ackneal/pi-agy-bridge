@@ -18,11 +18,11 @@ test("doctor reads isolated fixtures without installing or discovering", async (
     await fs.writeFile(path.join(source, "plugin.json"), JSON.stringify({ name: "example", version: "2.0.0" }));
     await fs.writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\n[ "$*" = '--version' ] || exit 99\necho 'agy 1.2.0'\n`);
     await fs.chmod(executable, 0o755);
-    const options = { agyPath: executable, pluginDir: source };
+    const options = { driver: "cli" as const, executable, pluginDir: source };
     for (const row of [
-      { manifest: undefined, expected: /! Plugin example not installed/, followup: /Will install automatically/ },
-      { manifest: '{"name":"example","version":"2.0.0"}', expected: /✓ Plugin 2.0.0/, followup: /✓ MCP entrypoint found/ },
-      { manifest: '{"name":"example","version":"1.0.0"}', expected: /Plugin example 1.0.0 -> bundled 2.0.0/, followup: /Will update automatically/ },
+      { manifest: undefined, expected: /! Plugin example not installed/, followup: /Will install automatically on next Antigravity CLI use\./ },
+      { manifest: '{"name":"example","version":"2.0.0"}', expected: /  ✓ Antigravity CLI 1.2.0 \(Plugin 2.0.0\)\n/, followup: /✓ Pi MCP bridge entrypoint found/ },
+      { manifest: '{"name":"example","version":"1.0.0"}', expected: /Plugin example 1.0.0 -> bundled 2.0.0/, followup: /Will update automatically on next Antigravity CLI use\./ },
       { manifest: '{broken', expected: /✗ Plugin error/, followup: /Models: 0 cached/ },
       { manifest: '{}', expected: /✗ Plugin error/, followup: /Models: 0 cached/ },
     ]) {
@@ -34,12 +34,21 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       const report = await collectDoctorReport(options);
       assert.match(report, row.expected);
       assert.match(report, row.followup);
-      assert.match(report, /✓ Antigravity CLI 1.2.0\n/);
+      assert.match(report, /^agy-bridge doctor\n/);
+      assert.match(report, /  ✓ Antigravity CLI 1.2.0(?: \(Plugin 2.0.0\))?\n/);
+      assert.doesNotMatch(report, /  ✓ Plugin /);
       assert.doesNotMatch(report, /\(minimum /);
-      assert.match(report, /✓ MCP entrypoint/);
+      assert.match(report, /✓ Pi MCP bridge entrypoint/);
       if (row.manifest === undefined) await assert.rejects(fs.access(target));
       else assert.equal(await fs.readFile(path.join(target, "plugin.json"), "utf8"), row.manifest);
     }
+    const { DEFAULT_AGY_PLUGIN_DIR } = await import("../discovery/plugin-install.ts");
+    const bundled = JSON.parse(await fs.readFile(path.join(DEFAULT_AGY_PLUGIN_DIR, "plugin.json"), "utf8"));
+    const defaultReport = await collectDoctorReport({ driver: "cli", executable });
+    assert.ok(defaultReport.includes(`  ! Plugin ${bundled.name} not installed (bundled ${bundled.version})`));
+    assert.match(defaultReport, /Will install automatically on next Antigravity CLI use\./);
+    await assert.rejects(fs.access(path.join(home, ".gemini/config/plugins", bundled.name)));
+
     for (const row of [
       { catalogModels: undefined, models: undefined, expected: /! Models: 0 cached/ },
       { catalogModels: [], models: undefined, expected: /! Models: 0 cached/ },
@@ -63,7 +72,7 @@ test("doctor reads isolated fixtures without installing or discovering", async (
     }
     await fs.writeFile(path.join(source, "plugin.json"), '{}');
     const report = await collectDoctorReport({
-      ...options, agyPath: path.join(home, "missing"), models: [1, 2],
+      ...options, executable: path.join(home, "missing"), models: [1, 2],
       pluginError: { time: "2026-01-01T00:00:00Z", message: "install failed" },
       discoveryError: { time: "2026-01-02T00:00:00Z", message: "discovery failed" },
       authStatus: "unauthenticated",
@@ -79,7 +88,7 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       /✗ Plugin error/,
       /✓ Models: 2 configured/,
       /✓ Node /,
-      /✓ MCP entrypoint/,
+      /✓ Pi MCP bridge entrypoint/,
       /! Auth: unauthenticated/,
       /Quota remaining\n  Gemini 4 Argon  weekly 40%/,
       /Errors/,
@@ -89,6 +98,39 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       /! usage \(2026-01-04T00:00:00Z\): usage failed/,
     ]) assert.match(report, pattern);
     assert.ok((await fs.readFile(calls, "utf8")).trim().split("\n").every(call => call === "--version"));
+    for (const row of [
+      { name: "Build label", output: "Python 3.13.2\nBuild label: 1.4.1\n", runtime: "  ✓ Antigravity ACP 1.4.1" },
+      { name: "missing version", output: "Python 3.13.2\n", runtime: "  ✓ Antigravity ACP" },
+      { name: "empty version", output: "Build label:\n", runtime: "  ✓ Antigravity ACP" },
+    ]) {
+      await fs.writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\n[ "$#" -eq 1 ] && [ "$1" = '--version' ] || exit 99\nprintf '%s' '${row.output}'\n`);
+      await fs.writeFile(calls, "");
+
+      const acpReport = await collectDoctorReport({
+        driver: "acp",
+        executable,
+        models: [1, 2],
+        authStatus: "unauthenticated",
+        discoveryError: { time: "2026-01-02T00:00:00Z", message: "discovery failed" },
+        authError: { time: "2026-01-03T00:00:00Z", message: "login failed" },
+        usage: {
+          updatedAt: "2026-10-17T04:19:59Z",
+          groups: [{ name: "Gemini 4 Argon", buckets: [{ id: "argon", name: "Weekly", window: "weekly", remainingFraction: 0.4 }] }],
+        },
+      });
+
+      assert.match(acpReport, /^agy-bridge doctor\n\nRuntime\n/, row.name);
+      assert.ok(acpReport.split("\n").includes(row.runtime), row.name);
+      assert.match(acpReport, /  ✓ Node /, row.name);
+      assert.match(acpReport, /  ✓ Pi MCP bridge entrypoint found\n/, row.name);
+      assert.match(acpReport, /  ✓ Models: 2 configured\n  ! Auth: unauthenticated/, row.name);
+      assert.match(acpReport, /\n\nQuota remaining \(unavailable\)\n\nErrors\n  ! discovery \(2026-01-02T00:00:00Z\): discovery failed\n  ! authentication \(2026-01-03T00:00:00Z\): login failed$/, row.name);
+      assert.doesNotMatch(acpReport, /Antigravity CLI|Plugin|Gemini 4 Argon|Python/, row.name);
+      assert.equal(await fs.readFile(calls, "utf8"), "--version\n", row.name);
+      assert.equal(await fs.readFile(path.join(source, "plugin.json"), "utf8"), "{}");
+      assert.equal(await fs.readFile(path.join(target, "plugin.json"), "utf8"), "{}");
+    }
+
   } finally {
     if (previous === undefined) delete process.env.HOME;
     else process.env.HOME = previous;

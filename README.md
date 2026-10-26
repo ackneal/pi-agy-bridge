@@ -109,7 +109,7 @@ If a runtime or tool failure makes the conversation unsafe to reuse, the next re
 
 ## Troubleshooting
 
-Run `/agy-bridge:doctor` in Pi for selected-backend diagnostics. CLI reports plugin status and queries quota on demand; a successful query confirms authentication. Backend capabilities differ; missing quota is not fabricated.
+Run `/agy-bridge:doctor` in Pi for a shared report of the selected backend's version, Node, Pi MCP bridge entrypoint, models, and authentication. Version checks use `--version`; ACP omits the version if no build label is reported. CLI also reports plugin status and queries quota on demand; a successful query confirms authentication. ACP displays `Quota remaining (unavailable)`.
 
 - **ACP unavailable**: Check `AGY_ACP_BIN` and executable permissions. Missing/non-executable ACP or startup, authentication, and network failures never choose CLI. Fix ACP or explicitly run `/agy-bridge:driver cli`.
 - **Unauthenticated models**: Default ACP model entries or cached models may appear before login; their presence does not confirm authentication, connectivity, or request success. Run `/login` for the selected backend.

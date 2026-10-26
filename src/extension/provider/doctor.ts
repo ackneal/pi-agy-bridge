@@ -1,15 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readPluginManifest, resolveMcpEntrypoint } from "../discovery/plugin-install.ts";
+import { DEFAULT_AGY_PLUGIN_DIR, readPluginManifest, resolveMcpEntrypoint } from "../discovery/plugin-install.ts";
 import { formatDoctorQuotaLines, type AgyUsage } from "../runtime/usage.ts";
-import { resolveAgyExecutable, validateAgyVersion } from "../runtime/version.ts";
-
-import type { DriverFailure } from "../drivers/types.ts";
+import { validateAgyVersion } from "../runtime/version.ts";
+import { readAcpVersion } from "../drivers/acp/version.ts";
+import type { DriverFailure, DriverId } from "../drivers/types.ts";
 
 export interface DoctorOptions {
-  agyPath?: string | undefined;
-  pluginDir: string;
+  driver: DriverId;
+  executable?: string | undefined;
+  pluginDir?: string | undefined;
   models?: readonly unknown[] | undefined;
   catalogModels?: readonly unknown[] | undefined;
   pluginError?: DriverFailure | undefined;
@@ -24,52 +25,57 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Read-only checks; the only subprocess is Antigravity CLI --version. */
+/** Read-only checks; the only subprocess is the selected executable's --version. */
 export async function collectDoctorReport(options: DoctorOptions): Promise<string> {
-  const lines: string[] = ["agy-bridge doctor", "", "Runtime"];
+  const label = options.driver === "cli" ? "Antigravity CLI" : "Antigravity ACP";
+  let runtimeLine: string;
   try {
-    const executable = resolveAgyExecutable(options.agyPath);
-    try {
-      const { version } = await validateAgyVersion(executable);
-      lines.push(`  ✓ Antigravity CLI ${version}`);
-    } catch (error) {
-      lines.push(`  ✗ Antigravity CLI error (${executable}): ${message(error)}`);
-    }
+    if (!options.executable?.trim()) throw new Error("Executable not found");
+    const version = options.driver === "cli"
+      ? (await validateAgyVersion(options.executable)).version
+      : await readAcpVersion(options.executable);
+    runtimeLine = `  ✓ ${label}${version ? ` ${version}` : ""}`;
   } catch (error) {
-    lines.push(`  ✗ Antigravity CLI error: ${message(error)}`);
+    runtimeLine = `  ✗ ${label} error${options.executable ? ` (${options.executable})` : ""}: ${message(error)}`;
   }
 
-  try {
-    const source = await readPluginManifest(path.join(path.resolve(options.pluginDir), "plugin.json"));
-    if (!source) throw new Error(`Bundled plugin manifest not found: ${options.pluginDir}`);
-    const target = path.join(os.homedir(), ".gemini", "config", "plugins", source.name);
-    const installed = await readPluginManifest(path.join(target, "plugin.json"));
-    if (!installed) {
-      lines.push(
-        `  ! Plugin ${source.name} not installed (bundled ${source.version}) — ${target}`,
-        "    Will install automatically on next Antigravity CLI use."
-      );
-    } else if (installed.version === source.version) {
-      lines.push(`  ✓ Plugin ${installed.version}`);
-    } else {
-      lines.push(
-        `  ! Plugin ${source.name} ${installed.version} -> bundled ${source.version} — ${target}`,
-        "    Will update automatically on next Antigravity CLI use."
-      );
+  const pluginLines: string[] = [];
+  if (options.driver === "cli") {
+    const pluginDir = options.pluginDir ?? DEFAULT_AGY_PLUGIN_DIR;
+    try {
+      const source = await readPluginManifest(path.join(path.resolve(pluginDir), "plugin.json"));
+      if (!source) throw new Error(`Bundled plugin manifest not found: ${pluginDir}`);
+      const target = path.join(os.homedir(), ".gemini", "config", "plugins", source.name);
+      const installed = await readPluginManifest(path.join(target, "plugin.json"));
+      if (!installed) {
+        pluginLines.push(
+          `  ! Plugin ${source.name} not installed (bundled ${source.version}) — ${target}`,
+          "    Will install automatically on next Antigravity CLI use."
+        );
+      } else if (installed.version === source.version) {
+        runtimeLine += ` (Plugin ${installed.version})`;
+      } else {
+        pluginLines.push(
+          `  ! Plugin ${source.name} ${installed.version} -> bundled ${source.version} — ${target}`,
+          "    Will update automatically on next Antigravity CLI use."
+        );
+      }
+    } catch (error) {
+      pluginLines.push(`  ✗ Plugin error: ${message(error)}`);
     }
-  } catch (error) {
-    lines.push(`  ✗ Plugin error: ${message(error)}`);
   }
+
+  const lines = ["agy-bridge doctor", "", "Runtime", runtimeLine, ...pluginLines];
 
   try {
     const { nodePath, entrypointPath } = resolveMcpEntrypoint();
     for (const [label, file] of [
       [`Node ${process.version}`, nodePath],
-      ["MCP entrypoint", entrypointPath],
+      ["Pi MCP bridge entrypoint", entrypointPath],
     ] as const) {
       try {
         await fs.access(file);
-        lines.push(`  ✓ ${label}${label === "MCP entrypoint" ? " found" : ""}`);
+        lines.push(`  ✓ ${label}${label === "Pi MCP bridge entrypoint" ? " found" : ""}`);
       } catch (error) {
         lines.push(`  ✗ ${label} error (${file}): ${message(error)}`);
       }
@@ -95,7 +101,9 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
     lines.push("  ! Windows: Unix socket support is not verified.");
   }
 
-  lines.push(...formatDoctorQuotaLines(options.usage));
+  lines.push(...(options.driver === "cli"
+    ? formatDoctorQuotaLines(options.usage)
+    : ["", "Quota remaining (unavailable)"]));
 
   const failures = [
     ["plugin", options.pluginError],

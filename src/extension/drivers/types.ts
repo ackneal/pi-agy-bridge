@@ -26,15 +26,6 @@ export interface PrepareDriverInput {
   preparationId: symbol;
 }
 
-export interface DriverDiagnostics {
-  catalogModels: AnyModel[];
-  authStatus: "authenticated" | "unauthenticated" | "unknown";
-  authError: DriverFailure | undefined;
-  discoveryError: DriverFailure | undefined;
-  usage: AgyUsage | undefined;
-  usageError: DriverFailure | undefined;
-}
-
 export interface BridgeDriver {
   readonly id: DriverId;
   readonly label: string;
@@ -42,12 +33,12 @@ export interface BridgeDriver {
   readonly sessionVersion: string;
   readonly authentication: DriverAuthentication;
   readonly initialModels: readonly AnyModel[];
+  readonly pluginError?: DriverFailure | undefined;
   validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void;
   /** Returns the runtime already owned by input.session, whether reused or newly installed. */
   prepareSession(input: PrepareDriverInput): Promise<{ proc: DriverSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }>;
   discoverModels(signal: AbortSignal): Promise<AnyModel[]>;
   usage(signal: AbortSignal): Promise<AgyUsage | undefined>;
-  doctor(input: DriverDiagnostics): Promise<string>;
   detectExecutable(): string | undefined;
 }
 

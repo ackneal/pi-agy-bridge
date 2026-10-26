@@ -23,6 +23,7 @@ import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts"
 import { debugArtifact, debugLog } from "../shared/debug.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
+import { collectDoctorReport } from "./doctor.ts";
 
 export function streamAgyProvider(
   model: Model<any>,
@@ -240,7 +241,10 @@ export class Bridge {
         const usage = await this.refreshUsage(lifetime);
         if (lifetime.aborted) return;
 
-        const report = await this.driver.doctor({
+        const report = await collectDoctorReport({
+          driver: this.driver.id,
+          executable: this.driver.detectExecutable(),
+          pluginError: this.driver.pluginError,
           catalogModels: this.models,
           discoveryError: this.discoveryError,
           authStatus: this.authentication.status,

@@ -1,6 +1,6 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { AgyUsage } from "../../runtime/usage.ts";
-import type { BridgeDriver, DriverAuthentication, DriverDiagnostics, PrepareDriverInput } from "../types.ts";
+import type { BridgeDriver, DriverAuthentication, PrepareDriverInput } from "../types.ts";
 import { defaultModelCatalog } from "../../discovery/model-metadata.ts";
 import { createAcpAuthenticationBackend } from "./auth.ts";
 import { discoverAcpModels } from "./discovery.ts";
@@ -44,13 +44,5 @@ export class AcpDriver implements BridgeDriver {
 
   usage(_signal: AbortSignal): Promise<AgyUsage | undefined> {
     return Promise.resolve(undefined);
-  }
-
-  async doctor(input: DriverDiagnostics): Promise<string> {
-    return [
-      "Antigravity ACP bridge", "driver: acp", `authentication: ${input.authStatus}`,
-      `models: ${input.catalogModels.length}`, "quota: unavailable via ACP", "offload recovery: unsupported (PR1)",
-      ...[input.authError, input.discoveryError].filter((error) => error !== undefined).map((error) => `! ${error.message}`),
-    ].join("\n");
   }
 }
