@@ -32,8 +32,8 @@ for (const driver of ["cli", "acp"] as const) {
     const options = { env: { AGY_BRIDGE_LOGIN_EPOCH: "login-epoch" } };
 
     const preparing = driver === "cli"
-      ? prepareRuntime(model, { messages: [] }, [], options, undefined, dependencies, session, resolveModelAndEffort(model.id), preparationId)
-      : prepareAcpRuntime(model, { messages: [] }, [], options, { acpPath: process.execPath }, dependencies, session, preparationId);
+      ? prepareRuntime(model, { messages: [] }, [], options, process.cwd(), dependencies, session, resolveModelAndEffort(model.id), preparationId)
+      : prepareAcpRuntime(model, { messages: [] }, [], options, { executable: process.execPath, cwd: process.cwd() }, dependencies, session, preparationId);
     await assert.rejects(preparing, stopAfterRead);
 
     assert.deepEqual(reads, [[session.piSessionId, "login-epoch", version]]);

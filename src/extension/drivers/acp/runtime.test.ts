@@ -19,7 +19,7 @@ test("ACP runtime exposes native identity and starts stopped", async () => {
 for (const systemPrompt of [undefined, "", "Pi instructions"]) {
   test(`ACP runtime instruction identity: ${JSON.stringify(systemPrompt)}`, async () => {
     const runtime = new AcpRuntimeSession({ executable: "unused", cwd: process.cwd(), model: "raw-model-id", ...(systemPrompt === undefined ? {} : { systemPrompt }), mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
-    assert.equal(runtime.instructionKey, systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(systemPrompt));
+    assert.equal(runtime.instructionKey, systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([process.cwd(), systemPrompt])));
     await runtime.abort();
   });
 }
@@ -31,4 +31,12 @@ test("ACP context omits all system updates but preserves history", () => {
     { role: "system", content: "base", timestamp: 0 }, user,
     { role: "system", content: "update", timestamp: 1 }, result,
   ]), acpContext([user, result]));
+});
+
+test("ACP persisted identity distinguishes workspaces with identical instructions", async (t) => {
+  const runtimes = ["/workspace/one", "/workspace/two"].map((cwd) =>
+    new AcpRuntimeSession({ executable: "unused", cwd, model: "raw", systemPrompt: "same instructions", mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } }));
+  t.after(() => Promise.all(runtimes.map((runtime) => runtime.abort())));
+
+  assert.notEqual(runtimes[0]!.instructionKey, runtimes[1]!.instructionKey);
 });

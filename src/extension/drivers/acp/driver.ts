@@ -1,5 +1,4 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { BridgeConfig } from "../../shared/types.ts";
 import type { AgyUsage } from "../../runtime/usage.ts";
 import type { BridgeDriver, DriverAuthentication, DriverDiagnostics, PrepareDriverInput } from "../types.ts";
 import { defaultModelCatalog } from "../../discovery/model-metadata.ts";
@@ -15,11 +14,11 @@ export class AcpDriver implements BridgeDriver {
   readonly initialModels = defaultModelCatalog();
   readonly authentication: DriverAuthentication;
 
-  private readonly config: BridgeConfig | undefined;
+  private readonly getCwd: () => string;
 
-  constructor(config?: BridgeConfig) {
-    this.config = config;
-    const authentication = () => createAcpAuthenticationBackend(resolveAcpConnectionOptions(this.config));
+  constructor(getCwd: () => string = process.cwd) {
+    this.getCwd = getCwd;
+    const authentication = () => createAcpAuthenticationBackend(resolveAcpConnectionOptions(this.getCwd(), this.detectExecutable()));
     this.authentication = {
       label: this.label,
       probe: async (signal) => { await authentication().probe(signal); return true; },
@@ -28,7 +27,7 @@ export class AcpDriver implements BridgeDriver {
   }
 
   detectExecutable(): string | undefined {
-    return detectAcpExecutable(this.config?.acpPath);
+    return detectAcpExecutable();
   }
 
   validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void {
@@ -40,11 +39,11 @@ export class AcpDriver implements BridgeDriver {
     input.options?.signal?.throwIfAborted();
 
     const dependencies = { store: input.store, sync: input.sync, sessionVersion: this.sessionVersion };
-    return prepareAcpRuntime(input.model, input.context, input.tools, input.options, this.config, dependencies, input.session, input.preparationId);
+    return prepareAcpRuntime(input.model, input.context, input.tools, input.options, resolveAcpConnectionOptions(input.cwd, this.detectExecutable()), dependencies, input.session, input.preparationId);
   }
 
   discoverModels(signal: AbortSignal) {
-    return discoverAcpModels(resolveAcpConnectionOptions(this.config), signal);
+    return discoverAcpModels(resolveAcpConnectionOptions(this.getCwd(), this.detectExecutable()), signal);
   }
 
   usage(_signal: AbortSignal): Promise<AgyUsage | undefined> {

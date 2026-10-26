@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -6,6 +7,7 @@ import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { AgyRuntime, type AgyEventSource } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { DEFAULT_AGY_PLUGIN_DIR } from "../discovery/plugin-install.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { resolveModelAndEffort } from "../drivers/cli/session.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
@@ -13,8 +15,8 @@ import { PiRuntimeOutput } from "./output.ts";
 import { RuntimeSessionSync, type AgyConversationCheckpoint } from "../session/session-state.ts";
 import { LiveSession } from "../session/session.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
-import { Bridge, registerAgyProvider, streamAgyProvider } from "./provider.ts";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { Bridge, streamAgyProvider } from "./provider.ts";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -102,7 +104,7 @@ const fixedEffortCases = [
 
 for (const row of fixedEffortCases) {
   test(row.name, async (t) => {
-    const bridge = new Bridge({} as ExtensionAPI, { driver: "cli" });
+    const bridge = new Bridge({} as ExtensionAPI, new CliDriver());
     const runtimeLookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
       throw new Error("Runtime preparation must not begin");
     });
@@ -110,7 +112,7 @@ for (const row of fixedEffortCases) {
 
     const message = await streamAgyProvider(model, { messages: [], tools: [] }, {
       sessionId: "validation-test", ...row.options,
-    }, undefined, bridge).result();
+    }, bridge).result();
 
     assert.equal(message.stopReason, "error");
     assert.equal(message.errorMessage, row.error);
@@ -133,7 +135,7 @@ test("doctor reports installation errors without starting a model turn", async (
     sendMessage,
   } as unknown as ExtensionAPI;
   const pluginDir = path.join(directory, "missing-plugin");
-  const bridge = new Bridge(pi, { driver: "cli" as const, models: [], agyPath: "__invalid_binary_name__", pluginDir });
+  const bridge = new Bridge(pi, new CliDriver());
   bridge.start();
   assert.ok(bridge.driver instanceof CliDriver);
   await assert.rejects(bridge.driver.installPlugin(pluginDir), /manifest not found/);
@@ -159,9 +161,8 @@ test("doctor clears the recorded installation error after successful installatio
     else process.env.HOME = originalHome;
     await rm(home, { recursive: true, force: true });
   });
-  const pluginDir = path.join(home, "source");
-  await mkdir(pluginDir);
-  await writeFile(path.join(pluginDir, "plugin.json"), JSON.stringify({ name: "doctor-test", version: "1.0.0" }));
+  const pluginDir = DEFAULT_AGY_PLUGIN_DIR;
+  const manifest: { version: string } = JSON.parse(await readFile(path.join(pluginDir, "plugin.json"), "utf8"));
   const agyPath = path.join(home, "agy");
   await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.2.14; else echo "install denied" >&2; exit 7; fi\n', { mode: 0o755 });
   let handler: (() => Promise<void>) | undefined;
@@ -172,7 +173,8 @@ test("doctor clears the recorded installation error after successful installatio
       if (name === "agy-bridge:doctor") handler = command.handler;
     },
   } as unknown as ExtensionAPI;
-  const bridge = new Bridge(pi, { driver: "cli" as const, models: [], agyPath, pluginDir });
+  const bridge = new Bridge(pi, new CliDriver());
+  t.mock.method(bridge.driver, "detectExecutable", () => agyPath);
   bridge.start();
   assert.ok(bridge.driver instanceof CliDriver);
   await assert.rejects(bridge.driver.installPlugin(pluginDir), /install denied/);
@@ -185,7 +187,7 @@ test("doctor clears the recorded installation error after successful installatio
   await handler();
 
   const report = sendMessage.mock.calls[1]!.arguments[0].content;
-  assert.match(report, /✓ Plugin 1\.0\.0/);
+  assert.ok(report.includes(`✓ Plugin ${manifest.version}`));
   assert.doesNotMatch(report, /! plugin \(/);
   assert.match(report, /! usage \(/);
 });
@@ -215,7 +217,7 @@ test("registers the Antigravity CLI provider and session lifecycle without start
     },
   } as unknown as ExtensionAPI;
 
-  registerAgyProvider(pi, { driver: "cli" as const, agyPath: "__invalid_binary_name__" });
+  new Bridge(pi, new CliDriver()).start();
 
   assert.ok(commands.has("agy-bridge:doctor"));
   assert.ok(provider);
@@ -246,25 +248,6 @@ test("registers the Antigravity CLI provider and session lifecycle without start
   assert.equal(runtimeStart.mock.callCount(), 0);
 });
 
-test("explicit Antigravity CLI models are native static models preserving configured fields", () => {
-  let provider: Provider | undefined;
-  const configured = {
-    id: "custom", name: "Custom", reasoning: true, input: ["text"] as ("text" | "image")[],
-    contextWindow: 12345, maxTokens: 678,
-    cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
-  };
-  registerAgyProvider({
-    on: () => {}, registerCommand: () => {},
-    registerProvider: (registered: Provider) => { provider = registered; },
-  } as unknown as ExtensionAPI, { driver: "cli", models: [configured], agyPath: "__invalid_binary_name__" });
-
-  assert.ok(provider);
-  assert.equal(provider.refreshModels, undefined);
-  assert.deepEqual(provider.getModels(), [{
-    ...configured, api: "agy", provider: "agy", baseUrl: "agy", type: "chat",
-  }]);
-});
-
 async function createRuntimeFixture(t: TestContext) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-provider-test-"));
   let bridge: Bridge | undefined;
@@ -277,16 +260,17 @@ async function createRuntimeFixture(t: TestContext) {
     }
   });
 
-  const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
-  await writeFile(config.agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.2.14; else exit 1; fi\n', { mode: 0o755 });
+  const agyPath = path.join(directory, "agy");
+  t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+  await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.2.14; else exit 1; fi\n', { mode: 0o755 });
   const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
-  let runtimeBridge = new Bridge(pi, config);
+  let runtimeBridge = new Bridge(pi, new CliDriver());
   bridge = runtimeBridge;
   const manager = SessionManager.inMemory("/workspace");
   const sessionId = runtimeBridge.piContextAdapter.bind(manager);
   const session = runtimeBridge.liveSessions.getOrCreate(sessionId);
   const epoch = "test-login";
-  await runtimeBridge.runtimeSessionStore.set(sessionId, { sessionId: "conversation-1" }, [], epoch, runtimeBridge.driver.sessionVersion);
+  await runtimeBridge.runtimeSessionStore.set(sessionId, { sessionId: "conversation-1", instructionKey: createHash("sha256").update(path.resolve("/workspace")).digest("hex") }, [], epoch, runtimeBridge.driver.sessionVersion);
 
   t.mock.method(BridgeIPC.prototype, "start", async () => {});
   t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");
@@ -332,7 +316,7 @@ async function createRuntimeFixture(t: TestContext) {
 
     const message = await streamAgyProvider(model, context, {
       sessionId, env: { AGY_BRIDGE_LOGIN_EPOCH: epoch }, ...(signal ? { signal } : {}), ...options,
-    }, config, runtimeBridge).result();
+    }, runtimeBridge).result();
 
     manager.appendMessage(message);
     return message;
@@ -340,7 +324,7 @@ async function createRuntimeFixture(t: TestContext) {
 
   const restartBridge = async () => {
     await runtimeBridge.liveSessions.disposeAll();
-    runtimeBridge = new Bridge(pi, config);
+    runtimeBridge = new Bridge(pi, new CliDriver());
     bridge = runtimeBridge;
     assert.equal(runtimeBridge.piContextAdapter.bind(manager), sessionId);
     return { bridge: runtimeBridge, session: runtimeBridge.liveSessions.getOrCreate(sessionId) };
@@ -1085,7 +1069,7 @@ for (const row of [
         observed.push(payload);
         return row.rewrite === undefined ? undefined : { prompt: row.rewrite };
       },
-    }, undefined, bridge).result();
+    }, bridge).result();
 
     assert.deepEqual(observed, [{ prompt: continuation }]);
     assert.equal(processes.length, 1, "reuse the completed conversation");

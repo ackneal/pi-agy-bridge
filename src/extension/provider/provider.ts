@@ -21,7 +21,6 @@ import type { AgyUsage } from "../runtime/usage.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
 import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
-import type { BridgeConfig } from "../shared/types.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
 
@@ -29,7 +28,6 @@ export function streamAgyProvider(
   model: Model<any>,
   context: Context,
   options: SimpleStreamOptions | undefined,
-  config: BridgeConfig | undefined,
   bridge: Bridge
 ): AssistantMessageEventStream {
   debugArtifact("provider-context", { model: model.id, sessionId: options?.sessionId, context });
@@ -58,7 +56,6 @@ export function streamAgyProvider(
   }
 
   try {
-    if (config?.driver !== undefined && config.driver !== bridge.driver.id) throw new Error("A provider instance cannot switch drivers per request");
     bridge.driver.validateSelection(model, options);
   } catch (error) {
     adapter.handleTermination("error", error instanceof Error ? error.message : String(error));
@@ -83,6 +80,7 @@ export function streamAgyProvider(
     try {
       const runtime = await bridge.driver.prepareSession({
         model, context, tools, options, session: liveSession, preparationId,
+        cwd: bridge.getCwd(piSessionId),
         store: bridge.runtimeSessionStore, sync: bridge.runtimeSessionSync,
       });
       const mcpServer = runtime.mcpServer;
@@ -131,7 +129,7 @@ export function streamAgyProvider(
 
 export class Bridge {
   private readonly pi: ExtensionAPI;
-  private config: BridgeConfig | undefined;
+  private sessionManager: ExtensionContext["sessionManager"] | undefined;
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private discoveryError: DriverFailure | undefined;
@@ -147,10 +145,9 @@ export class Bridge {
   public readonly piContextAdapter = new PiContextAdapter();
   public readonly runtimeSessionStore = new RuntimeSessionStore(this.piContextAdapter);
 
-  constructor(pi: ExtensionAPI, config?: BridgeConfig) {
+  constructor(pi: ExtensionAPI, driver?: BridgeDriver) {
     this.pi = pi;
-    this.config = config;
-    this.driver = createBridgeDriver(config);
+    this.driver = driver ?? createBridgeDriver("acp", () => this.getCwd());
     this.authentication = new AgyAuthentication(this.driver.authentication, async () => {
       this.runtimeLifetime.abort(new Error(`${this.driver.label} login changed the bridge session`));
       this.usageRefresh = undefined;
@@ -202,11 +199,10 @@ export class Bridge {
     this.lifetime.signal.throwIfAborted();
     if (this.driver.id === driverId) return;
 
-    const config = { ...this.config, driver: driverId };
-    const driver = createBridgeDriver(config);
+    const driver = createBridgeDriver(driverId, () => this.getCwd());
     if (!driver.detectExecutable()) throw new Error(`${driver.label} executable not found`);
     const lifetime = this.runtimeLifetime.signal;
-    const models = config.models ?? await driver.discoverModels(lifetime);
+    const models = await driver.discoverModels(lifetime);
     lifetime.throwIfAborted();
 
     this.runtimeLifetime.abort(new Error("Antigravity bridge driver changed"));
@@ -214,7 +210,6 @@ export class Bridge {
     this.lifetime.signal.throwIfAborted();
     if (this.runtimeLifetime.signal !== lifetime) throw new Error("Antigravity driver switch was superseded");
 
-    this.config = config;
     this.driver = driver;
     this.authentication.setBackend(driver.authentication);
     this.runtimeLifetime = new AbortController();
@@ -227,6 +222,11 @@ export class Bridge {
     await modelRegistry?.refresh({ providers: ["agy"], allowNetwork: false });
 
     debugLog("provider", `Switched bridge driver to: ${this.driver.label} (${driverId})`);
+  }
+
+  public getCwd(sessionId?: string): string {
+    const manager = sessionId ? this.piContextAdapter.getSessionManager(sessionId) : this.sessionManager;
+    return manager?.getCwd() ?? process.cwd();
   }
 
   public getTools(context: Context): Tool[] {
@@ -270,8 +270,8 @@ export class Bridge {
       handler: async (args, ctx) => {
         const target = args?.trim().toLowerCase();
         if (!target) {
-          const acpPath = createBridgeDriver({ ...this.config, driver: "acp" }).detectExecutable();
-          const cliPath = createBridgeDriver({ ...this.config, driver: "cli" }).detectExecutable();
+          const acpPath = createBridgeDriver("acp").detectExecutable();
+          const cliPath = createBridgeDriver("cli").detectExecutable();
           const status = [
             `Current driver: **${this.driver.label}** (${this.driver.id})`,
             "Default: ACP. Driver changes are explicit; automatic fallback is disabled.",
@@ -327,6 +327,7 @@ export class Bridge {
     });
 
     this.pi.on("session_start", (event, ctx) => {
+      this.sessionManager = ctx.sessionManager;
       this.sessionIds.add(this.piContextAdapter.bind(ctx.sessionManager));
       const lifetime = this.runtimeLifetime.signal;
       const autoConfigure = event.reason === "startup" && !this.startupAuthenticationStarted;
@@ -335,7 +336,7 @@ export class Bridge {
       void (async () => {
         if (autoConfigure) {
           try {
-            const authPath = this.config?.authPath ?? path.join(getAgentDir(), "auth.json");
+            const authPath = path.join(getAgentDir(), "auth.json");
             await autoConfigureAgyAuthentication(this.authentication, authPath, lifetime);
           } catch (error) {
             debugLog("auth", `${this.driver.label} startup auto-configuration skipped:`, error);
@@ -356,15 +357,16 @@ export class Bridge {
       this.runtimeLifetime.abort(new Error(`${this.driver.label} bridge session ended`));
       await this.liveSessions.disposeAll();
       this.piContextAdapter.clear();
+      this.sessionManager = undefined;
       this.sessionIds.clear();
     });
 
     this.registerProvider();
   }
 
-  private registerProvider(models?: readonly AnyModel[] | NonNullable<BridgeConfig["models"]>): void {
+  private registerProvider(models?: readonly AnyModel[]): void {
     const driver = this.driver;
-    this.models = (this.config?.models ?? models ?? driver.initialModels).map((model) => ({
+    this.models = (models ?? driver.initialModels).map((model) => ({
       ...model,
       provider: "agy",
       api: model.api ?? "agy",
@@ -383,7 +385,7 @@ export class Bridge {
       const signal = options?.signal
         ? AbortSignal.any([options.signal, this.runtimeLifetime.signal])
         : this.runtimeLifetime.signal;
-      return streamAgyProvider(model, context, { ...options, env, signal }, this.config, this);
+      return streamAgyProvider(model, context, { ...options, env, signal }, this);
     };
 
     this.pi.registerProvider({
@@ -395,50 +397,45 @@ export class Bridge {
       getAllModels: () => this.models,
       filterModels: (catalog, credential) => isAgyBridgeEnabled(credential) ? catalog : [],
       filterAllModels: (catalog, credential) => isAgyBridgeEnabled(credential) ? catalog : [],
-      ...(this.config?.models ? {} : {
-        refreshModels: async (context) => {
-          const signal = AbortSignal.any([context.signal, this.runtimeLifetime.signal]);
-          if (signal.aborted || driver !== this.driver) return;
+      refreshModels: async (context) => {
+        const signal = AbortSignal.any([context.signal, this.runtimeLifetime.signal]);
+        if (signal.aborted || driver !== this.driver) return;
 
-          if (context.stored && models === undefined) {
-            const restored = restoreStoredAgyModels(context.stored.models);
-            if (restored.length > 0) {
-              const accepted = await context.publish({ update: () => { if (!signal.aborted) this.models = restored; } });
-              if (!accepted) return;
-            }
+        if (context.stored && models === undefined) {
+          const restored = restoreStoredAgyModels(context.stored.models);
+          if (restored.length > 0) {
+            const accepted = await context.publish({ update: () => { if (!signal.aborted) this.models = restored; } });
+            if (!accepted) return;
           }
-          if (!context.allowNetwork || signal.aborted) return;
+        }
+        if (!context.allowNetwork || signal.aborted) return;
 
-          try {
-            const discovered = await driver.discoverModels(signal);
-            if (signal.aborted) return;
-            await context.publish({
-              persist: { models: discovered },
-              update: () => {
-                if (signal.aborted) return;
-                this.models = discovered;
-                this.discoveryError = undefined;
-              },
-            });
-          } catch (error) {
-            if (signal.aborted) throw error;
-            this.discoveryError = {
-              time: new Date().toISOString(),
-              message: error instanceof Error ? error.message : String(error),
-            };
-            debugLog("models", "Model refresh failed; retaining cached models:", error);
-          }
-        },
-      }),
+        try {
+          const discovered = await driver.discoverModels(signal);
+          if (signal.aborted) return;
+          await context.publish({
+            persist: { models: discovered },
+            update: () => {
+              if (signal.aborted) return;
+              this.models = discovered;
+              this.discoveryError = undefined;
+            },
+          });
+        } catch (error) {
+          if (signal.aborted) throw error;
+          this.discoveryError = {
+            time: new Date().toISOString(),
+            message: error instanceof Error ? error.message : String(error),
+          };
+          debugLog("models", "Model refresh failed; retaining cached models:", error);
+        }
+      },
       stream: (model, context, options) => stream(model, context, options as SimpleStreamOptions),
       streamSimple: stream,
     });
   }
 }
 
-export function registerAgyProvider(
-  pi: ExtensionAPI,
-  config?: BridgeConfig
-): void {
-  new Bridge(pi, config).start();
+export function registerAgyProvider(pi: ExtensionAPI): void {
+  new Bridge(pi).start();
 }

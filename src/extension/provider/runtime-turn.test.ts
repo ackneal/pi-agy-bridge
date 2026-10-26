@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -35,8 +36,8 @@ for (const { decision, incremental, payload } of cases) {
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const agyPath = path.join(directory, "agy");
-    const config = { driver: "cli" as const, agyPath, pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new Bridge(pi, config);
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -115,7 +116,7 @@ for (const { decision, incremental, payload } of cases) {
       sessionId: "test-turn",
       ...(payload ? { onPayload } : {}),
     };
-    for await (const event of streamAgyProvider(model, context, options, config, bridge)) {
+    for await (const event of streamAgyProvider(model, context, options, bridge)) {
       events.push(event);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -195,8 +196,9 @@ for (const row of invalidBatchCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new Bridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -205,7 +207,7 @@ for (const row of invalidBatchCases) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
     const send = t.mock.method(AgyRuntime.prototype, "send", async () => {});
@@ -257,7 +259,7 @@ for (const row of invalidBatchCases) {
     } as Model<any>;
 
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId }, config, bridge)) events.push(event);
+    for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     const terminal = events.at(-1);
@@ -313,8 +315,9 @@ for (const row of continueCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new Bridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -323,7 +326,7 @@ for (const row of continueCases) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
     const controller = new AbortController();
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
@@ -407,7 +410,7 @@ for (const row of continueCases) {
           return { prompt: "must not be sent" };
         },
       } : {}),
-    }, config, bridge)) {
+    }, bridge)) {
       events.push(event);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -486,8 +489,9 @@ for (const row of pendingTerminalCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new Bridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -496,7 +500,7 @@ for (const row of pendingTerminalCases) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
     const send = t.mock.method(AgyRuntime.prototype, "send", async () => {});
@@ -546,7 +550,7 @@ for (const row of pendingTerminalCases) {
     const events: AssistantMessageEvent[] = [];
     for await (const event of streamAgyProvider(model, context, {
       sessionId, env: { AGY_BRIDGE_LOGIN_EPOCH: epoch },
-    }, config, bridge)) events.push(event);
+    }, bridge)) events.push(event);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     const terminal = events.at(-1);
@@ -610,8 +614,9 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new Bridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -620,10 +625,10 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
     bridge.start();
     const session = bridge.liveSessions.getOrCreate("mixed-pending");
-    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {});
+    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {}, createHash("sha256").update(process.cwd()).digest("hex"));
     const oldMcp = new BridgeIPC([], session.id, session.resources);
     const model = {
       id: "test-model", name: "Test model", api: "agy", provider: "agy",
@@ -679,7 +684,7 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     const persist = t.mock.method(bridge.runtimeSessionStore, "set", async () => {});
 
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId: session.piSessionId }, config, bridge)) events.push(event);
+    for await (const event of streamAgyProvider(model, context, { sessionId: session.piSessionId }, bridge)) events.push(event);
     assert.equal(events.some((event) => event.type === "error"), false);
     const terminal = events.at(-1);
     assert.ok(terminal?.type === "done");
@@ -725,8 +730,9 @@ for (const conversionException of [false, true]) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new Bridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -735,7 +741,7 @@ for (const conversionException of [false, true]) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
     t.mock.method(AgyRuntime.prototype, "onEvent", () => () => {});
@@ -798,7 +804,7 @@ for (const conversionException of [false, true]) {
       contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId }, config, bridge)) events.push(event);
+    for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(order, ["resolve", "persist", "install", "persist"]);
     const delivered = await oldResult;

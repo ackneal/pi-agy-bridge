@@ -1,3 +1,5 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
+import { AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
@@ -10,7 +12,7 @@ import type { Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
 
-async function executableConfig(t: TestContext) {
+async function mockExecutables(t: TestContext) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-switch-executables-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const agyPath = path.join(directory, "agy");
@@ -25,7 +27,8 @@ async function executableConfig(t: TestContext) {
       }],
     };
   });
-  return { agyPath, acpPath: process.execPath, acpCwd: directory };
+  t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+  t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
 }
 
 for (const scenario of [
@@ -42,7 +45,8 @@ for (const scenario of [
       },
       registerProvider: (provider: Provider) => { registrations.push(provider); },
     } as unknown as ExtensionAPI;
-    const bridge = new Bridge(pi, { driver: scenario.from, ...await executableConfig(t) });
+    await mockExecutables(t);
+    const bridge = new Bridge(pi, scenario.from === "cli" ? new CliDriver() : new AcpDriver());
     t.after(() => bridge.liveSessions.disposeAll());
     bridge.start();
     const oldProvider = registrations[0]!;
@@ -100,7 +104,8 @@ for (const from of ["cli", "acp"] as const) {
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
     } as unknown as ExtensionAPI;
-    const bridge = new Bridge(pi, { driver: from, ...await executableConfig(t) });
+    await mockExecutables(t);
+    const bridge = new Bridge(pi, from === "cli" ? new CliDriver() : new AcpDriver());
     t.after(() => bridge.liveSessions.disposeAll());
     bridge.start();
     const target = from === "acp" ? "cli" : "acp";
@@ -120,7 +125,7 @@ for (const outcome of ["success", "failure"] as const) {
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
     } as unknown as ExtensionAPI;
-    const bridge = new Bridge(pi, { driver: "cli", agyPath: process.execPath });
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(() => bridge.liveSessions.disposeAll());
     bridge.start();
     t.mock.method(bridge.driver.authentication, "login", async () => {
@@ -144,21 +149,31 @@ for (const outcome of ["success", "failure"] as const) {
 }
 
 test("shutdown during driver disposal cannot register a new provider", async (t) => {
+  t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
+  t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
   let shutdown!: () => Promise<void>;
   let registrations = 0;
   const bridge = new Bridge({
     on: (event: string, handler: () => Promise<void>) => { if (event === "session_shutdown") shutdown = handler; },
     registerCommand: () => {}, registerProvider: () => { registrations++; },
-  } as unknown as ExtensionAPI, { driver: "cli", models: [], acpPath: process.execPath });
+  } as unknown as ExtensionAPI, new CliDriver());
   bridge.start();
   let resume!: () => void;
   const gate = new Promise<void>((resolve) => { resume = resolve; });
   t.after(resume);
+  let entered!: () => void;
+  const disposing = new Promise<void>((resolve) => { entered = resolve; });
   let disposals = 0;
-  t.mock.method(bridge.liveSessions, "disposeAll", async () => { if (++disposals === 1) await gate; });
+  t.mock.method(bridge.liveSessions, "disposeAll", async () => {
+    if (++disposals === 1) {
+      entered();
+      await gate;
+    }
+  });
   const switching = bridge.switchDriver("acp");
   const rejected = assert.rejects(switching, /bridge session ended/);
 
+  await disposing;
   await shutdown();
   resume();
   await rejected;
@@ -178,7 +193,8 @@ test("driver switch replaces models in the native Pi registry", async (t) => {
     on: () => {}, registerCommand: () => {},
     registerProvider: runtime.registerNativeProvider.bind(runtime),
   } as unknown as ExtensionAPI;
-  const bridge = new Bridge(pi, { driver: "acp", ...await executableConfig(t) });
+  await mockExecutables(t);
+  const bridge = new Bridge(pi);
   t.after(() => bridge.liveSessions.disposeAll());
   bridge.start();
   await runtime.refresh({ providers: ["agy"], allowNetwork: false });

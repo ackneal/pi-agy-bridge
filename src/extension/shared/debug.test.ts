@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { debugArtifact, debugLog, setDebugOverride } from "./debug.ts";
+import { debugArtifact, debugLog } from "./debug.ts";
 
 test("debug logs use the Antigravity CLI label", (t) => {
   const write = t.mock.method(process.stderr, "write", () => true);
@@ -30,7 +30,6 @@ test("diagnostic artifacts are debug-only and private", () => {
   const previousDebug = process.env["AGY_BRIDGE_DEBUG"];
   const previousDirectory = process.env["AGY_BRIDGE_DEBUG_DIR"];
   process.env["AGY_BRIDGE_DEBUG_DIR"] = directory;
-  setDebugOverride(false);
 
   try {
     for (const row of [

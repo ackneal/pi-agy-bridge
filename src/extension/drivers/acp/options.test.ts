@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { detectAcpExecutable } from "./options.ts";
+import { detectAcpExecutable, resolveAcpConnectionOptions } from "./options.ts";
 
 const local = ".local/bin/agy_acp_server";
 const par = ".local/opt/agy-acp/v1/agy_acp_server.par";
@@ -62,5 +62,33 @@ for (const row of rows) {
     const result = detectAcpExecutable(row.custom ? `~/${row.custom}` : undefined);
 
     assert.equal(result, row.expected ? path.join(home, row.expected) : undefined);
+  });
+}
+
+for (const source of ["explicit", "environment"] as const) {
+  test(`relative ACP ${source} path is anchored before changing workspace`, (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acp-relative-path-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "agy_acp_server");
+    fs.writeFileSync(executable, "not a program\n", { mode: 0o700 });
+    const relative = path.relative(process.cwd(), executable);
+    const previous = process.env.AGY_ACP_BIN;
+    t.after(() => {
+      if (previous === undefined) delete process.env.AGY_ACP_BIN;
+      else process.env.AGY_ACP_BIN = previous;
+    });
+    if (source === "environment") process.env.AGY_ACP_BIN = relative;
+
+    assert.equal(detectAcpExecutable(source === "explicit" ? relative : undefined), executable);
+  });
+}
+
+for (const executable of [undefined, "", "  ", "/driver/owned/acp"]) {
+  test(`connection options use only the supplied executable: ${JSON.stringify(executable)}`, () => {
+    if (!executable?.trim()) {
+      assert.throws(() => resolveAcpConnectionOptions("/workspace", executable), /executable not found/);
+      return;
+    }
+    assert.deepEqual(resolveAcpConnectionOptions("/workspace", executable), { cwd: path.resolve("/workspace"), executable });
   });
 }

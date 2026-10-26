@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -230,15 +231,16 @@ for (const { name, arrange, expected } of cases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new Bridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
 
     t.after(async () => {
       try { await bridge.liveSessions.disposeAll(); }
       finally { t.mock.restoreAll(); await rm(directory, { recursive: true, force: true }); }
     });
 
-    await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
     const manager = SessionManager.inMemory(directory);
     const sessionId = bridge.piContextAdapter.bind(manager);
     const session = bridge.liveSessions.getOrCreate(sessionId);
@@ -256,13 +258,14 @@ for (const { name, arrange, expected } of cases) {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     };
     const prefix: Context["messages"] = [{ role: "user", content: "original request", timestamp: 1 }, assistant];
-    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: gemini.id }, new Set(), {});
+    const instructionKey = createHash("sha256").update(path.resolve(directory)).digest("hex");
+    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: gemini.id }, new Set(), {}, instructionKey);
     const oldMcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(oldProc, calculateSyncKey("Rules", [], gemini.id, "", "pi-bridge"), oldMcp, "same-conversation");
     const terminalHandle = session.resources.terminals.bind("pi-terminal");
     bridge.runtimeSessionSync.record(session, prefix);
     assistant.responseId = arrange.conversationId;
-    if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { sessionId: arrange.conversationId }, prefix, undefined, bridge.driver.sessionVersion);
+    if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { sessionId: arrange.conversationId, instructionKey }, prefix, undefined, bridge.driver.sessionVersion);
     if (arrange.omitPriorError) prefix.splice(1, 1);
     if (arrange.foreignHistory) {
       const { responseId: _responseId, ...foreignAssistant } = assistant;
@@ -276,7 +279,7 @@ for (const { name, arrange, expected } of cases) {
       assistant.stopReason = "toolUse";
       assistant.content = [{ type: "toolCall", id: "pending-call", name: "test-tool", arguments: {} }];
       bridge.runtimeSessionSync.record(session, prefix);
-      await bridge.runtimeSessionStore.set(sessionId, { sessionId: "same-conversation" }, prefix, undefined, bridge.driver.sessionVersion);
+      await bridge.runtimeSessionStore.set(sessionId, { sessionId: "same-conversation", instructionKey }, prefix, undefined, bridge.driver.sessionVersion);
     }
     const context: Context = { systemPrompt: "Rules", tools: [], messages: [...prefix, pending
       ? { role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 5 }
@@ -324,7 +327,7 @@ for (const { name, arrange, expected } of cases) {
     });
     const run = async (selected: Model<any>) => {
       const events: AssistantMessageEvent[] = [];
-      for await (const event of streamAgyProvider(selected, context, { sessionId, signal: controller.signal }, config, bridge)) events.push(event);
+      for await (const event of streamAgyProvider(selected, context, { sessionId, signal: controller.signal }, bridge)) events.push(event);
       await new Promise<void>((resolve) => setImmediate(resolve));
       return events.at(-1);
     };

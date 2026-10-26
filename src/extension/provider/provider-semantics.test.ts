@@ -1,3 +1,5 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
+import { AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { normalizeContext } from "@earendil-works/pi-ai";
@@ -115,7 +117,7 @@ for (const scenario of [
     const bridge = new Bridge({
       on: () => {}, registerCommand: () => {}, getActiveTools: () => [], getAllTools: () => [],
       registerProvider: (registered: Provider) => { provider = registered; },
-    } as unknown as ExtensionAPI, { driver: "cli" });
+    } as unknown as ExtensionAPI, new CliDriver());
     t.after(() => bridge.liveSessions.disposeAll());
     const lookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
       throw new Error("Reached runtime using existing Antigravity CLI login");

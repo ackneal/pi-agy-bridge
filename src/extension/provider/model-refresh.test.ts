@@ -1,3 +1,5 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
+import { AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -6,7 +8,7 @@ import test, { type TestContext } from "node:test";
 import { ModelRuntime, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ModelsPublication, Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
-import { registerAgyProvider } from "./provider.ts";
+import { Bridge } from "./provider.ts";
 
 for (const scenario of [
   { name: "cache-only restore", allowNetwork: false, accept: true, fail: false, aborted: false, expected: "claude-sonnet-4-6", publishes: 0 },
@@ -27,7 +29,8 @@ for (const scenario of [
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
     } as unknown as ExtensionAPI;
-    registerAgyProvider(pi, { driver: "cli" as const, agyPath });
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    new Bridge(pi, new CliDriver()).start();
     assert.ok(provider?.refreshModels);
     const publications: ModelsPublication[] = [];
     const controller = new AbortController();
@@ -93,7 +96,8 @@ test("Pi persists raw Antigravity CLI discovery and reapplies models.json overri
     on: (event: string, handler: typeof sessionStart) => { if (event === "session_start") sessionStart = handler; }, registerCommand: () => {},
     registerProvider: runtime.registerNativeProvider.bind(runtime),
   } as unknown as ExtensionAPI;
-  await registerAndAwaitRefresh(t, runtime, () => registerAgyProvider(pi, { driver: "cli" as const, agyPath }));
+  t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+  await registerAndAwaitRefresh(t, runtime, () => new Bridge(pi, new CliDriver()).start());
 
   await runtime.refresh({ providers: ["agy"], allowNetwork: false });
 
@@ -133,10 +137,10 @@ test("Pi persists raw Antigravity CLI discovery and reapplies models.json overri
   assert.deepEqual(stored.agy.models[1].cost, proCost);
 
   const next = await ModelRuntime.create({ modelsPath, authPath: path.join(directory, "auth.json"), refreshOnCreate: false });
-  await registerAndAwaitRefresh(t, next, () => registerAgyProvider(
+  await registerAndAwaitRefresh(t, next, () => new Bridge(
     { ...pi, registerProvider: next.registerNativeProvider.bind(next) } as unknown as ExtensionAPI,
-    { driver: "cli" as const, agyPath: "__invalid_binary_name__" },
-  ));
+    new CliDriver(),
+  ).start());
   const restored = await next.refresh({ providers: ["agy"], allowNetwork: false });
   assert.equal(restored.errors.size, 0);
   assert.equal(next.getModel("agy", "gemini-3.8-flash")?.contextWindow, 123456);

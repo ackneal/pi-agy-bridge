@@ -39,7 +39,7 @@ export class AcpRuntimeSession implements DriverSession {
   readonly options: Omit<AcpSessionOptions, "onUpdate">;
   constructor(options: Omit<AcpSessionOptions, "onUpdate">, allowedToolNames: ReadonlySet<string> = new Set()) {
     this.options = options;
-    this.instructionKey = options.systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(options.systemPrompt);
+    this.instructionKey = options.systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
     this.allowedToolNames = allowedToolNames;
     this.session = new AcpSession({ ...options,
       onPermission: (request) => this.permissions?.reply(request) ?? { outcome: { outcome: "cancelled" } },

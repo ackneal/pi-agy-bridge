@@ -1,3 +1,5 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
+import { AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
@@ -13,10 +15,8 @@ for (const failure of ["missing executable", "initialization", "session", "authe
     const bridge = new Bridge({
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
-    } as unknown as ExtensionAPI, {
-      agyPath: process.execPath,
-      acpPath: failure === "missing executable" ? "/nonexistent/agy-default-acp" : process.execPath,
-    });
+    } as unknown as ExtensionAPI, new AcpDriver());
+    t.mock.method(AcpDriver.prototype, "detectExecutable", () => failure === "missing executable" ? undefined : process.execPath);
     const start = t.mock.method(AcpConnection.prototype, "start", async () => {
       if (failure === "initialization") throw new Error("synthetic initialization failure");
       return { protocolVersion: acp.PROTOCOL_VERSION };
@@ -39,22 +39,20 @@ for (const failure of ["missing executable", "initialization", "session", "authe
   });
 }
 
-test("manual CLI selection applies to this bridge instance, not the next startup", async () => {
+test("manual CLI selection applies to this bridge instance, not the next startup", async (t) => {
   const providers: Provider[] = [];
   const pi = {
     on: () => {}, registerCommand: () => {},
     registerProvider: (provider: Provider) => { providers.push(provider); },
   } as unknown as ExtensionAPI;
-  const config = {
-    agyPath: process.execPath, acpPath: process.execPath,
-    models: parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)"),
-  };
-  const bridge = new Bridge(pi, config);
+  t.mock.method(CliDriver.prototype, "detectExecutable", () => process.execPath);
+  t.mock.method(CliDriver.prototype, "discoverModels", async () => parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)"));
+  const bridge = new Bridge(pi);
   bridge.start();
   assert.equal(bridge.driver.id, "acp");
 
   await bridge.switchDriver("cli");
-  const reopened = new Bridge(pi, config);
+  const reopened = new Bridge(pi);
   reopened.start();
 
   assert.equal(bridge.driver.id, "cli");

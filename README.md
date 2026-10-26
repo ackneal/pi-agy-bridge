@@ -56,7 +56,7 @@ Open `/model`, search for `agy`, and select a model labeled `[agy]`. Continue us
 
 ## Driver Selection and CLI Migration
 
-ACP is the fixed default when `config.driver` is absent. Executable availability and existing paths do not select a backend. ACP failures never fall back to CLI.
+ACP is the fixed default. Executable availability and existing paths do not select a backend. ACP failures never fall back to CLI.
 
 To keep using CLI after upgrading, explicitly switch in Pi:
 
@@ -65,18 +65,9 @@ To keep using CLI after upgrading, explicitly switch in Pi:
 /agy-bridge:driver acp
 ```
 
-Run `/agy-bridge:driver` without arguments for status. A switch applies to the current bridge instance only and is not automatically saved across restart. For persistent CLI selection, use an explicit custom extension configuration (load it instead of the default extension to avoid duplicate registration):
+Run `/agy-bridge:driver` without arguments for status. A switch applies to the current bridge instance only and is not automatically saved across restart.
 
-```ts
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { setupAgyProvider } from "@ackneal/pi-agy-bridge";
-
-export default function (pi: ExtensionAPI) {
-  setupAgyProvider(pi, { driver: "cli", agyPath: "~/.local/bin/agy" });
-}
-```
-
-For explicit ACP configuration, use `setupAgyProvider(pi, { driver: "acp", acpPath: "/absolute/path/to/agy_acp_server" })`. `agyPath` and `acpPath` configure only their respective backend; neither selects one.
+Each driver locates its own executable and handles startup. Set `AGY_ACP_BIN` to override ACP executable discovery. Native sessions use Pi's workspace directory; this working directory is not a filesystem authorization boundary.
 
 ## How It Works
 

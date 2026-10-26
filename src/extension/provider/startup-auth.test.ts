@@ -1,3 +1,4 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -30,6 +31,12 @@ for (const scenario of [
 ] as const) {
   test(`session startup: ${scenario.name}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-startup-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = directory;
+    t.after(() => {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    });
     const authPath = path.join(directory, "auth.json");
     if (scenario.configured) await writeFile(authPath, JSON.stringify({ agy: createAgyBridgeCredential() }));
     const detection = deferred<OAuthCredential | undefined>();
@@ -46,7 +53,7 @@ for (const scenario of [
       },
       registerCommand: () => {}, registerProvider: () => {},
     } as unknown as ExtensionAPI;
-    const bridge = new Bridge(pi, { driver: "cli", authPath });
+    const bridge = new Bridge(pi, new CliDriver());
     const dispose = t.mock.method(bridge.liveSessions, "disposeAll", async () => {});
     const sessionManager = { getSessionId: t.mock.fn(() => "startup-test") };
     const refreshModels = t.mock.fn(() => discovery.promise);

@@ -8,8 +8,7 @@ import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/sess
 import { DEFAULT_AGY_PLUGIN_DIR, buildCliProcessEnvironment } from "../../discovery/plugin-install.ts";
 import { validateAgyVersion } from "../../runtime/version.ts";
 import { debugLog } from "../../shared/debug.ts";
-import { expandHome } from "../../shared/paths.ts";
-import type { BridgeConfig } from "../../shared/types.ts";
+import { createHash } from "node:crypto";
 
 const errorStates = new WeakMap<LiveSession, ConversationErrorState>();
 
@@ -60,11 +59,12 @@ export async function prepareRuntime(
   context: Context,
   tools: readonly Tool[],
   options: Pick<SimpleStreamOptions, "signal" | "env"> | undefined,
-  config: Pick<BridgeConfig, "agyPath" | "agentName" | "pluginDir" | "agentDir"> | undefined,
+  cwd: string,
   dependencies: {
     store: Pick<RuntimeSessionStore, "get" | "delete">;
     sync: Pick<RuntimeSessionSync, "decide" | "getSyncedMessageCount">;
     sessionVersion: string;
+    executable?: string | undefined;
     installPlugin: (pluginDir: string) => Promise<void>;
   },
   liveSession: LiveSession,
@@ -80,7 +80,9 @@ export async function prepareRuntime(
   checkPreparation();
 
   const { baseModel, effort } = selection;
-  const agentName = config?.agentName ?? "pi-bridge";
+  const agentName = "pi-bridge";
+  cwd = path.resolve(cwd);
+  const instructionKey = createHash("sha256").update(cwd).digest("hex");
   const toolSyncValues = tools.map((tool) => JSON.stringify({
     name: tool.name,
     description: tool.description,
@@ -89,12 +91,11 @@ export async function prepareRuntime(
   const syncKey = calculateSyncKey(context.systemPrompt ?? "", toolSyncValues, baseModel, effort ?? "", agentName);
   const latestAssistant = [...context.messages].reverse().find((message) => message.role === "assistant");
   const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
-  const rawPluginDir = config?.pluginDir ?? config?.agentDir;
-  const pluginDir = rawPluginDir ? path.resolve(expandHome(rawPluginDir)) : DEFAULT_AGY_PLUGIN_DIR;
+  const pluginDir = DEFAULT_AGY_PLUGIN_DIR;
   const checkpoint = await dependencies.store.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH, dependencies.sessionVersion);
   checkPreparation();
   const decision = dependencies.sync.decide(liveSession, {
-    syncKey,
+    syncKey, instructionKey,
     ...(expectedConversationId ? { conversationId: expectedConversationId } : {}),
     messages: context.messages,
     ...(checkpoint ? { checkpoint } : {}),
@@ -144,7 +145,7 @@ export async function prepareRuntime(
     preparationId,
   });
   checkPreparation();
-  await validateAgyVersion(config?.agyPath);
+  await validateAgyVersion(dependencies.executable);
   checkPreparation();
 
   const startRuntime = async (conversationId?: string) => {
@@ -163,13 +164,14 @@ export async function prepareRuntime(
       checkPreparation();
       const errorState = errorStateFor(liveSession, conversationId);
       proc = new CliRuntimeSession({
-        agyPath: config?.agyPath,
+        agyPath: dependencies.executable,
         agentName,
+        cwd,
         model: baseModel,
         conversationId,
         effort,
         environment: buildCliProcessEnvironment(mcpServer.bridgeUri),
-      }, new Set(tools.map((tool) => tool.name)), errorState);
+      }, new Set(tools.map((tool) => tool.name)), errorState, instructionKey);
       const initEvent = await proc.start();
       checkPreparation();
       debugLog("register", "Antigravity CLI init conversation id:", initEvent.conversation_id);

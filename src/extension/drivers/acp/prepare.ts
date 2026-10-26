@@ -3,15 +3,15 @@ import { BridgeIPC } from "../../bridge/bridge-ipc.ts";
 import { createMcpLaunchDescriptor } from "../../bridge/mcp-launch.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/session-state.ts";
-import type { BridgeConfig } from "../../shared/types.ts";
-import { resolveAcpConnectionOptions, resolveAcpEffort } from "./options.ts";
+import type { AcpConnectionOptions } from "./connection.ts";
+import { resolveAcpEffort } from "./options.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { AcpRuntimeSession } from "./runtime.ts";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructions.ts";
 
 export async function prepareAcpRuntime(
   model: Model<any>, context: Context, tools: readonly Tool[], options: SimpleStreamOptions | undefined,
-  config: BridgeConfig | undefined,
+  connection: AcpConnectionOptions,
   dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide">; sessionVersion: string },
   liveSession: LiveSession, preparationId: symbol,
 ): Promise<{ proc: AcpRuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
@@ -20,10 +20,9 @@ export async function prepareAcpRuntime(
     if (!liveSession.ownsPreparation(preparationId)) throw new Error("ACP preparation superseded");
   };
   check();
-  const connection = resolveAcpConnectionOptions(config);
   const requested = resolveAcpEffort(model, options);
   const systemPrompt = composeAcpSystemPrompt(context);
-  const instructionKey = fingerprintAcpSystemPrompt(systemPrompt);
+  const instructionKey = fingerprintAcpSystemPrompt(JSON.stringify([connection.cwd, systemPrompt]));
   const syncKey = calculateSyncKey(systemPrompt, tools.map((tool) => JSON.stringify(tool)), model.id, requested, "acp");
   if (liveSession.driverId !== "acp") {
     await liveSession.dispose({ preparationId });

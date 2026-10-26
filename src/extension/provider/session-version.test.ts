@@ -10,8 +10,7 @@ import type { DriverSession, PrepareDriverInput, RuntimeEvent } from "../drivers
 import { Bridge, streamAgyProvider } from "./provider.ts";
 
 test("turn persists its captured session version rather than a later driver selection", async (t) => {
-  const config = { driver: "acp" as const };
-  const bridge = new Bridge({ getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI, config);
+  const bridge = new Bridge({ getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI);
   t.after(() => bridge.liveSessions.disposeAll());
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(os.tmpdir()));
   const live = bridge.liveSessions.getOrCreate(sessionId);
@@ -39,7 +38,7 @@ test("turn persists its captured session version rather than a later driver sele
   });
   const context: Context = { tools: [], messages: [{ role: "user", content: "question", timestamp: 1 }] };
   const model = parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)")[0]!;
-  const stream = streamAgyProvider(model, context, { sessionId }, config, bridge);
+  const stream = streamAgyProvider(model, context, { sessionId }, bridge);
   const collecting = (async () => {
     const events: AssistantMessageEvent[] = [];
     for await (const event of stream) events.push(event);
@@ -47,7 +46,7 @@ test("turn persists its captured session version rather than a later driver sele
   })();
   await submitted;
 
-  bridge.driver = createBridgeDriver({ driver: "cli" });
+  bridge.driver = createBridgeDriver("cli");
   emit({ type: "complete", reason: "stop", resumable: true });
   const events = await collecting;
 

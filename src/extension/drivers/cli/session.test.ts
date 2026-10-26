@@ -24,7 +24,7 @@ for (const stage of ["before lookup", "after lookup"] as const) {
           { messages: [] },
           [],
           { signal: controller.signal },
-          undefined,
+          process.cwd(),
           {
             store: {
               get: async () => {

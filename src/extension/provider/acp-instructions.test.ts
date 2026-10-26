@@ -1,6 +1,10 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
+import { AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -22,12 +26,12 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     const legacy = scenario.includes("legacy");
     const changed = !scenario.startsWith("unchanged");
     const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
-    const config = {
-      driver: "acp" as const, acpPath: process.execPath, acpCwd: tmpdir(),
-      acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))],
-      acpRequestTimeoutMs: 5000,
-    };
-    const bridge = new Bridge(pi, config);
+    const directory = await mkdtemp(path.join(tmpdir(), "agy-acp-provider-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "acp");
+    await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
+    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+    const bridge = new Bridge(pi);
     const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
     const session = bridge.liveSessions.getOrCreate(sessionId);
     const tools = [{ name: "read", description: "Synthetic read", parameters: { type: "object", properties: {} } }];
@@ -56,7 +60,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     });
     const collect = async (context: Context) => {
       const events: AssistantMessageEvent[] = [];
-      for await (const event of streamAgyProvider(model, context, { sessionId }, config, bridge)) events.push(event);
+      for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
       const last = events.at(-1);
       assert.ok(last?.type === "done", JSON.stringify(last));
       return last;
@@ -75,7 +79,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     assert.ok(runtime instanceof AcpRuntimeSession);
     assert.equal(runtime.options.systemPrompt, composeAcpSystemPrompt(context));
     assert.ok(runtime.options.systemPrompt?.includes("PRIVATE_SECTION"));
-    assert.equal(runtime.instructionKey, fingerprintAcpSystemPrompt(composeAcpSystemPrompt(context)));
+    assert.equal(runtime.instructionKey, fingerprintAcpSystemPrompt(JSON.stringify([tmpdir(), composeAcpSystemPrompt(context)])));
     assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.instructionKey, runtime.instructionKey);
     assert.ok(!JSON.stringify(prompts[0]).includes("PRIVATE_"));
     assert.ok(gateway.hasPendingCalls);
@@ -94,7 +98,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     const active = session.activeProcess;
     assert.ok(active instanceof AcpRuntimeSession);
     assert.equal(active.options.systemPrompt, composeAcpSystemPrompt(next));
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.instructionKey, fingerprintAcpSystemPrompt(composeAcpSystemPrompt(next)));
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.instructionKey, fingerprintAcpSystemPrompt(JSON.stringify([tmpdir(), composeAcpSystemPrompt(next)])));
     if (changed) {
       assert.notEqual(active, runtime);
       assert.equal(resolve.mock.callCount(), 0);

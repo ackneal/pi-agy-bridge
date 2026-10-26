@@ -1,3 +1,5 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
+import { AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
@@ -17,7 +19,7 @@ for (const driver of ["cli", "acp"] as const) {
       const bridge = new Bridge({
         on: () => {}, registerCommand: () => {},
         registerProvider: (registered: Provider) => { provider = registered; },
-      } as unknown as ExtensionAPI, { driver });
+      } as unknown as ExtensionAPI, driver === "cli" ? new CliDriver() : new AcpDriver());
       bridge.start();
       const models = parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)")
         .map((model) => tag === undefined ? model : { ...model, agyDriver: tag });
@@ -43,7 +45,7 @@ test("new ACP session restores a legacy cached scoped model without network or l
   const bridge = new Bridge({
     on: () => {}, registerCommand: () => {},
     registerProvider: runtime.registerNativeProvider.bind(runtime),
-  } as unknown as ExtensionAPI, { driver: "cli" });
+  } as unknown as ExtensionAPI, new CliDriver());
   bridge.start();
   await runtime.refresh({ providers: ["agy"], allowNetwork: false });
   t.mock.method(bridge.driver, "discoverModels", async () => parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)"));
@@ -53,7 +55,7 @@ test("new ACP session restores a legacy cached scoped model without network or l
   const acpBridge = new Bridge({
     on: () => {}, registerCommand: () => {},
     registerProvider: reopened.registerNativeProvider.bind(reopened),
-  } as unknown as ExtensionAPI, { driver: "acp" });
+  } as unknown as ExtensionAPI, new AcpDriver());
   const discovery = t.mock.method(acpBridge.driver, "discoverModels", async () => { throw new Error("Offline restore must not discover models"); });
   acpBridge.start();
   await reopened.refresh({ providers: ["agy"], allowNetwork: false });
@@ -75,7 +77,8 @@ for (const allowNetwork of [false, true]) {
     const bridge = new Bridge({
       on: () => {}, registerCommand: () => {},
       registerProvider: runtime.registerNativeProvider.bind(runtime),
-    } as unknown as ExtensionAPI, { acpPath: process.execPath, agyPath: process.execPath, acpCwd: directory });
+    } as unknown as ExtensionAPI, new AcpDriver(() => directory));
+    t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
     bridge.start();
     await runtime.refresh({ providers: ["agy"], allowNetwork: false });
 

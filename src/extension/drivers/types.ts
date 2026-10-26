@@ -16,6 +16,7 @@ export interface DriverFailure {
 }
 
 export interface PrepareDriverInput {
+  cwd: string;
   model: Model<any>;
   context: Context;
   tools: readonly Tool[];

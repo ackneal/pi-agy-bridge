@@ -54,8 +54,8 @@ for (const { stage, aborts, cancelled } of cases) {
       getActiveTools: () => [],
       getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { driver: "cli" as const, agyPath, pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new Bridge(pi, config);
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     bridge.start();
     const context: Context = { messages: [], tools: [], systemPrompt: "" };
     const model = {
@@ -65,7 +65,7 @@ for (const { stage, aborts, cancelled } of cases) {
       contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId: `test-${stage}`, signal: controller.signal }, config, bridge)) {
+    for await (const event of streamAgyProvider(model, context, { sessionId: `test-${stage}`, signal: controller.signal }, bridge)) {
       events.push(event);
       if (event.type === "error" || event.type === "done") break;
     }

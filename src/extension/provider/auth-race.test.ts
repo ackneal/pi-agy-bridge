@@ -24,7 +24,7 @@ function setup(t: TestContext, beforeLogin: () => Promise<void> = async () => {}
     return child;
   });
   syncBuiltinESMExports();
-  const auth = new AgyAuthentication(createCliAuthenticationBackend("/fake/agy"), beforeLogin);
+  const auth = new AgyAuthentication(createCliAuthenticationBackend(() => "/fake/agy"), beforeLogin);
   t.after(() => {
     auth.close();
     for (const child of children) child.emit("close", 0, null);

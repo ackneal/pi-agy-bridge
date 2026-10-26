@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expandHome } from "../../shared/paths.ts";
-import type { BridgeConfig } from "../../shared/types.ts";
 import type { AcpConnectionOptions } from "./connection.ts";
 
 function isExecutableFile(filepath: string): boolean {
@@ -18,14 +17,14 @@ function isExecutableFile(filepath: string): boolean {
 
 export function detectAcpExecutable(customPath?: string): string | undefined {
   if (customPath?.trim()) {
-    const expanded = expandHome(customPath);
+    const expanded = path.resolve(expandHome(customPath));
     if (isExecutableFile(expanded)) return expanded;
     return undefined;
   }
 
   const fromEnv = process.env.AGY_ACP_BIN;
   if (fromEnv?.trim()) {
-    const expanded = expandHome(fromEnv);
+    const expanded = path.resolve(expandHome(fromEnv));
     if (isExecutableFile(expanded)) return expanded;
   }
 
@@ -63,14 +62,8 @@ export function resolveAcpEffort(model: Model<any>, options: SimpleStreamOptions
   return effort;
 }
 
-export function resolveAcpConnectionOptions(config: BridgeConfig | undefined): AcpConnectionOptions {
-  const executable = detectAcpExecutable(config?.acpPath);
+export function resolveAcpConnectionOptions(cwd: string, executable?: string): AcpConnectionOptions {
   if (!executable?.trim()) throw new Error("Antigravity ACP executable not found; please install agy-acp or set AGY_ACP_BIN");
 
-  return {
-    executable,
-    cwd: path.resolve(expandHome(config?.acpCwd ?? process.env.GEMINI_HOME ?? path.join(os.homedir(), ".gemini"))),
-    ...(config?.acpArgs ? { args: [...config.acpArgs] } : {}),
-    ...(config?.acpRequestTimeoutMs !== undefined ? { requestTimeoutMs: config.acpRequestTimeoutMs } : {}),
-  };
+  return { executable, cwd: path.resolve(cwd) };
 }

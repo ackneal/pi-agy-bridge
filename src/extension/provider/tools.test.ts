@@ -1,3 +1,4 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Context, Tool } from "@earendil-works/pi-ai";
@@ -88,7 +89,7 @@ describe("Bridge.getTools", () => {
       const getActiveTools = t.mock.fn(() => testCase.activeNames);
       // Do not start the bridge: tool selection needs no doctor registration or runtime.
       const pi = { getAllTools, getActiveTools } satisfies Pick<ExtensionAPI, "getAllTools" | "getActiveTools">;
-      const bridge = new Bridge(pi as unknown as ExtensionAPI, { driver: "cli" });
+      const bridge = new Bridge(pi as unknown as ExtensionAPI, new CliDriver());
 
       assert.deepEqual(bridge.getTools(testCase.context), testCase.expected);
       assert.equal(getAllTools.mock.callCount(), testCase.registryReads);

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { AcpDriver } from "../drivers/acp/driver.ts";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -20,12 +23,12 @@ const model = {
 
 test("announced native execution without a permission request invalidates the ACP runtime", async (t) => {
   const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
-  const config = {
-    driver: "acp" as const, acpPath: process.execPath, acpCwd: tmpdir(),
-    acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url)), "native-execute"],
-    acpRequestTimeoutMs: 5000,
-  };
-  const bridge = new Bridge(pi, config);
+  const directory = await mkdtemp(path.join(tmpdir(), "agy-acp-provider-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "acp");
+    await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}" native-execute\n`, { mode: 0o755 });
+    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+  const bridge = new Bridge(pi);
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
   const session = bridge.liveSessions.getOrCreate(sessionId);
   t.after(() => bridge.liveSessions.disposeAll());
@@ -37,7 +40,7 @@ test("announced native execution without a permission request invalidates the AC
   const events: AssistantMessageEvent[] = [];
   for await (const event of streamAgyProvider(model, {
     messages: [{ role: "user", content: "Use only Pi tools", timestamp: 0 }],
-  }, { sessionId }, config, bridge)) events.push(event);
+  }, { sessionId }, bridge)) events.push(event);
 
   const terminal = events.filter(event => event.type === "done" || event.type === "error");
   assert.equal(terminal.length, 1);
@@ -54,14 +57,14 @@ test("announced native execution without a permission request invalidates the AC
 for (const scenario of ["completion", "cancel", "failure", "unknown", "missing", "duplicate"] as const) {
   test(`ACP provider tool gap: ${scenario}`, { timeout: 10000 }, async (t) => {
     const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
-    const config = {
-      driver: "acp" as const, acpPath: process.execPath, acpCwd: tmpdir(),
-      acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))],
-      acpRequestTimeoutMs: 5000,
-    };
+    const directory = await mkdtemp(path.join(tmpdir(), "agy-acp-provider-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "acp");
+    await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
+    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
     assert.equal(new Bridge(pi).driver.id, "acp");
-    assert.equal(new Bridge(pi, { driver: "cli" }).driver.id, "cli");
-    const bridge = new Bridge(pi, config);
+    assert.equal(new Bridge(pi, new CliDriver()).driver.id, "cli");
+    const bridge = new Bridge(pi);
     assert.equal(bridge.driver.id, "acp");
     const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
     const session = bridge.liveSessions.getOrCreate(sessionId);
@@ -96,7 +99,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
     const context: Context = { tools, messages: [{ role: "user", content: "Read synthetic.txt", timestamp: 1 }] };
     const collect = async (input: Context) => {
       const events: AssistantMessageEvent[] = [];
-      for await (const event of streamAgyProvider(model, input, { sessionId, signal: controller.signal }, config, bridge)) events.push(event);
+      for await (const event of streamAgyProvider(model, input, { sessionId, signal: controller.signal }, bridge)) events.push(event);
       assert.equal(events.filter((event) => event.type === "done" || event.type === "error").length, 1);
       return events.at(-1)!;
     };
@@ -159,17 +162,17 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
 
 test("ACP provider falls back to new session when resume fails", { timeout: 10000 }, async (t) => {
   const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
-  const config = {
-    driver: "acp" as const, acpPath: process.execPath, acpCwd: tmpdir(),
-    acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))],
-    acpRequestTimeoutMs: 5000,
-  };
-  const bridge = new Bridge(pi, config);
+  const directory = await mkdtemp(path.join(tmpdir(), "agy-acp-provider-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "acp");
+    await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
+    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+  const bridge = new Bridge(pi);
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
   const session = bridge.liveSessions.getOrCreate(sessionId);
   await bridge.runtimeSessionStore.set(sessionId, {
     sessionId: "stale-session-id",
-    instructionKey: fingerprintAcpSystemPrompt(composeAcpSystemPrompt({ messages: [] })),
+    instructionKey: fingerprintAcpSystemPrompt(JSON.stringify([tmpdir(), composeAcpSystemPrompt({ messages: [] })])),
   }, [], undefined, bridge.driver.sessionVersion);
   t.after(async () => {
     await bridge.liveSessions.disposeAll();
@@ -193,7 +196,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
 
   const events: AssistantMessageEvent[] = [];
   const context: Context = { tools: [], messages: [{ role: "user", content: "hello", timestamp: 1 }] };
-  for await (const event of streamAgyProvider(model, context, { sessionId }, config, bridge)) events.push(event);
+  for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
 
   assert.equal(prepareAttempts, 2);
   assert.equal(session.driverId, "acp");
@@ -218,7 +221,11 @@ test("agy-bridge:driver command shows status and switches active driver", async 
     on: () => {},
   } as unknown as ExtensionAPI;
 
-  const bridge = new Bridge(pi, { driver: "acp", models: [], acpPath: process.execPath, agyPath: process.execPath });
+  const bridge = new Bridge(pi);
+  t.mock.method(CliDriver.prototype, "detectExecutable", () => process.execPath);
+  t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
+  t.mock.method(CliDriver.prototype, "discoverModels", async () => []);
+  t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
   bridge.start();
 
   const handler = registeredCommands.get("agy-bridge:driver");

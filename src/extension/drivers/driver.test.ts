@@ -3,21 +3,16 @@ import cp from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import test from "node:test";
-import type { BridgeConfig } from "../shared/types.ts";
+import type { DriverId } from "./types.ts";
 import { AcpDriver } from "./acp/driver.ts";
 import { CliDriver } from "./cli/driver.ts";
-import { createBridgeDriver, resolveDriverId } from "./driver.ts";
+import { createBridgeDriver } from "./driver.ts";
 
 for (const scenario of [
-  { name: "no configuration", config: undefined, expected: "acp" },
-  { name: "CLI path alone", config: { agyPath: process.execPath }, expected: "acp" },
-  { name: "missing ACP with an installed CLI", config: { acpPath: "/nonexistent/acp", agyPath: process.execPath }, expected: "acp" },
-  { name: "ACP path alone", config: { acpPath: process.execPath }, expected: "acp" },
-  { name: "both paths", config: { acpPath: process.execPath, agyPath: process.execPath }, expected: "acp" },
-  { name: "explicit ACP", config: { driver: "acp" }, expected: "acp" },
-  { name: "explicit CLI without an executable", config: { driver: "cli", agyPath: "/nonexistent/cli" }, expected: "cli" },
-  { name: "explicit CLI with ACP installed", config: { driver: "cli", acpPath: process.execPath }, expected: "cli" },
-] satisfies { name: string; config: BridgeConfig | undefined; expected: "cli" | "acp" }[]) {
+  { name: "default", id: undefined, expected: "acp" },
+  { name: "ACP", id: "acp", expected: "acp" },
+  { name: "CLI", id: "cli", expected: "cli" },
+] satisfies { name: string; id: DriverId | undefined; expected: "cli" | "acp" }[]) {
   test(`driver selection does not detect or fall back: ${scenario.name}`, (t) => {
     const unexpected = () => { throw new Error("Selection must not inspect executables or authentication"); };
     const inspections = [
@@ -30,10 +25,8 @@ for (const scenario of [
     syncBuiltinESMExports();
     t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
 
-    const id = resolveDriverId(scenario.config);
-    const driver = createBridgeDriver(scenario.config);
+    const driver = createBridgeDriver(scenario.id);
 
-    assert.equal(id, scenario.expected);
     assert.equal(driver.id, scenario.expected);
     assert.equal(driver.sessionVersion, `${scenario.expected}:v1`);
     assert.ok(driver instanceof (scenario.expected === "acp" ? AcpDriver : CliDriver));
@@ -47,7 +40,7 @@ for (const scenario of [
 }
 
 test("unsupported driver is rejected instead of selecting a backend", () => {
-  const config = { driver: "invalid" } as unknown as BridgeConfig;
+  const id = "invalid" as DriverId;
 
-  assert.throws(() => createBridgeDriver(config), /Unsupported Antigravity driver: invalid/);
+  assert.throws(() => createBridgeDriver(id), /Unsupported Antigravity driver: invalid/);
 });
