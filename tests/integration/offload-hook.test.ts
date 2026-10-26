@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, open, realpath, rm, symlink, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -119,6 +119,9 @@ it("restricts native view_file to current conversation regular step files", asyn
 });
 
 it("gates the command on the exact recovery marker", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "offload-hook-input-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const inputPath = path.join(directory, "input");
   const manifest = JSON.parse(await readFile(path.join(plugin, "hooks.json"), "utf8"));
   const command = manifest["restrict-view-file"].PreToolUse[0].hooks[0].command;
   const missingNode = path.join(plugin, "nonexistent-node");
@@ -135,14 +138,21 @@ it("gates the command on the exact recovery marker", async (t) => {
     { name: "marked with missing Node fails closed", marker: "1", node: missingNode, input: "{}", decision: undefined },
   ];
   for (const row of cases) {
-    await t.test(row.name, () => {
+    await t.test(row.name, async (t) => {
       const env = { ...process.env };
       delete env.PI_AGY_BRIDGE_RECOVERY;
       delete env.PI_AGY_BRIDGE_HOOK_RUNTIME;
       if (row.marker !== undefined) env.PI_AGY_BRIDGE_RECOVERY = row.marker;
       if (row.node !== undefined) env.PI_AGY_BRIDGE_HOOK_RUNTIME = row.node;
 
-      const result = spawnSync("sh", ["-c", command], { cwd: plugin, env, input: row.input, encoding: "utf8" });
+      await writeFile(inputPath, row.input);
+      const input = await open(inputPath, "r");
+      t.after(() => input.close());
+
+      // Delegation can exit without reading stdin; avoid racing a pipe write against exit.
+      const result = spawnSync("sh", ["-c", command], {
+        cwd: plugin, env, stdio: [input.fd, "pipe", "pipe"], encoding: "utf8",
+      });
       assert.ifError(result.error);
       if (row.decision === undefined) {
         assert.notEqual(result.status, 0);
