@@ -1,8 +1,38 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { prepareAcpRuntime } from "./prepare.ts";
+import { AcpDriver } from "./driver.ts";
+import { CliRuntimeSession } from "../cli/runtime.ts";
 import { LiveSession } from "../../session/session.ts";
 import { RuntimeSessionSync } from "../../session/session-state.ts";
+
+test("ACP clears the previous driver once before checkpoint lookup", async (t) => {
+  const live = new LiveSession("test");
+  t.after(() => live.dispose());
+  const previous = new CliRuntimeSession({ agentName: "pi-bridge", model: "raw" }, new Set(), {});
+  live.setSession(previous, "previous-sync");
+  const abort = t.mock.method(previous, "abort", async () => {});
+  const driver = new AcpDriver();
+  t.mock.method(driver, "detectExecutable", () => process.execPath);
+  const dispose = t.mock.method(live, "dispose", live.dispose.bind(live));
+  const stopped = new Error("Stopped at checkpoint lookup");
+  const get = t.mock.fn(async () => {
+    assert.equal(dispose.mock.callCount(), 1);
+    assert.equal(live.activeProcess, null);
+    throw stopped;
+  });
+
+  await assert.rejects(driver.prepareSession({
+    cwd: process.cwd(), model: { id: "raw" } as Parameters<typeof prepareAcpRuntime>[0],
+    context: { messages: [] }, tools: [], options: undefined, session: live,
+    store: { get, delete: async () => {} }, sync: new RuntimeSessionSync(),
+    preparationId: live.beginPreparation(),
+  }), (error) => error === stopped);
+
+  assert.equal(get.mock.callCount(), 1);
+  assert.equal(dispose.mock.callCount(), 1);
+  assert.equal(abort.mock.callCount(), 1);
+});
 
 test("superseded ACP preparation stops before checkpoint or resource acquisition", async () => {
   const live = new LiveSession("test");

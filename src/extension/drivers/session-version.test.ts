@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { prepareRuntime, resolveModelAndEffort } from "./cli/session.ts";
+import { prepareCliRuntime, resolveModelAndEffort } from "./cli/session.ts";
 import { prepareAcpRuntime } from "./acp/prepare.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { LiveSession } from "../session/session.ts";
@@ -25,14 +25,13 @@ for (const driver of ["cli", "acp"] as const) {
       },
       sync: {
         decide: () => { throw new Error("Preparation must stop at lookup"); },
-        getSyncedMessageCount: () => undefined,
       },
       installPlugin: async () => { throw new Error("Preparation must stop at lookup"); },
     };
     const options = { env: { AGY_BRIDGE_LOGIN_EPOCH: "login-epoch" } };
 
     const preparing = driver === "cli"
-      ? prepareRuntime(model, { messages: [] }, [], options, process.cwd(), dependencies, session, resolveModelAndEffort(model.id), preparationId)
+      ? prepareCliRuntime(model, { messages: [] }, [], options, process.cwd(), dependencies, session, resolveModelAndEffort(model.id), preparationId)
       : prepareAcpRuntime(model, { messages: [] }, [], options, { executable: process.execPath, cwd: process.cwd() }, dependencies, session, preparationId);
     await assert.rejects(preparing, stopAfterRead);
 

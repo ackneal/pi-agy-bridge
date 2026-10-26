@@ -6,7 +6,7 @@ import { discoverAgyModels } from "../../discovery/models.ts";
 import { fetchAgyUsage } from "../../runtime/usage.ts";
 import { detectCliExecutable } from "../../runtime/version.ts";
 import { createCliAuthenticationBackend } from "./auth.ts";
-import { prepareRuntime, resolveModelAndEffort } from "./session.ts";
+import { prepareCliRuntime, resolveModelAndEffort } from "./session.ts";
 
 export class CliDriver implements BridgeDriver {
   readonly id = "cli";
@@ -37,7 +37,7 @@ export class CliDriver implements BridgeDriver {
       installPlugin: (pluginDir: string) => this.installPlugin(pluginDir),
     };
     const selection = resolveModelAndEffort(input.model.id, input.options, input.model.thinkingLevelMap);
-    return prepareRuntime(input.model, input.context, input.tools, input.options, input.cwd, dependencies, input.session, selection, input.preparationId);
+    return prepareCliRuntime(input.model, input.context, input.tools, input.options, input.cwd, dependencies, input.session, selection, input.preparationId);
   }
 
   discoverModels(signal: AbortSignal) {

@@ -54,7 +54,7 @@ export function resolveModelAndEffort(
   return { baseModel, effort };
 }
 
-export async function prepareRuntime(
+export async function prepareCliRuntime(
   model: Model<any>,
   context: Context,
   tools: readonly Tool[],
@@ -62,7 +62,7 @@ export async function prepareRuntime(
   cwd: string,
   dependencies: {
     store: Pick<RuntimeSessionStore, "get" | "delete">;
-    sync: Pick<RuntimeSessionSync, "decide" | "getSyncedMessageCount">;
+    sync: Pick<RuntimeSessionSync, "decide">;
     sessionVersion: string;
     executable?: string | undefined;
     installPlugin: (pluginDir: string) => Promise<void>;
@@ -104,7 +104,6 @@ export async function prepareRuntime(
   debugLog("register", "Antigravity CLI runtime decision", {
     action: decision.action,
     messageCount: context.messages.length,
-    syncedMessageCount: dependencies.sync.getSyncedMessageCount(liveSession),
     processRunning: liveSession.activeProcess?.isRunning ?? false,
     sessionConversationId: liveSession.conversationId,
     expectedConversationId,

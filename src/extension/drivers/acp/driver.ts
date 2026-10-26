@@ -35,7 +35,6 @@ export class AcpDriver implements BridgeDriver {
   }
 
   async prepareSession(input: PrepareDriverInput) {
-    if (input.session.driverId !== this.id) await input.session.dispose({ preparationId: input.preparationId });
     input.options?.signal?.throwIfAborted();
 
     const dependencies = { store: input.store, sync: input.sync, sessionVersion: this.sessionVersion };

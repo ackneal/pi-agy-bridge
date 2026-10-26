@@ -23,7 +23,7 @@ export interface PrepareDriverInput {
   options: SimpleStreamOptions | undefined;
   session: LiveSession;
   store: Pick<RuntimeSessionStore, "get" | "delete">;
-  sync: Pick<RuntimeSessionSync, "decide" | "getSyncedMessageCount">;
+  sync: Pick<RuntimeSessionSync, "decide">;
   preparationId: symbol;
 }
 
@@ -44,6 +44,7 @@ export interface BridgeDriver {
   readonly authentication: DriverAuthentication;
   readonly initialModels: readonly AnyModel[];
   validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void;
+  /** Returns the runtime already owned by input.session, whether reused or newly installed. */
   prepareSession(input: PrepareDriverInput): Promise<{ proc: DriverSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }>;
   discoverModels(signal: AbortSignal): Promise<AnyModel[]>;
   usage(signal: AbortSignal): Promise<AgyUsage | undefined>;
