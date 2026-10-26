@@ -11,7 +11,7 @@ import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
 import type { AgyInput } from "../shared/types.ts";
-import { AgyBridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamAgyProvider } from "./provider.ts";
 
 type ModelSwitchCase = {
   name: string;
@@ -231,7 +231,7 @@ for (const { name, arrange, expected } of cases) {
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const bridge = new Bridge(pi, config);
 
     t.after(async () => {
       try { await bridge.liveSessions.disposeAll(); }

@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { AgyBridgeConfig } from "../../shared/types.ts";
+import type { BridgeConfig } from "../../shared/types.ts";
 import type { BridgeDriver, DriverDiagnostics, DriverFailure, PrepareDriverInput } from "../types.ts";
 import { collectDoctorReport } from "../../provider/doctor.ts";
 import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../../discovery/plugin-install.ts";
@@ -19,9 +19,9 @@ export class CliDriver implements BridgeDriver {
   readonly authentication;
   private pluginError: DriverFailure | undefined;
 
-  private readonly config: AgyBridgeConfig | undefined;
+  private readonly config: BridgeConfig | undefined;
 
-  constructor(config?: AgyBridgeConfig) {
+  constructor(config?: BridgeConfig) {
     this.config = config;
     this.authentication = createCliAuthenticationBackend(config?.agyPath);
   }

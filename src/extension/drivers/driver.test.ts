@@ -3,7 +3,7 @@ import cp from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import test from "node:test";
-import type { AgyBridgeConfig } from "../shared/types.ts";
+import type { BridgeConfig } from "../shared/types.ts";
 import { AcpDriver } from "./acp/driver.ts";
 import { CliDriver } from "./cli/driver.ts";
 import { createBridgeDriver, resolveDriverId } from "./driver.ts";
@@ -17,7 +17,7 @@ for (const scenario of [
   { name: "explicit ACP", config: { driver: "acp" }, expected: "acp" },
   { name: "explicit CLI without an executable", config: { driver: "cli", agyPath: "/nonexistent/cli" }, expected: "cli" },
   { name: "explicit CLI with ACP installed", config: { driver: "cli", acpPath: process.execPath }, expected: "cli" },
-] satisfies { name: string; config: AgyBridgeConfig | undefined; expected: "cli" | "acp" }[]) {
+] satisfies { name: string; config: BridgeConfig | undefined; expected: "cli" | "acp" }[]) {
   test(`driver selection does not detect or fall back: ${scenario.name}`, (t) => {
     const unexpected = () => { throw new Error("Selection must not inspect executables or authentication"); };
     const inspections = [
@@ -47,7 +47,7 @@ for (const scenario of [
 }
 
 test("unsupported driver is rejected instead of selecting a backend", () => {
-  const config = { driver: "invalid" } as unknown as AgyBridgeConfig;
+  const config = { driver: "invalid" } as unknown as BridgeConfig;
 
   assert.throws(() => createBridgeDriver(config), /Unsupported Antigravity driver: invalid/);
 });

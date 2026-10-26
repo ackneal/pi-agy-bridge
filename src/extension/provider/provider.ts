@@ -11,7 +11,7 @@ import type {
 import { getCurrentTools, isModelType, normalizeContext } from "@earendil-works/pi-ai";
 import { PiRuntimeOutput } from "./output.ts";
 import { restoreStoredAgyModels } from "../discovery/models.ts";
-import { AgyTurn } from "./turn.ts";
+import { Turn } from "./turn.ts";
 import {
   LiveSessionRegistry,
   PiContextAdapter,
@@ -21,18 +21,16 @@ import type { AgyUsage } from "../runtime/usage.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
 import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
-import type { AgyBridgeConfig } from "../shared/types.ts";
+import type { BridgeConfig } from "../shared/types.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
-
-export { formatContextPrompt, formatContextUpdate } from "./context-prompt.ts";
 
 export function streamAgyProvider(
   model: Model<any>,
   context: Context,
   options: SimpleStreamOptions | undefined,
-  config: AgyBridgeConfig | undefined,
-  bridge: AgyBridge
+  config: BridgeConfig | undefined,
+  bridge: Bridge
 ): AssistantMessageEventStream {
   debugArtifact("provider-context", { model: model.id, sessionId: options?.sessionId, context });
   const contextTools = context.tools ?? [];
@@ -69,7 +67,7 @@ export function streamAgyProvider(
 
   const liveSession = bridge.liveSessions.getOrCreate(piSessionId);
   const preparationId = liveSession.beginPreparation();
-  const turn = new AgyTurn({
+  const turn = new Turn({
     session: liveSession,
     adapter,
     context,
@@ -131,9 +129,9 @@ export function streamAgyProvider(
   return stream;
 }
 
-export class AgyBridge {
+export class Bridge {
   private readonly pi: ExtensionAPI;
-  private config: AgyBridgeConfig | undefined;
+  private config: BridgeConfig | undefined;
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private discoveryError: DriverFailure | undefined;
@@ -149,7 +147,7 @@ export class AgyBridge {
   public readonly piContextAdapter = new PiContextAdapter();
   public readonly runtimeSessionStore = new RuntimeSessionStore(this.piContextAdapter);
 
-  constructor(pi: ExtensionAPI, config?: AgyBridgeConfig) {
+  constructor(pi: ExtensionAPI, config?: BridgeConfig) {
     this.pi = pi;
     this.config = config;
     this.driver = createBridgeDriver(config);
@@ -364,7 +362,7 @@ export class AgyBridge {
     this.registerProvider();
   }
 
-  private registerProvider(models?: readonly AnyModel[] | NonNullable<AgyBridgeConfig["models"]>): void {
+  private registerProvider(models?: readonly AnyModel[] | NonNullable<BridgeConfig["models"]>): void {
     const driver = this.driver;
     this.models = (this.config?.models ?? models ?? driver.initialModels).map((model) => ({
       ...model,
@@ -440,7 +438,7 @@ export class AgyBridge {
 
 export function registerAgyProvider(
   pi: ExtensionAPI,
-  config?: AgyBridgeConfig
+  config?: BridgeConfig
 ): void {
-  new AgyBridge(pi, config).start();
+  new Bridge(pi, config).start();
 }

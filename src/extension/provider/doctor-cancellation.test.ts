@@ -17,7 +17,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
   cp.execFile = replacement as unknown as typeof cp.execFile;
   syncBuiltinESMExports();
   t.after(() => { cp.execFile = original; syncBuiltinESMExports(); });
-  const { AgyBridge } = await import("./provider.ts");
+  const { Bridge } = await import("./provider.ts");
 
   for (const stage of ["quota", "report"] as const) {
     await t.test(stage, async (t) => {
@@ -84,7 +84,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
         registerProvider: () => {},
         sendMessage,
       } as unknown as ExtensionAPI;
-      const bridge = new AgyBridge(pi, { driver: "cli" as const, models: [], agyPath: "/fake/agy", pluginDir: "/missing/doctor-plugin" });
+      const bridge = new Bridge(pi, { driver: "cli" as const, models: [], agyPath: "/fake/agy", pluginDir: "/missing/doctor-plugin" });
       bridge.start();
       assert.ok(doctor);
       assert.ok(shutdown);
@@ -108,7 +108,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
 });
 
 test("doctor starts a fresh query after login while the cancelled query is still closing", async (t) => {
-  const { AgyBridge } = await import("./provider.ts");
+  const { Bridge } = await import("./provider.ts");
   const controller = new AbortController();
   const pending: Promise<unknown>[] = [];
   const children: ReturnType<typeof createChild>[] = [];
@@ -155,7 +155,7 @@ test("doctor starts a fresh query after login while the cancelled query is still
   let doctor!: () => Promise<void>;
   let provider!: Provider;
   const sendMessage = t.mock.fn();
-  const bridge = new AgyBridge({
+  const bridge = new Bridge({
     registerCommand: (name: string, command: { handler: () => Promise<void> }) => { if (name === "agy-bridge:doctor") doctor = command.handler; },
     registerProvider: (registered: Provider) => { provider = registered; },
     on: () => {}, sendMessage,

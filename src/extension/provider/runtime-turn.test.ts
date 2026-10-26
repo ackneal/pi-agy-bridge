@@ -15,7 +15,7 @@ import { calculateSyncKey } from "../session/session.ts";
 import type { RuntimeSessionDecision } from "../session/session-state.ts";
 import type { AgyInput, AgyResultEvent } from "../shared/types.ts";
 import { formatContextUpdate } from "./context-prompt.ts";
-import { AgyBridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamAgyProvider } from "./provider.ts";
 
 const cases: { decision: RuntimeSessionDecision; incremental?: boolean; payload?: "replace" | "unchanged" | "reject" }[] = [
   { decision: { action: "continue" } },
@@ -36,7 +36,7 @@ for (const { decision, incremental, payload } of cases) {
     } as unknown as ExtensionAPI;
     const agyPath = path.join(directory, "agy");
     const config = { driver: "cli" as const, agyPath, pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const bridge = new Bridge(pi, config);
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -196,7 +196,7 @@ for (const row of invalidBatchCases) {
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const bridge = new Bridge(pi, config);
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -314,7 +314,7 @@ for (const row of continueCases) {
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const bridge = new Bridge(pi, config);
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -487,7 +487,7 @@ for (const row of pendingTerminalCases) {
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const bridge = new Bridge(pi, config);
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -611,7 +611,7 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const bridge = new Bridge(pi, config);
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -726,7 +726,7 @@ for (const conversionException of [false, true]) {
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const bridge = new Bridge(pi, config);
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();

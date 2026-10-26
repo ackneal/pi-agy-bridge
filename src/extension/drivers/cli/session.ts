@@ -9,7 +9,7 @@ import { DEFAULT_AGY_PLUGIN_DIR, buildCliProcessEnvironment } from "../../discov
 import { validateAgyVersion } from "../../runtime/version.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { expandHome } from "../../shared/paths.ts";
-import type { AgyBridgeConfig } from "../../shared/types.ts";
+import type { BridgeConfig } from "../../shared/types.ts";
 
 const errorStates = new WeakMap<LiveSession, ConversationErrorState>();
 
@@ -60,7 +60,7 @@ export async function prepareRuntime(
   context: Context,
   tools: readonly Tool[],
   options: Pick<SimpleStreamOptions, "signal" | "env"> | undefined,
-  config: Pick<AgyBridgeConfig, "agyPath" | "agentName" | "pluginDir" | "agentDir"> | undefined,
+  config: Pick<BridgeConfig, "agyPath" | "agentName" | "pluginDir" | "agentDir"> | undefined,
   dependencies: {
     store: Pick<RuntimeSessionStore, "get" | "delete">;
     sync: Pick<RuntimeSessionSync, "decide" | "getSyncedMessageCount">;

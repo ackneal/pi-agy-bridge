@@ -3,7 +3,7 @@ import { BridgeIPC } from "../../bridge/bridge-ipc.ts";
 import { createMcpLaunchDescriptor } from "../../bridge/mcp-launch.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/session-state.ts";
-import type { AgyBridgeConfig } from "../../shared/types.ts";
+import type { BridgeConfig } from "../../shared/types.ts";
 import { resolveAcpConnectionOptions, resolveAcpEffort } from "./options.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { AcpRuntimeSession } from "./runtime.ts";
@@ -11,7 +11,7 @@ import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructio
 
 export async function prepareAcpRuntime(
   model: Model<any>, context: Context, tools: readonly Tool[], options: SimpleStreamOptions | undefined,
-  config: AgyBridgeConfig | undefined,
+  config: BridgeConfig | undefined,
   dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide">; sessionVersion: string },
   liveSession: LiveSession, preparationId: symbol,
 ): Promise<{ proc: AcpRuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expandHome } from "../../shared/paths.ts";
-import type { AgyBridgeConfig } from "../../shared/types.ts";
+import type { BridgeConfig } from "../../shared/types.ts";
 import type { AcpConnectionOptions } from "./connection.ts";
 
 function isExecutableFile(filepath: string): boolean {
@@ -63,7 +63,7 @@ export function resolveAcpEffort(model: Model<any>, options: SimpleStreamOptions
   return effort;
 }
 
-export function resolveAcpConnectionOptions(config: AgyBridgeConfig | undefined): AcpConnectionOptions {
+export function resolveAcpConnectionOptions(config: BridgeConfig | undefined): AcpConnectionOptions {
   const executable = detectAcpExecutable(config?.acpPath);
   if (!executable?.trim()) throw new Error("Antigravity ACP executable not found; please install agy-acp or set AGY_ACP_BIN");
 

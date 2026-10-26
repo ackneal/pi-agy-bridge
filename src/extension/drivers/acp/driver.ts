@@ -1,5 +1,5 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { AgyBridgeConfig } from "../../shared/types.ts";
+import type { BridgeConfig } from "../../shared/types.ts";
 import type { AgyUsage } from "../../runtime/usage.ts";
 import type { BridgeDriver, DriverAuthentication, DriverDiagnostics, PrepareDriverInput } from "../types.ts";
 import { defaultModelCatalog } from "../../discovery/model-metadata.ts";
@@ -15,9 +15,9 @@ export class AcpDriver implements BridgeDriver {
   readonly initialModels = defaultModelCatalog();
   readonly authentication: DriverAuthentication;
 
-  private readonly config: AgyBridgeConfig | undefined;
+  private readonly config: BridgeConfig | undefined;
 
-  constructor(config?: AgyBridgeConfig) {
+  constructor(config?: BridgeConfig) {
     this.config = config;
     const authentication = () => createAcpAuthenticationBackend(resolveAcpConnectionOptions(this.config));
     this.authentication = {

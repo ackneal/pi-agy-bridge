@@ -19,10 +19,10 @@ interface TurnOptions {
   sessionVersion: string;
 }
 
-export class AgyTurn {
+export class Turn {
   private runtime: { proc: DriverSession; mcpServer: BridgeIPC } | undefined;
   private completed = false;
-  private sendingInput = false;
+  private inputStarted = false;
   private readonly options: TurnOptions;
 
   constructor(options: TurnOptions) {
@@ -71,7 +71,7 @@ export class AgyTurn {
       if (this.options.adapter.isCompleted()) return false;
       if (!this.ownsRuntime()) throw new Error("Runtime was invalidated before input delivery");
       this.options.signal?.throwIfAborted();
-      this.sendingInput = true;
+      this.inputStarted = true;
       return true;
     } });
   }
@@ -79,7 +79,7 @@ export class AgyTurn {
   public fail(error: unknown): void {
     const { adapter, signal, session, preparationId } = this.options;
     const message = error instanceof Error ? error.message : String(error);
-    const cancelled = signal?.aborted && !this.sendingInput;
+    const cancelled = signal?.aborted && !this.inputStarted;
     debugLog("register", "Turn execution failed:", message);
 
     if (cancelled) {

@@ -5,12 +5,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import { AcpConnection } from "../drivers/acp/connection.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
-import { AgyBridge } from "./provider.ts";
+import { Bridge } from "./provider.ts";
 
 for (const failure of ["missing executable", "initialization", "session", "authentication"] as const) {
   test(`default ACP never falls back to installed CLI after ${failure} failure`, async (t) => {
     let provider!: Provider;
-    const bridge = new AgyBridge({
+    const bridge = new Bridge({
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
     } as unknown as ExtensionAPI, {
@@ -49,12 +49,12 @@ test("manual CLI selection applies to this bridge instance, not the next startup
     agyPath: process.execPath, acpPath: process.execPath,
     models: parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)"),
   };
-  const bridge = new AgyBridge(pi, config);
+  const bridge = new Bridge(pi, config);
   bridge.start();
   assert.equal(bridge.driver.id, "acp");
 
   await bridge.switchDriver("cli");
-  const reopened = new AgyBridge(pi, config);
+  const reopened = new Bridge(pi, config);
   reopened.start();
 
   assert.equal(bridge.driver.id, "cli");

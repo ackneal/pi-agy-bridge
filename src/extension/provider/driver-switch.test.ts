@@ -8,7 +8,7 @@ import path from "node:path";
 import { ModelRuntime, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
-import { AgyBridge } from "./provider.ts";
+import { Bridge } from "./provider.ts";
 
 async function executableConfig(t: TestContext) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-switch-executables-"));
@@ -42,7 +42,7 @@ for (const scenario of [
       },
       registerProvider: (provider: Provider) => { registrations.push(provider); },
     } as unknown as ExtensionAPI;
-    const bridge = new AgyBridge(pi, { driver: scenario.from, ...await executableConfig(t) });
+    const bridge = new Bridge(pi, { driver: scenario.from, ...await executableConfig(t) });
     t.after(() => bridge.liveSessions.disposeAll());
     bridge.start();
     const oldProvider = registrations[0]!;
@@ -100,7 +100,7 @@ for (const from of ["cli", "acp"] as const) {
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
     } as unknown as ExtensionAPI;
-    const bridge = new AgyBridge(pi, { driver: from, ...await executableConfig(t) });
+    const bridge = new Bridge(pi, { driver: from, ...await executableConfig(t) });
     t.after(() => bridge.liveSessions.disposeAll());
     bridge.start();
     const target = from === "acp" ? "cli" : "acp";
@@ -120,7 +120,7 @@ for (const outcome of ["success", "failure"] as const) {
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
     } as unknown as ExtensionAPI;
-    const bridge = new AgyBridge(pi, { driver: "cli", agyPath: process.execPath });
+    const bridge = new Bridge(pi, { driver: "cli", agyPath: process.execPath });
     t.after(() => bridge.liveSessions.disposeAll());
     bridge.start();
     t.mock.method(bridge.driver.authentication, "login", async () => {
@@ -146,7 +146,7 @@ for (const outcome of ["success", "failure"] as const) {
 test("shutdown during driver disposal cannot register a new provider", async (t) => {
   let shutdown!: () => Promise<void>;
   let registrations = 0;
-  const bridge = new AgyBridge({
+  const bridge = new Bridge({
     on: (event: string, handler: () => Promise<void>) => { if (event === "session_shutdown") shutdown = handler; },
     registerCommand: () => {}, registerProvider: () => { registrations++; },
   } as unknown as ExtensionAPI, { driver: "cli", models: [], acpPath: process.execPath });
@@ -178,7 +178,7 @@ test("driver switch replaces models in the native Pi registry", async (t) => {
     on: () => {}, registerCommand: () => {},
     registerProvider: runtime.registerNativeProvider.bind(runtime),
   } as unknown as ExtensionAPI;
-  const bridge = new AgyBridge(pi, { driver: "acp", ...await executableConfig(t) });
+  const bridge = new Bridge(pi, { driver: "acp", ...await executableConfig(t) });
   t.after(() => bridge.liveSessions.disposeAll());
   bridge.start();
   await runtime.refresh({ providers: ["agy"], allowNetwork: false });

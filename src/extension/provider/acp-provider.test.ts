@@ -10,7 +10,7 @@ import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { AcpSession } from "../drivers/acp/session.ts";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "../drivers/acp/instructions.ts";
-import { AgyBridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamAgyProvider } from "./provider.ts";
 
 const model = {
   id: "selected", name: "Synthetic", api: "agy", provider: "agy", baseUrl: "agy",
@@ -25,7 +25,7 @@ test("announced native execution without a permission request invalidates the AC
     acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url)), "native-execute"],
     acpRequestTimeoutMs: 5000,
   };
-  const bridge = new AgyBridge(pi, config);
+  const bridge = new Bridge(pi, config);
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
   const session = bridge.liveSessions.getOrCreate(sessionId);
   t.after(() => bridge.liveSessions.disposeAll());
@@ -59,9 +59,9 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
       acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))],
       acpRequestTimeoutMs: 5000,
     };
-    assert.equal(new AgyBridge(pi).driver.id, "acp");
-    assert.equal(new AgyBridge(pi, { driver: "cli" }).driver.id, "cli");
-    const bridge = new AgyBridge(pi, config);
+    assert.equal(new Bridge(pi).driver.id, "acp");
+    assert.equal(new Bridge(pi, { driver: "cli" }).driver.id, "cli");
+    const bridge = new Bridge(pi, config);
     assert.equal(bridge.driver.id, "acp");
     const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
     const session = bridge.liveSessions.getOrCreate(sessionId);
@@ -164,7 +164,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
     acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))],
     acpRequestTimeoutMs: 5000,
   };
-  const bridge = new AgyBridge(pi, config);
+  const bridge = new Bridge(pi, config);
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
   const session = bridge.liveSessions.getOrCreate(sessionId);
   await bridge.runtimeSessionStore.set(sessionId, {
@@ -218,7 +218,7 @@ test("agy-bridge:driver command shows status and switches active driver", async 
     on: () => {},
   } as unknown as ExtensionAPI;
 
-  const bridge = new AgyBridge(pi, { driver: "acp", models: [], acpPath: process.execPath, agyPath: process.execPath });
+  const bridge = new Bridge(pi, { driver: "acp", models: [], acpPath: process.execPath, agyPath: process.execPath });
   bridge.start();
 
   const handler = registeredCommands.get("agy-bridge:driver");

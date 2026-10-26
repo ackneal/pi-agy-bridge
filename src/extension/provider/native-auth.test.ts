@@ -13,7 +13,7 @@ import { parseModelsOutput } from "../discovery/models.ts";
 import { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AgyRuntime } from "../runtime/process.ts";
-import { AgyBridge, registerAgyProvider } from "./provider.ts";
+import { Bridge, registerAgyProvider } from "./provider.ts";
 
 for (const scenario of ["native logout and relogin", "native URL and code login", "cancelled login", "headless unknown never retries"] as const) {
   test(scenario, async (t) => {

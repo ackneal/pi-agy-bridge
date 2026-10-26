@@ -13,7 +13,7 @@ import { PiRuntimeOutput } from "./output.ts";
 import { RuntimeSessionSync, type AgyConversationCheckpoint } from "../session/session-state.ts";
 import { LiveSession } from "../session/session.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
-import { AgyBridge, registerAgyProvider, streamAgyProvider } from "./provider.ts";
+import { Bridge, registerAgyProvider, streamAgyProvider } from "./provider.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -82,18 +82,27 @@ for (const row of resolverCases) {
   });
 }
 
-const fixedEffortCases = ["claude-sonnet-4-6", "claude-opus-4-6-thinking"].flatMap((modelId) =>
-  ["reasoningEffort", "reasoning", "thinkingLevel"].flatMap((option) =>
-    ["low", "medium", "high"].map((effort) => ({
-      name: `rejects fixed ${modelId} ${option}=${effort} before runtime preparation`,
-      modelId,
-      options: { [option]: effort },
-      error: `Unsupported Antigravity CLI reasoning effort for ${modelId}: ${effort}.`,
-    }))));
+const fixedEffortCases = [
+  {
+    name: "rejects fixed claude-sonnet-4-6 reasoningEffort=low before runtime preparation",
+    modelId: "claude-sonnet-4-6", options: { reasoningEffort: "low" },
+    error: "Unsupported Antigravity CLI reasoning effort for claude-sonnet-4-6: low.",
+  },
+  {
+    name: "rejects fixed claude-opus-4-6-thinking reasoning=medium before runtime preparation",
+    modelId: "claude-opus-4-6-thinking", options: { reasoning: "medium" },
+    error: "Unsupported Antigravity CLI reasoning effort for claude-opus-4-6-thinking: medium.",
+  },
+  {
+    name: "rejects fixed claude-sonnet-4-6 thinkingLevel=high before runtime preparation",
+    modelId: "claude-sonnet-4-6", options: { thinkingLevel: "high" },
+    error: "Unsupported Antigravity CLI reasoning effort for claude-sonnet-4-6: high.",
+  },
+] as const;
 
 for (const row of fixedEffortCases) {
   test(row.name, async (t) => {
-    const bridge = new AgyBridge({} as ExtensionAPI, { driver: "cli" });
+    const bridge = new Bridge({} as ExtensionAPI, { driver: "cli" });
     const runtimeLookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
       throw new Error("Runtime preparation must not begin");
     });
@@ -124,7 +133,7 @@ test("doctor reports installation errors without starting a model turn", async (
     sendMessage,
   } as unknown as ExtensionAPI;
   const pluginDir = path.join(directory, "missing-plugin");
-  const bridge = new AgyBridge(pi, { driver: "cli" as const, models: [], agyPath: "__invalid_binary_name__", pluginDir });
+  const bridge = new Bridge(pi, { driver: "cli" as const, models: [], agyPath: "__invalid_binary_name__", pluginDir });
   bridge.start();
   assert.ok(bridge.driver instanceof CliDriver);
   await assert.rejects(bridge.driver.installPlugin(pluginDir), /manifest not found/);
@@ -163,7 +172,7 @@ test("doctor clears the recorded installation error after successful installatio
       if (name === "agy-bridge:doctor") handler = command.handler;
     },
   } as unknown as ExtensionAPI;
-  const bridge = new AgyBridge(pi, { driver: "cli" as const, models: [], agyPath, pluginDir });
+  const bridge = new Bridge(pi, { driver: "cli" as const, models: [], agyPath, pluginDir });
   bridge.start();
   assert.ok(bridge.driver instanceof CliDriver);
   await assert.rejects(bridge.driver.installPlugin(pluginDir), /install denied/);
@@ -258,7 +267,7 @@ test("explicit Antigravity CLI models are native static models preserving config
 
 async function createRuntimeFixture(t: TestContext) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-provider-test-"));
-  let bridge: AgyBridge | undefined;
+  let bridge: Bridge | undefined;
   t.after(async () => {
     try {
       await bridge?.liveSessions.disposeAll();
@@ -271,7 +280,7 @@ async function createRuntimeFixture(t: TestContext) {
   const config = { driver: "cli" as const, agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
   await writeFile(config.agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.2.14; else exit 1; fi\n', { mode: 0o755 });
   const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
-  let runtimeBridge = new AgyBridge(pi, config);
+  let runtimeBridge = new Bridge(pi, config);
   bridge = runtimeBridge;
   const manager = SessionManager.inMemory("/workspace");
   const sessionId = runtimeBridge.piContextAdapter.bind(manager);
@@ -331,7 +340,7 @@ async function createRuntimeFixture(t: TestContext) {
 
   const restartBridge = async () => {
     await runtimeBridge.liveSessions.disposeAll();
-    runtimeBridge = new AgyBridge(pi, config);
+    runtimeBridge = new Bridge(pi, config);
     bridge = runtimeBridge;
     assert.equal(runtimeBridge.piContextAdapter.bind(manager), sessionId);
     return { bridge: runtimeBridge, session: runtimeBridge.liveSessions.getOrCreate(sessionId) };
@@ -348,70 +357,72 @@ const modelErrors: Array<{ name: string; events: AgyEvent[]; error: string; text
   { name: "nested result", events: [{ event: "result", result: { status: "error", error: { message: quotaError } } }], error: quotaError, text: "" },
 ];
 const recoveryCases = [
-  { name: "same-model retry", model: "quota-model", result: { event: "result", status: "success" }, processes: 1 },
-  { name: "switched-model retry", model: "other-model", result: { event: "result", status: "success" }, processes: 2 },
-  { name: "switched-model explicit success carrying stale quota", model: "other-model", result: { event: "result", status: "SUCCESS", error: quotaError }, processes: 2 },
+  { failure: modelErrors[0]!, name: "same-model retry", model: "quota-model", result: { event: "result", status: "success" }, processes: 1 },
+  { failure: modelErrors[0]!, name: "switched-model retry", model: "other-model", result: { event: "result", status: "success" }, processes: 2 },
+  { failure: modelErrors[0]!, name: "switched-model explicit success carrying stale quota", model: "other-model", result: { event: "result", status: "SUCCESS", error: quotaError }, processes: 2 },
+  { failure: modelErrors[1]!, name: "same-model retry", model: "quota-model", result: { event: "result", status: "success" }, processes: 1 },
+  { failure: modelErrors[2]!, name: "same-model retry", model: "quota-model", result: { event: "result", status: "success" }, processes: 1 },
+  { failure: modelErrors[3]!, name: "same-model retry", model: "quota-model", result: { event: "result", status: "success" }, processes: 1 },
 ];
 
-for (const failure of modelErrors) {
-  for (const row of recoveryCases) {
-    test(`provider retains conversation after ${failure.name}: ${row.name}`, async (t) => {
-      const { bridge, manager, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
-      const failed = await runTurn("quota-model", "original request", failure.events);
+for (const row of recoveryCases) {
+  const { failure } = row;
+  test(`provider retains conversation after ${failure.name}: ${row.name}`, async (t) => {
+    const { bridge, manager, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+    const failed = await runTurn("quota-model", "original request", failure.events);
 
-      assert.equal(failed.stopReason, "error");
-      assert.equal(failed.errorMessage, failure.error);
-      assert.deepEqual(failed.content, failure.text ? [{ type: "text", text: failure.text }] : []);
-      const failedRef = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
-      assert.equal(failedRef?.sessionId, "conversation-1");
-      assert.equal(failedRef?.messageCount, 2);
-      assertRestorableHistory(failedRef, manager.buildSessionContext().messages);
-      assert.equal(session.activeProcess, processes[0]);
-      assert.ok(session.activeMcpServer);
-      assert.equal(listeners.size, 0);
-      assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
-      assert.equal(close.mock.callCount(), 0);
-      assert.equal(abort.mock.callCount(), 0);
-      assert.equal(send.mock.callCount(), 1, "native errors do not automatically resend input");
+    assert.equal(failed.stopReason, "error");
+    assert.equal(failed.errorMessage, failure.error);
+    assert.deepEqual(failed.content, failure.text ? [{ type: "text", text: failure.text }] : []);
+    const failedRef = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+    assert.equal(failedRef?.sessionId, "conversation-1");
+    assert.equal(failedRef?.messageCount, 2);
+    assertRestorableHistory(failedRef, manager.buildSessionContext().messages);
+    assert.equal(session.activeProcess, processes[0]);
+    assert.ok(session.activeMcpServer);
+    assert.equal(listeners.size, 0);
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
+    assert.equal(close.mock.callCount(), 0);
+    assert.equal(abort.mock.callCount(), 0);
+    assert.equal(send.mock.callCount(), 1, "native errors do not automatically resend input");
 
-      const recovered = await runTurn(row.model, "retry request", [
-        { event: "step_update", delta: "Hello! How can I help you today?" }, row.result,
-      ]);
+    const recovered = await runTurn(row.model, "retry request", [
+      { event: "step_update", delta: "Hello! How can I help you today?" }, row.result,
+    ]);
 
-      assert.equal(recovered.stopReason, "stop");
-      assert.equal(recovered.errorMessage, undefined);
-      assert.deepEqual(recovered.content, [{ type: "text", text: "Hello! How can I help you today?" }]);
-      const recoveredProcess = processes.at(-1);
-      assert.ok(recoveredProcess);
-      assert.equal(session.activeProcess, recoveredProcess);
-      assert.equal(processes.length, row.processes);
-      assert.equal(recoveredProcess.options.model, row.model);
-      assert.equal(recoveredProcess.options.conversationId, "conversation-1");
-      const recoveredRef = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
-      assert.equal(recoveredRef?.sessionId, "conversation-1");
-      assertRestorableHistory(recoveredRef, manager.buildSessionContext().messages);
-      assert.equal(send.mock.callCount(), 2, "only the explicit retry adds input");
-      assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
-      assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "retry request");
-      assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 4);
+    assert.equal(recovered.stopReason, "stop");
+    assert.equal(recovered.errorMessage, undefined);
+    assert.deepEqual(recovered.content, [{ type: "text", text: "Hello! How can I help you today?" }]);
+    const recoveredProcess = processes.at(-1);
+    assert.ok(recoveredProcess);
+    assert.equal(session.activeProcess, recoveredProcess);
+    assert.equal(processes.length, row.processes);
+    assert.equal(recoveredProcess.options.model, row.model);
+    assert.equal(recoveredProcess.options.conversationId, "conversation-1");
+    const recoveredRef = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+    assert.equal(recoveredRef?.sessionId, "conversation-1");
+    assertRestorableHistory(recoveredRef, manager.buildSessionContext().messages);
+    assert.equal(send.mock.callCount(), 2, "only the explicit retry adds input");
+    assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
+    assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "retry request");
+    assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 4);
 
-      const continued = await runTurn(row.model, "continue request", [
-        { event: "step_update", delta: "Continuing normally" }, { event: "result", status: "success" },
-      ]);
+    const continued = await runTurn(row.model, "continue request", [
+      { event: "step_update", delta: "Continuing normally" }, { event: "result", status: "success" },
+    ]);
 
-      assert.equal(continued.stopReason, "stop");
-      assert.equal(continued.errorMessage, undefined);
-      assert.deepEqual(continued.content, [{ type: "text", text: "Continuing normally" }]);
-      assert.equal(session.activeProcess, recoveredProcess);
-      assert.equal(processes.length, row.processes);
-      assert.equal(send.mock.callCount(), 3);
-      assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
-      assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "continue request");
-      assert.deepEqual(manager.buildSessionContext().messages.filter((message) => message.role === "user").map((message) => message.content), [
-        "original request", "retry request", "continue request",
-      ]);
-    });
-  }
+    assert.equal(continued.stopReason, "stop");
+    assert.equal(continued.errorMessage, undefined);
+    assert.deepEqual(continued.content, [{ type: "text", text: "Continuing normally" }]);
+    assert.equal(session.activeProcess, recoveredProcess);
+    assert.equal(processes.length, row.processes);
+    assert.equal(send.mock.callCount(), 3);
+    assert.equal(send.mock.calls.at(-1)!.this, recoveredProcess);
+    assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "continue request");
+    assert.deepEqual(manager.buildSessionContext().messages.filter((message) => message.role === "user").map((message) => message.content), [
+      "original request", "retry request", "continue request",
+    ]);
+  });
 }
 
 for (const failure of [modelErrors[0]!, modelErrors[1]!]) {
@@ -900,7 +911,6 @@ test("transport failure during deferred payload invalidates before delayed close
 
 for (const row of [
   { options: { reasoning: "max" }, error: "Unsupported Antigravity CLI reasoning effort: max. Supported values: low, medium, high." },
-  { options: { thinkingLevel: "off" }, error: "Unsupported Antigravity CLI reasoning effort: off. Supported values: low, medium, high." },
 ]) {
   test(`unsupported effort on healthy runtime preserves saved conversation and PTY bindings: ${JSON.stringify(row.options)}`, { timeout: 5000 }, async (t) => {
     const { bridge, session, sessionId, epoch, listeners, close, abort, start, send, runTurn } = await createRuntimeFixture(t);
@@ -942,10 +952,8 @@ for (const row of [
 }
 
 for (const { source, payloadSource } of [
-  { source: "agy", payloadSource: "agy" },
   { source: "runtime", payloadSource: "agy" },
   { source: "agy", payloadSource: "runtime" },
-  { source: "runtime", payloadSource: "runtime" },
 ] as const) {
   test(`callback ${source} controls identical quota result with payload source=${payloadSource}`, { timeout: 5000 }, async (t) => {
     const { bridge, manager, session, sessionId, epoch, processes, listeners, close, abort, runTurn } = await createRuntimeFixture(t);

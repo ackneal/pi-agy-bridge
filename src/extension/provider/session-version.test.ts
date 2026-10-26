@@ -7,11 +7,11 @@ import { BridgeIPC } from "../bridge/bridge-ipc.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
 import type { DriverSession, PrepareDriverInput, RuntimeEvent } from "../drivers/types.ts";
-import { AgyBridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamAgyProvider } from "./provider.ts";
 
 test("turn persists its captured session version rather than a later driver selection", async (t) => {
   const config = { driver: "acp" as const };
-  const bridge = new AgyBridge({ getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI, config);
+  const bridge = new Bridge({ getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI, config);
   t.after(() => bridge.liveSessions.disposeAll());
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(os.tmpdir()));
   const live = bridge.liveSessions.getOrCreate(sessionId);

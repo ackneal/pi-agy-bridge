@@ -9,7 +9,7 @@ import test from "node:test";
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { AgyAuthentication, createAgyBridgeCredential } from "./auth.ts";
-import { AgyBridge } from "./provider.ts";
+import { Bridge } from "./provider.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -46,7 +46,7 @@ for (const scenario of [
       },
       registerCommand: () => {}, registerProvider: () => {},
     } as unknown as ExtensionAPI;
-    const bridge = new AgyBridge(pi, { driver: "cli", authPath });
+    const bridge = new Bridge(pi, { driver: "cli", authPath });
     const dispose = t.mock.method(bridge.liveSessions, "disposeAll", async () => {});
     const sessionManager = { getSessionId: t.mock.fn(() => "startup-test") };
     const refreshModels = t.mock.fn(() => discovery.promise);

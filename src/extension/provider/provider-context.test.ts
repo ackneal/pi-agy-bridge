@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
-import { formatContextPrompt } from "./provider.ts";
+import { formatContextPrompt } from "./context-prompt.ts";
 import { setDebugOverride } from "../shared/debug.ts";
 
 const assistantMetadata: Pick<AssistantMessage, "api" | "provider" | "model" | "usage"> = {

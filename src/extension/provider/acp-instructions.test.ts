@@ -9,7 +9,7 @@ import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { AcpSession } from "../drivers/acp/session.ts";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "../drivers/acp/instructions.ts";
-import { AgyBridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamAgyProvider } from "./provider.ts";
 
 const model: Model<"agy"> = {
   id: "selected", name: "Synthetic", api: "agy", provider: "agy", baseUrl: "agy",
@@ -27,7 +27,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
       acpArgs: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))],
       acpRequestTimeoutMs: 5000,
     };
-    const bridge = new AgyBridge(pi, config);
+    const bridge = new Bridge(pi, config);
     const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
     const session = bridge.liveSessions.getOrCreate(sessionId);
     const tools = [{ name: "read", description: "Synthetic read", parameters: { type: "object", properties: {} } }];

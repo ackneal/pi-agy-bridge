@@ -8,13 +8,13 @@ import path from "node:path";
 import { ModelRuntime, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
-import { AgyBridge } from "./provider.ts";
+import { Bridge } from "./provider.ts";
 
 for (const driver of ["cli", "acp"] as const) {
   for (const tag of [undefined, "cli", "acp"] as const) {
     test(`${driver} restores model cache with ${tag ?? "no"} driver tag`, async () => {
       let provider!: Provider;
-      const bridge = new AgyBridge({
+      const bridge = new Bridge({
         on: () => {}, registerCommand: () => {},
         registerProvider: (registered: Provider) => { provider = registered; },
       } as unknown as ExtensionAPI, { driver });
@@ -40,7 +40,7 @@ test("new ACP session restores a legacy cached scoped model without network or l
   await writeFile(authPath, JSON.stringify({ agy: { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1" } } }));
   const options = { authPath, modelsPath: path.join(directory, "models.json"), refreshOnCreate: false };
   const runtime = await ModelRuntime.create(options);
-  const bridge = new AgyBridge({
+  const bridge = new Bridge({
     on: () => {}, registerCommand: () => {},
     registerProvider: runtime.registerNativeProvider.bind(runtime),
   } as unknown as ExtensionAPI, { driver: "cli" });
@@ -50,7 +50,7 @@ test("new ACP session restores a legacy cached scoped model without network or l
   await runtime.refresh({ providers: ["agy"], allowNetwork: true });
 
   const reopened = await ModelRuntime.create(options);
-  const acpBridge = new AgyBridge({
+  const acpBridge = new Bridge({
     on: () => {}, registerCommand: () => {},
     registerProvider: reopened.registerNativeProvider.bind(reopened),
   } as unknown as ExtensionAPI, { driver: "acp" });
@@ -72,7 +72,7 @@ for (const allowNetwork of [false, true]) {
     const runtime = await ModelRuntime.create({ authPath, modelsPath: path.join(directory, "models.json"), refreshOnCreate: false });
     const start = t.mock.method(AcpConnection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
     t.mock.method(AcpConnection.prototype, "request", async () => { throw acp.RequestError.authRequired(); });
-    const bridge = new AgyBridge({
+    const bridge = new Bridge({
       on: () => {}, registerCommand: () => {},
       registerProvider: runtime.registerNativeProvider.bind(runtime),
     } as unknown as ExtensionAPI, { acpPath: process.execPath, agyPath: process.execPath, acpCwd: directory });
