@@ -20,6 +20,21 @@ import { Bridge, streamAgyProvider } from "./provider.ts";
 
 let home: string;
 let previousHome: string | undefined;
+
+function assertPersistedAssistantCheckpoint(actual: readonly unknown[] | undefined, expected: Context["messages"]): void {
+  // Pi times the terminal event snapshot, not the separate checkpoint snapshot.
+  assert.ok(actual);
+  assert.equal(actual.length, expected.length);
+  const persistedAssistant = actual.at(-1);
+  assert.ok(persistedAssistant && typeof persistedAssistant === "object" &&
+    "role" in persistedAssistant && persistedAssistant.role === "assistant");
+  const persistedMessage = Object.fromEntries(Object.entries(persistedAssistant).filter(([key]) => key !== "durationMs"));
+  const expectedAssistant = expected.at(-1);
+  assert.ok(expectedAssistant?.role === "assistant");
+  const { durationMs: _expectedDurationMs, ...expectedMessage } = expectedAssistant;
+  assert.deepEqual([...actual.slice(0, -1), persistedMessage], [...expected.slice(0, -1), expectedMessage]);
+}
+
 beforeEach(async () => {
   home = await mkdtemp(path.join(os.tmpdir(), "agy-native-home-"));
   previousHome = process.env.GEMINI_HOME;
@@ -152,7 +167,7 @@ for (const { decision, incremental, payload } of cases) {
     assert.ok(completed?.type === "done");
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(liveSession), context.messages.length + 1);
     assert.equal(persist.mock.callCount(), 1);
-    assert.deepEqual(persist.mock.calls[0]!.arguments[2], [...context.messages, completed.message]);
+    assertPersistedAssistantCheckpoint(persist.mock.calls[0]!.arguments[2], [...context.messages, completed.message]);
     const starts = decision.action === "continue" ? 0 : 1;
     assert.equal(startProc.mock.callCount(), starts);
     assert.equal(startBridge.mock.callCount(), starts);
@@ -452,7 +467,7 @@ for (const row of continueCases) {
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "done");
       assert.equal(terminal.reason, row.reason);
-      assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
+      assertPersistedAssistantCheckpoint(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
       assert.equal(persist.mock.calls[1]!.arguments[3], "current-login");
       assert.equal(session.activeProcess, proc);
       assert.equal(close.mock.callCount(), 0);
@@ -724,7 +739,7 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     assert.doesNotMatch(appendix!, /pending tool answer/);
     assert.equal(persist.mock.callCount(), 2);
     assert.deepEqual(persist.mock.calls[0]!.arguments[2], context.messages);
-    assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
+    assertPersistedAssistantCheckpoint(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
     assert.equal(listeners.size, 0);
     await bridge.liveSessions.disposeAll();
@@ -838,7 +853,7 @@ for (const conversionException of [false, true]) {
     assert.notEqual(call.id, oldId);
     assert.deepEqual(call.arguments, { batch: "next" });
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
-    assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
+    assertPersistedAssistantCheckpoint(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
     assert.equal(session.activeProcess, proc);
     assert.equal(invalidate.mock.callCount(), 0, "conversion is a tool error, not an infrastructure failure");
     assert.equal(close.mock.callCount(), 0);
