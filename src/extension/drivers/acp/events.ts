@@ -1,4 +1,4 @@
-import type { PromptResponse, ReadTextFileRequest, SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { PromptResponse, SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { RuntimeEvent } from "../types.ts";
 import { isRegisteredPiMcpTool } from "./permissions.ts";
 
@@ -6,11 +6,10 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-type ObservedCall = { call: ToolCallUpdate; clientReadPath?: string; warned?: boolean };
+type ObservedCall = { call: ToolCallUpdate; warned?: boolean };
 
-export class AcpEventTranslator {
+export class EventProcessor {
   private readonly calls = new Map<string, ObservedCall>();
-  private readonly clientReads: string[] = [];
   private overflowWarned = false;
 
   private readonly sessionId: string;
@@ -21,13 +20,7 @@ export class AcpEventTranslator {
     this.allowedToolNames = new Set(allowedToolNames);
   }
 
-  observeClientRead(request: ReadTextFileRequest): void {
-    // The RPC has no toolCallId. Correlation proves an observed route, not tool identity
-    // or path authorization; the Artifact Reader remains the authorization boundary.
-    if (request.sessionId === this.sessionId && this.clientReads.length < 128) this.clientReads.push(request.path);
-  }
-
-  translate(notification: SessionNotification, source: "live" | "replay", emit: (event: RuntimeEvent) => void): void {
+  process(notification: SessionNotification, source: "live" | "replay", emit: (event: RuntimeEvent) => void): void {
     if (source === "replay" || notification.sessionId !== this.sessionId) return;
 
     const update = notification.update;
@@ -54,7 +47,7 @@ export class AcpEventTranslator {
       // Malformed increments must not erase an established identity before a later conflict.
       if (record(before)) call._meta = { ...call._meta, mcp: record(after) ? { ...before, ...after } : before };
       if (record(prior?.call.rawInput) && record(update.rawInput)) call.rawInput = { ...prior.call.rawInput, ...update.rawInput };
-      this.calls.set(id, { call, ...(prior?.clientReadPath ? { clientReadPath: prior.clientReadPath } : {}) });
+      this.calls.set(id, { call });
       this.check(id, emit, update.status === "completed" || update.status === "failed");
     } else if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
       emit({ type: "session-reference", reference: this.sessionId });
@@ -73,25 +66,15 @@ export class AcpEventTranslator {
     if (!entry || entry.warned) return;
     const { call } = entry;
     const mcp = call._meta?.mcp;
-    if (isRegisteredPiMcpTool(mcp, this.allowedToolNames)) {
-      if (entry.clientReadPath !== undefined) this.warn(call, emit);
-      return;
-    }
+    if (isRegisteredPiMcpTool(mcp, this.allowedToolNames)) return;
     if (record(mcp) && (typeof mcp.server === "string" && mcp.server !== "pi-agy-bridge_pi" ||
       typeof mcp.server === "string" && typeof mcp.tool === "string")) {
       this.warn(call, emit);
       return;
     }
-    const path = record(call.rawInput) ? call.rawInput.absolute_path : undefined;
-    if (call.title === "Running client_view_file" && call.kind === "read" && typeof path === "string" && mcp === undefined) {
-      if (entry.clientReadPath === path) return;
-      const index = this.clientReads.indexOf(path);
-      if (entry.clientReadPath === undefined && index !== -1) {
-        this.clientReads.splice(index, 1);
-        entry.clientReadPath = path;
-        return;
-      }
-    }
+    // Notifications describe activity; only the Artifact Reader authorizes client reads.
+    // RPC ordering, read failures, and paths do not change this classification.
+    if (call.title === "Running client_view_file" && call.kind === "read" && mcp === undefined) return;
     // Missing identity in an incremental update is not proof of a native call.
     // Require an allowlisted route once identifiable activity finishes.
     if (final && (call.title !== undefined || call.kind !== undefined || call.rawInput !== undefined || call._meta !== undefined || call.name !== undefined)) {
@@ -115,7 +98,6 @@ export class AcpEventTranslator {
   complete(response: PromptResponse, emit: (event: RuntimeEvent) => void): void {
     for (const id of this.calls.keys()) this.check(id, emit, true);
     this.calls.clear();
-    this.clientReads.length = 0;
     this.overflowWarned = false;
 
     emit({ type: "session-reference", reference: this.sessionId });

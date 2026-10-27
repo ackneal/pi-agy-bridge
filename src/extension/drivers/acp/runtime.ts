@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
 import { AcpSession, type AcpSessionOptions } from "./session.ts";
-import { AcpEventTranslator } from "./events.ts";
+import { EventProcessor } from "./events.ts";
 import { AcpMcpPermissions } from "./permissions.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { fingerprintAcpSystemPrompt } from "./instructions.ts";
@@ -36,7 +36,7 @@ export class AcpRuntimeSession implements DriverSession {
   readonly driver = "acp" as const;
   readonly session: AcpSession;
   readonly compatibilityKey: string | undefined;
-  private translator: AcpEventTranslator | undefined;
+  private eventProcessor: EventProcessor | undefined;
   private permissions: AcpMcpPermissions | undefined;
   private readonly allowedToolNames: ReadonlySet<string>;
   private listeners = new Set<(event: RuntimeEvent) => void>();
@@ -62,10 +62,7 @@ export class AcpRuntimeSession implements DriverSession {
       }),
     });
     this.session = new AcpSession({ ...options,
-      onRead: (request, signal) => {
-        this.translator?.observeClientRead(request);
-        return this.reader.read(request, signal);
-      },
+      onRead: (request, signal) => this.reader.read(request, signal),
       onPermission: (request) => this.permissions?.reply(request) ?? { outcome: { outcome: "cancelled" } },
       onClose: (error) => {
         this.permissions?.reset();
@@ -76,14 +73,14 @@ export class AcpRuntimeSession implements DriverSession {
       },
       onUpdate: (update: SessionNotification) => {
         this.permissions?.observe(update);
-        this.translator?.translate(update, "live", this.emit);
+        this.eventProcessor?.process(update, "live", this.emit);
       },
     });
   }
   get isRunning(): boolean { return this.session.isRunning; }
   async prepare(signal?: AbortSignal): Promise<void> {
     await this.session.prepare(signal);
-    this.translator = new AcpEventTranslator(this.session.id, this.allowedToolNames);
+    this.eventProcessor = new EventProcessor(this.session.id, this.allowedToolNames);
     this.permissions = new AcpMcpPermissions(this.session.id, this.allowedToolNames);
   }
   private fail(error: unknown): Promise<void> {
@@ -152,7 +149,7 @@ export class AcpRuntimeSession implements DriverSession {
         await this.reader.endPrompt();
         this.userPrompt = "";
         this.completion = undefined;
-        this.translator?.complete(response, this.emit);
+        this.eventProcessor?.complete(response, this.emit);
       }).catch((error: unknown) => this.fail(error));
     } finally { this.submitting = false; }
   }

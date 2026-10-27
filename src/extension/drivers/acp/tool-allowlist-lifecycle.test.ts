@@ -7,9 +7,11 @@ import type { DriverSubmission, RuntimeEvent } from "../types.ts";
 import { AcpRuntimeSession } from "./runtime.ts";
 
 for (const row of [
-  { name: "callback before announcement", announceFirst: false, outside: false },
-  { name: "announcement before callback", announceFirst: true, outside: false },
-  { name: "client route does not authorize an outside path", announceFirst: false, outside: true },
+  { name: "callback before announcement", announceFirst: false, outside: false, status: "in_progress" },
+  { name: "announcement before callback", announceFirst: true, outside: false, status: "in_progress" },
+  { name: "completion before callback", announceFirst: true, outside: false, status: "completed" },
+  { name: "failed notification with denied read", announceFirst: true, outside: true, status: "failed" },
+  { name: "client route does not authorize an outside path", announceFirst: false, outside: true, status: "in_progress" },
 ]) {
   test(`client tool notification: ${row.name}`, { timeout: 10000 }, async (t) => {
     const home = await realpath(await mkdtemp(join(tmpdir(), "acp-tool-route-")));
@@ -25,7 +27,7 @@ for (const row of [
         const announce = () => client.notify(acp.methods.client.session.update, {
           sessionId: params.sessionId,
           update: { sessionUpdate: "tool_call", toolCallId: "client-read", title: "Running client_view_file",
-            kind: "read", status: "in_progress", rawInput: { absolute_path: ${JSON.stringify(target)} } },
+            kind: "read", status: ${JSON.stringify(row.status)}, rawInput: { absolute_path: ${JSON.stringify(target)} } },
         });
         if (${row.announceFirst}) await announce();
         let readResult;
