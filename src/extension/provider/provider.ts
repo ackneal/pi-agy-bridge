@@ -132,7 +132,7 @@ export function streamAgyProvider(
 export class Bridge {
   private readonly pi: ExtensionAPI;
   private ui: ExtensionContext["ui"] | undefined;
-  private readonly progress = new Map<symbol, string>();
+  private readonly progress = new Map<symbol, { ui: ExtensionContext["ui"]; message: string }>();
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private discoveryError: DriverFailure | undefined;
@@ -198,7 +198,7 @@ export class Bridge {
     return task;
   }
 
-  public async switchDriver(driverId: DriverId, modelRegistry?: ExtensionContext["modelRegistry"]): Promise<string | undefined> {
+  public async switchDriver(driverId: DriverId, modelRegistry?: ExtensionContext["modelRegistry"]): Promise<{ signal: AbortSignal; warning?: string } | undefined> {
     this.lifetime.signal.throwIfAborted();
     if (this.driver.id === driverId) return;
 
@@ -216,6 +216,7 @@ export class Bridge {
     this.driver = driver;
     this.authentication.setBackend(driver.authentication);
     this.runtimeLifetime = new AbortController();
+    const signal = this.runtimeLifetime.signal;
 
     this.usageRefresh = undefined;
     this.discoveryError = undefined;
@@ -227,8 +228,9 @@ export class Bridge {
     try {
       await modelRegistry?.refresh({ providers: ["agy"], allowNetwork: false });
     } catch (error) {
-      return `Switched to ${driver.label}, but Pi model registry refresh failed: ${error instanceof Error ? error.message : String(error)}`;
+      return { signal, warning: `Switched to ${driver.label}, but Pi model registry refresh failed: ${error instanceof Error ? error.message : String(error)}` };
     }
+    return { signal };
   }
 
   public warnTool(name: string, args: unknown): void {
@@ -257,18 +259,19 @@ export class Bridge {
   private showProgress(ctx: ExtensionContext | undefined, message: string): () => void {
     if (!ctx?.hasUI) return () => {};
 
+    const ui = ctx.ui;
     const id = Symbol();
-    this.progress.set(id, message);
-    ctx.ui.setStatus("agy-bridge", message);
+    this.progress.set(id, { ui, message });
+    ui.setStatus("agy-bridge", message);
     return () => {
       const current = [...this.progress.keys()].at(-1) === id;
       this.progress.delete(id);
-      if (current) ctx.ui.setStatus("agy-bridge", [...this.progress.values()].at(-1));
+      if (current) ui.setStatus("agy-bridge", [...this.progress.values()].at(-1)?.message);
     };
   }
 
-  private async showDoctor(ctx?: ExtensionContext, warning?: string): Promise<void> {
-    const lifetime = this.runtimeLifetime.signal;
+  private async showDoctor(ctx?: ExtensionContext, warning?: string, lifetime = this.runtimeLifetime.signal): Promise<void> {
+    if (lifetime.aborted) return;
     const finishProgress = this.showProgress(ctx, `Checking ${this.driver.label} diagnostics…`);
     const suffix = warning ? `\n\nWarning\n  ! ${warning}` : "";
     try {
@@ -367,9 +370,9 @@ export class Bridge {
 
         const label = target === "cli" ? "Antigravity CLI" : "Antigravity ACP";
         const finishProgress = this.showProgress(ctx, `Switching to ${label}…`);
-        let warning: string | undefined;
+        let result: Awaited<ReturnType<Bridge["switchDriver"]>>;
         try {
-          warning = await this.switchDriver(target, ctx?.modelRegistry);
+          result = await this.switchDriver(target, ctx?.modelRegistry);
         } catch (error) {
           this.pi.sendMessage({
             customType: "pi-agy-bridge:driver",
@@ -380,7 +383,7 @@ export class Bridge {
         } finally {
           finishProgress();
         }
-        await this.showDoctor(ctx, warning);
+        await this.showDoctor(ctx, result?.warning, result?.signal);
       },
     });
 
@@ -410,6 +413,9 @@ export class Bridge {
       })();
     });
     this.pi.on("session_shutdown", async () => {
+      const activeProgress = [...this.progress.values()].at(-1);
+      this.progress.clear();
+      activeProgress?.ui.setStatus("agy-bridge", undefined);
       this.ui = undefined;
       this.lifetime.abort(new Error("Antigravity bridge session ended"));
       this.authentication.close();

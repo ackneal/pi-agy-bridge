@@ -81,6 +81,8 @@ Pi also manages custom tools and skills. Pi tool calls execute through the MCP b
 
 The ACP driver requests `enabledTools: []`, denies non-MCP permission requests, and exposes no client write or terminal capability. Unverified ACP tool notifications produce a warning in Pi without stopping the conversation. The warning does not grant permissions or mean execution was prevented. These are configuration and protocol checks, not a sandbox around AGY. Backend enforcement of native-tool filtering and system-instruction delivery still needs real-backend validation.
 
+ACP notifications are observational, not execution or authorization evidence. A notification titled `Running client_view_file` with kind `read` and no MCP identity is classified as Client Read without requiring a matching RPC, so it does not produce a tool warning. This does not prove that a read occurred, succeeded, or was authorized. Every actual Client Read request still passes through the restricted Artifact Reader; a rejected read does not by itself require a tool warning.
+
 ### Sessions and Context
 
 The bridge reuses your selected-backend conversation across turns and can resume it after restarting Pi when the history still matches.
