@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -129,5 +130,59 @@ for (const stage of ["preparation", "prompt"] as const) {
     assert.equal(session.isRunning, false);
     assert.equal(session.hasActivePrompt, false);
     await session.dispose();
+  });
+}
+
+for (const phase of ["preparation", "active", "wrong-session", "idle"] as const) {
+  test(`ACP session read gate: ${phase}`, async (t) => {
+    const source = await readFile(new URL("./session-fixture.ts", import.meta.url), "utf8");
+    const read = `
+      let report;
+      try { report = await client.request(acp.methods.client.fs.readTextFile, {
+        sessionId: ${JSON.stringify(phase === "wrong-session" ? "another-session" : "synthetic-session")}, path: '/synthetic/artifact'
+      }); } catch (error) { report = { code: error.code, message: error.message }; }
+    `;
+    const notify = `await client.notify(acp.methods.client.session.update, {
+      sessionId: 'synthetic-session', update: { sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: JSON.stringify(report) } }
+    });`;
+    const script = source.replace('const scenario = process.argv[2];', 'const scenario = "normal";')
+      .replace('checkSession(params);', phase === "preparation" ? `${read} requests.push(report); checkSession(params);` : 'checkSession(params);')
+      .replace('if (scenario === "hang-prompt") await new Promise(() => {});',
+        phase === "preparation" ? '' : phase === "idle"
+          ? `setTimeout(async () => { ${read} ${notify} }, 50); return { stopReason: 'end_turn' };`
+          : `${read} ${notify} return { stopReason: 'end_turn' };`);
+    const calls: acp.ReadTextFileRequest[] = [];
+    const controller = new AbortController();
+    let received!: (value: unknown) => void;
+    const report = new Promise<unknown>((resolve) => { received = resolve; });
+    const session = new AcpSession({
+      executable: process.execPath, args: ["--experimental-strip-types", "--input-type=module-typescript", "-e", script],
+      cwd: process.cwd(), model: "selected",
+      mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] },
+      onRead: async (request, signal) => {
+        assert.equal(signal.aborted, false);
+        assert.ok(signal instanceof AbortSignal);
+        calls.push(request);
+        return { content: "allowed" };
+      },
+      onUpdate: ({ update }) => {
+        if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+          const value = JSON.parse(update.content.text);
+          received(phase === "preparation" ? value[0] : value);
+        }
+      },
+    });
+    t.after(() => session.dispose());
+    await session.prepare(controller.signal);
+    await session.prompt([{ type: "text", text: "read artifact" }]);
+    const value = await report;
+    if (phase === "active") {
+      assert.deepEqual(value, { content: "allowed" });
+      assert.deepEqual(calls, [{ sessionId: session.id, path: "/synthetic/artifact" }]);
+    } else {
+      assert.deepEqual(value, { code: -32000, message: "ACP read is outside the active conversation prompt" });
+      assert.deepEqual(calls, []);
+    }
   });
 }
