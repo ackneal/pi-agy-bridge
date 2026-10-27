@@ -8,8 +8,10 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 
+// version.ts captures the promisified function at import time; keep its dispatcher reusable.
+let execute: (args: readonly string[], signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
+
 test("doctor suppresses reports after shutdown at each await boundary", async (t) => {
-  let execute: (args: readonly string[], signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
   const replacement = Object.assign(() => {}, {
     [promisify.custom]: (_file: string, args: readonly string[], options: { signal?: AbortSignal }) => execute(args, options.signal),
   });
@@ -17,7 +19,8 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
   cp.execFile = replacement as unknown as typeof cp.execFile;
   syncBuiltinESMExports();
   t.after(() => { cp.execFile = original; syncBuiltinESMExports(); });
-  const { AgyBridge } = await import("./provider.ts");
+  const { CliDriver } = await import("../drivers/cli/driver.ts");
+  const { Bridge } = await import("./provider.ts");
 
   for (const stage of ["quota", "report"] as const) {
     await t.test(stage, async (t) => {
@@ -79,17 +82,23 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
       let shutdown: (() => Promise<void>) | undefined;
       const sendMessage = t.mock.fn();
       const pi = {
-        registerCommand: (_name: string, command: { handler: () => Promise<void> }) => { doctor = command.handler; },
+        registerCommand: (name: string, command: { handler: () => Promise<void> }) => { if (name === "agy-bridge:doctor") doctor = command.handler; },
         on: (name: string, handler: () => Promise<void>) => { if (name === "session_shutdown") shutdown = handler; },
         registerProvider: () => {},
         sendMessage,
       } as unknown as ExtensionAPI;
-      const bridge = new AgyBridge(pi, { models: [], agyPath: "/fake/agy", pluginDir: "/missing/doctor-plugin" });
+      const bridge = new Bridge(pi, new CliDriver());
+      t.mock.method(CliDriver.prototype, "detectExecutable", () => "/fake/agy");
       bridge.start();
       assert.ok(doctor);
       assert.ok(shutdown);
 
       const pending = doctor();
+      t.after(async () => {
+        release();
+        await shutdown!();
+        await pending;
+      });
       await reached;
       assert.equal(sendMessage.mock.callCount(), 0);
       assert.equal(terminated, false);
@@ -108,7 +117,8 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
 });
 
 test("doctor starts a fresh query after login while the cancelled query is still closing", async (t) => {
-  const { AgyBridge } = await import("./provider.ts");
+  const { CliDriver } = await import("../drivers/cli/driver.ts");
+  const { Bridge } = await import("./provider.ts");
   const controller = new AbortController();
   const pending: Promise<unknown>[] = [];
   const children: ReturnType<typeof createChild>[] = [];
@@ -147,19 +157,16 @@ test("doctor starts a fresh query after login while the cancelled query is still
     killed.push(pid);
     return true;
   });
-  const exec = Object.assign(() => {}, {
-    [promisify.custom]: async () => ({ stdout: "agy 1.0.0", stderr: "" }),
-  });
-  t.mock.method(cp, "execFile", exec as unknown as typeof cp.execFile);
-  syncBuiltinESMExports();
+  execute = async () => ({ stdout: "agy 1.0.0", stderr: "" });
   let doctor!: () => Promise<void>;
   let provider!: Provider;
   const sendMessage = t.mock.fn();
-  const bridge = new AgyBridge({
-    registerCommand: (_name: string, command: { handler: () => Promise<void> }) => { doctor = command.handler; },
+  const bridge = new Bridge({
+    registerCommand: (name: string, command: { handler: () => Promise<void> }) => { if (name === "agy-bridge:doctor") doctor = command.handler; },
     registerProvider: (registered: Provider) => { provider = registered; },
     on: () => {}, sendMessage,
-  } as unknown as ExtensionAPI, { models: [], agyPath: "/fake/agy", pluginDir: "/missing/doctor-plugin" });
+  } as unknown as ExtensionAPI, new CliDriver());
+  t.mock.method(CliDriver.prototype, "detectExecutable", () => "/fake/agy");
   bridge.start();
 
   const oldDoctor = doctor();

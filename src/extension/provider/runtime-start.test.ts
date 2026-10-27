@@ -5,9 +5,10 @@ import path from "node:path";
 import test from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
+import { CliDriver } from "../drivers/cli/driver.ts";
 import { AgyRuntime } from "../runtime/process.ts";
-import { AgyBridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamAgyProvider } from "./provider.ts";
 
 const cases = [
   { stage: "bridge.start", aborts: 0, cancelled: false },
@@ -29,7 +30,7 @@ for (const { stage, aborts, cancelled } of cases) {
     const failure = new Error(`injected ${stage} failure`);
     const controller = new AbortController();
     const startBridge = t.mock.method(BridgeIPC.prototype, "start", async function (this: BridgeIPC) {
-      // Supply the endpoint required by the real processEnvironment getter without opening a socket.
+      // Supply the endpoint required by the real bridgeUri getter without opening a socket.
       (this as unknown as { socketPath: string }).socketPath = path.join(directory, "bridge.sock");
       if (stage === "bridge.start") throw failure;
     });
@@ -42,7 +43,7 @@ for (const { stage, aborts, cancelled } of cases) {
       return { event: "init", conversation_id: "test-conversation" } as Awaited<ReturnType<AgyRuntime["start"]>>;
     });
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
-    const install = t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {
+    const install = t.mock.method(CliDriver.prototype, "installPlugin", async () => {
       if (stage === "plugin install") throw failure;
     });
 
@@ -53,8 +54,8 @@ for (const { stage, aborts, cancelled } of cases) {
       getActiveTools: () => [],
       getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath, pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new AgyBridge(pi, config);
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     bridge.start();
     const context: Context = { messages: [], tools: [], systemPrompt: "" };
     const model = {
@@ -64,7 +65,7 @@ for (const { stage, aborts, cancelled } of cases) {
       contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId: `test-${stage}`, signal: controller.signal }, config, bridge)) {
+    for await (const event of streamAgyProvider(model, context, { sessionId: `test-${stage}`, signal: controller.signal }, bridge)) {
       events.push(event);
       if (event.type === "error" || event.type === "done") break;
     }

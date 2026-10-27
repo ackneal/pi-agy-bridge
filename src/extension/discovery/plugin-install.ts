@@ -1,3 +1,4 @@
+import { createMcpLaunchDescriptor } from "../bridge/mcp-launch.ts";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -13,10 +14,16 @@ let pluginInstallQueue: Promise<void> = Promise.resolve();
 
 export const DEFAULT_AGY_PLUGIN_DIR = fileURLToPath(new URL("../../../plugin", import.meta.url));
 
-export function resolveMcpEntrypoint(): { nodePath: string; entrypointPath: string } {
+export { resolveMcpEntrypoint } from "../bridge/mcp-launch.ts";
+
+export function buildCliProcessEnvironment(endpoint: string): NodeJS.ProcessEnv {
+  const launch = createMcpLaunchDescriptor(endpoint);
   return {
-    nodePath: process.execPath,
-    entrypointPath: fileURLToPath(new URL("../../mcp/index.js", import.meta.url)),
+    PI_AGY_BRIDGE_RECOVERY: "1",
+    PI_AGY_BRIDGE_MCP_RUNTIME: launch.command,
+    PI_AGY_BRIDGE_HOOK_RUNTIME: process.execPath,
+    PI_AGY_BRIDGE_MCP_ENTRYPOINT: launch.args[0],
+    PI_AGY_BRIDGE_MCP_ENDPOINT: endpoint,
   };
 }
 

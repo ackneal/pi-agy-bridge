@@ -1,8 +1,15 @@
+import type { DriverAuthentication } from "../drivers/types.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { AgyAuthentication, createAgyBridgeCredential, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
+
+const noProbeBackend: DriverAuthentication = {
+  label: "Antigravity CLI",
+  probe: async () => { throw new Error("Unexpected authentication probe"); },
+  login: async () => { throw new Error("Unexpected authentication login"); },
+};
 
 for (const epoch of ["test epoch", "a/b:%", "123"]) {
   test(`local OAuth renewal and marker: ${epoch}`, async (t) => {
@@ -12,7 +19,7 @@ for (const epoch of ["test epoch", "a/b:%", "123"]) {
       t.mock.restoreAll();
       syncBuiltinESMExports();
     });
-    const auth = new AgyAuthentication("/must-not-spawn", async () => {});
+    const auth = new AgyAuthentication(noProbeBackend, async () => {});
     t.after(() => auth.close());
     const credential = { ...createAgyBridgeCredential(epoch), expires: 0 };
     const refreshed = await auth.oauth.refresh(credential, new AbortController().signal);
@@ -37,7 +44,7 @@ for (const marker of [undefined, "secret", "agy-bridge:", "agy-bridge:%", "agy-b
 
 for (const patch of [{ agyBridge: false }, { loginEpoch: "" }, { access: "secret" }, { refresh: "secret" }]) {
   test(`reject invalid credential ${JSON.stringify(patch)}`, async (t) => {
-    const auth = new AgyAuthentication(undefined, async () => {});
+    const auth = new AgyAuthentication(noProbeBackend, async () => {});
     t.after(() => auth.close());
     const credential = { ...createAgyBridgeCredential(), ...patch };
     assert.equal(isAgyBridgeEnabled(credential), false);

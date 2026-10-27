@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { BridgeIPC } from "../../src/extension/bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../../src/extension/bridge/ipc.ts";
+import { buildCliProcessEnvironment } from "../../src/extension/discovery/plugin-install.ts";
 import { mkdtemp, symlink, writeFile, rm, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -120,7 +121,7 @@ describe("static Antigravity CLI bridge plugin", () => {
       let environment: NodeJS.ProcessEnv;
       try {
         process.execPath = nodePath;
-        environment = bridge.processEnvironment;
+        environment = buildCliProcessEnvironment(bridge.bridgeUri);
       } finally {
         process.execPath = originalNodePath;
       }

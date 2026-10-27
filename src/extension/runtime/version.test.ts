@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { resolveAgyExecutable, validateAgyVersion } from "./version.ts";
+import { detectCliExecutable, resolveAgyExecutable, validateAgyVersion } from "./version.ts";
 import { expandHome } from "../shared/paths.ts";
 
 for (const row of [
@@ -17,6 +17,26 @@ for (const row of [
   test(`home expansion preserves path semantics: ${row.input}`, () => {
     assert.equal(expandHome(row.input), row.expected);
     assert.equal(resolveAgyExecutable(row.input), row.expected);
+  });
+}
+
+for (const source of ["explicit", "PATH"] as const) {
+  test(`relative CLI ${source} path is anchored before changing workspace`, (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "agy-relative-path-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    t.mock.method(os, "homedir", () => directory);
+    syncBuiltinESMExports();
+    t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+    const executable = path.join(directory, "agy");
+    fs.writeFileSync(executable, "not a program\n", { mode: 0o700 });
+    const previous = process.env.PATH;
+    t.after(() => {
+      if (previous === undefined) delete process.env.PATH;
+      else process.env.PATH = previous;
+    });
+    process.env.PATH = path.relative(process.cwd(), directory);
+
+    assert.equal(detectCliExecutable(source === "explicit" ? path.relative(process.cwd(), executable) : undefined), executable);
   });
 }
 

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { AgyProcess } from "../runtime/process.ts";
+import type { DriverSession } from "../drivers/types.ts";
 import { serializeMessage } from "./history.ts";
-import { RuntimeSessionSync } from "./session-state.ts";
+import { RuntimeSessionSync } from "./state.ts";
 import { LiveSession } from "./session.ts";
 
 const assistant = { role: "assistant", content: [{ type: "text", text: "answer" }], stopReason: "stop" };
@@ -59,7 +59,11 @@ describe("RuntimeSessionSync history regression", () => {
   ]) {
     it(name, () => {
       const live = new LiveSession("pi-session-history");
-      live.setSession({ isRunning: true } as AgyProcess, "sync-key", undefined, "conversation");
+      const runtime: DriverSession = {
+        driver: "cli", isRunning: true, onRuntimeEvent: () => () => {},
+        formatContextUpdate: () => "", submit: async () => {}, abort: async () => {},
+      };
+      live.setSession(runtime, "sync-key", undefined, "conversation");
       const sync = new RuntimeSessionSync();
       const history = [{ role: "user", content: "question" }];
       sync.record(live, history, assistant);

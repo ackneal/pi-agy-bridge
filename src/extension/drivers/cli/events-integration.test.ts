@@ -1,10 +1,25 @@
 import assert from "node:assert/strict";
 import test, { describe, it } from "node:test";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
-import type { AgyEvent, AgyResultEvent } from "../shared/types.ts";
-import { AgyEventAdapter } from "./events.ts";
+import type { AgyEvent, AgyResultEvent } from "../../shared/types.ts";
+import { PiRuntimeOutput, type PiRuntimeOutputOptions } from "../../provider/output.ts";
+import { CliEventTranslator, type ConversationErrorState } from "./events.ts";
 
-async function collectStreamEvents(adapter: AgyEventAdapter): Promise<AssistantMessageEvent[]> {
+class TranslatorOutput extends PiRuntimeOutput {
+  private readonly translator: CliEventTranslator;
+
+  constructor(options: PiRuntimeOutputOptions & { errorState?: ConversationErrorState }) {
+    super(options);
+    this.translator = new CliEventTranslator(options);
+  }
+
+  handleEvent(event: AgyEvent, source: "agy" | "runtime" = "agy"): void {
+    if (this.isCompleted()) return;
+    this.translator.translate(event, source, (fact) => this.handleRuntimeEvent(fact));
+  }
+}
+
+async function collectStreamEvents(adapter: TranslatorOutput): Promise<AssistantMessageEvent[]> {
   const events: AssistantMessageEvent[] = [];
   for await (const ev of adapter.stream) {
     events.push(ev);
@@ -16,7 +31,6 @@ const blockedToolCases: {
   name: string;
   event: AgyEvent;
   blocked: string | undefined;
-  toolName?: string | undefined;
   terminalType?: "error";
   unrestricted?: boolean;
   allowedToolNames?: string[];
@@ -32,7 +46,7 @@ const blockedToolCases: {
     event: { event: "step_update", tool_call: { id: "restricted", name } },
     blocked: name,
   })),
-  { name: "allowed MCP view_file remains a Pi tool", event: { event: "step_update", tool_call: { id: "mcp", name: "mcp__pi__view_file" } }, blocked: undefined, toolName: "mcp__pi__view_file", allowedToolNames: ["view_file"] },
+  { name: "allowed MCP view_file remains a Pi tool", event: { event: "step_update", tool_call: { id: "mcp", name: "mcp__pi__view_file" } }, blocked: undefined, allowedToolNames: ["view_file"] },
   { name: "top-level call", event: { event: "step_update", tool_call: { id: "", name: "run_command", arguments: "{}" } }, blocked: "run_command" },
   { name: "nested call", event: { event: "step_update", step_update: { tool_call: { id: "native", name: "run_command" } } }, blocked: "run_command" },
   { name: "empty nested tool name", event: { event: "step_update", tool_call: { id: "native", name: "" } }, blocked: "" },
@@ -57,13 +71,12 @@ const blockedToolCases: {
   { name: "flat undefined tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: undefined, name: "read" }, blocked: "<unnamed>" },
   { name: "flat tool update", event: { event: "step_update", type: "tool", tool_name: "run_command" }, blocked: "run_command" },
   { name: "legacy tool update", event: { event: "step_update", step_type: "tool", name: "run_command" }, blocked: "run_command" },
-  { name: "flat allowed call", event: { event: "step_update", update_type: "tool", tool_name: "read", name: "run_command", input: "{}" }, blocked: undefined, toolName: "read" },
-  { name: "top-level call overrides envelope", event: { event: "step_update", tool_call: { id: "allowed", name: "read" }, step_update: { tool_call: { id: "native", name: "run_command" } } }, blocked: undefined, toolName: "read" },
+  { name: "flat allowed call", event: { event: "step_update", update_type: "tool", tool_name: "read", name: "run_command", input: "{}" }, blocked: undefined },
+  { name: "top-level call overrides envelope", event: { event: "step_update", tool_call: { id: "allowed", name: "read" }, step_update: { tool_call: { id: "native", name: "run_command" } } }, blocked: undefined },
   ...["read", "mcp__pi__read", "call_mcp_tool", "list_resources", "manage_task"].map((name) => ({
     name: `allowed ${name}`, event: { event: "step_update", tool_call: { id: "", name, arguments: "{}" } }, blocked: undefined,
-    toolName: name === "read" || name === "mcp__pi__read" ? name : undefined,
   })),
-  { name: "no allowlist allows valid names", event: { event: "step_update", type: "tool", name: "run_command" }, blocked: undefined, toolName: "run_command", unrestricted: true },
+  { name: "no allowlist allows valid names", event: { event: "step_update", type: "tool", name: "run_command" }, blocked: undefined, unrestricted: true },
   { name: "no allowlist rejects empty names", event: { event: "step_update", type: "tool", name: "" }, blocked: "", unrestricted: true },
   { name: "no allowlist rejects zero names", event: { event: "step_update", type: "tool", name: 0 }, blocked: "0", unrestricted: true },
   { name: "no allowlist rejects null names", event: { event: "step_update", tool_call: { id: "", name: null } }, blocked: "null", unrestricted: true },
@@ -77,37 +90,34 @@ const blockedToolCases: {
 for (const expected of blockedToolCases) {
   const policyOptions = expected.unrestricted ? {} : { allowedToolNames: new Set(expected.allowedToolNames ?? ["read"]) };
 
-  for (const bridgeToolCallsExternally of [false, true]) {
-    test(`active tool policy (${bridgeToolCallsExternally ? "external" : "direct"}): ${expected.name}`, async () => {
-      const blockedNames: string[] = [];
-      const adapter = new AgyEventAdapter({
-        model: "test", ...policyOptions, bridgeToolCallsExternally,
-        onBlockedTool: (name) => blockedNames.push(name),
-      });
-
-      adapter.handleEvent(expected.event);
-
-      assert.deepEqual(blockedNames, expected.blocked === undefined ? [] : [expected.blocked]);
-      if (expected.blocked !== undefined) {
-        assert.equal(adapter.isCompleted(), true);
-        assert.equal(adapter.message.errorMessage, `The model attempted to call an unavailable tool: ${expected.blocked}`);
-      }
-      adapter.handleEvent({ event: "result", status: "success" });
-      const events = await collectStreamEvents(adapter);
-      const terminal = events.filter((event) => event.type === "done" || event.type === "error");
-      assert.equal(terminal.length, 1);
-      assert.equal(terminal[0]?.type, expected.blocked === undefined ? expected.terminalType ?? "done" : "error");
-      const names = !bridgeToolCallsExternally && expected.toolName ? [expected.toolName] : [];
-      assert.deepEqual(adapter.message.content.filter((block) => block.type === "toolCall").map((call) => call.name), names);
-      for (const type of ["toolcall_start", "toolcall_delta", "toolcall_end"]) {
-        assert.equal(events.filter((event) => event.type === type).length, names.length);
-      }
+  test(`active MCP-only tool policy: ${expected.name}`, async () => {
+    const blockedNames: string[] = [];
+    const adapter = new TranslatorOutput({
+      model: "test", ...policyOptions,
+      onBlockedTool: (name) => blockedNames.push(name),
     });
-  }
+
+    adapter.handleEvent(expected.event);
+
+    assert.deepEqual(blockedNames, expected.blocked === undefined ? [] : [expected.blocked]);
+    if (expected.blocked !== undefined) {
+      assert.equal(adapter.isCompleted(), true);
+      assert.equal(adapter.message.errorMessage, `The model attempted to call an unavailable tool: ${expected.blocked}`);
+    }
+    adapter.handleEvent({ event: "result", status: "success" });
+    const events = await collectStreamEvents(adapter);
+    const terminal = events.filter((event) => event.type === "done" || event.type === "error");
+    assert.equal(terminal.length, 1);
+    assert.equal(terminal[0]?.type, expected.blocked === undefined ? expected.terminalType ?? "done" : "error");
+    assert.deepEqual(adapter.message.content.filter((block) => block.type === "toolCall"), []);
+    for (const type of ["toolcall_start", "toolcall_delta", "toolcall_end"]) {
+      assert.equal(events.filter((event) => event.type === type).length, 0);
+    }
+  });
 
   test(`pure completed-stream tool policy: ${expected.name}`, async (t) => {
     const blockedNames: string[] = [];
-    const adapter = new AgyEventAdapter({ model: "test", ...policyOptions, onBlockedTool: (name) => blockedNames.push(name) });
+    const adapter = new TranslatorOutput({ model: "test", ...policyOptions, onBlockedTool: (name) => blockedNames.push(name) });
     adapter.handleEvent({ event: "step_update", delta: "Completed history" });
     adapter.handleEvent({ event: "result", status: "success" });
     await collectStreamEvents(adapter);
@@ -122,8 +132,8 @@ for (const expected of blockedToolCases) {
       now.mock.restore();
     });
 
-    assert.equal(adapter.getBlockedToolName(expected.event), expected.blocked);
-    assert.equal(adapter.getBlockedToolName(expected.event), expected.blocked);
+    adapter.handleEvent(expected.event);
+    adapter.handleEvent(expected.event);
 
     assert.equal(push.mock.callCount(), 0);
     assert.equal(parse.mock.callCount(), 0);
@@ -135,7 +145,7 @@ for (const expected of blockedToolCases) {
   });
 }
 
-describe("AgyEventAdapter", () => {
+describe("TranslatorOutput", () => {
   const modelCases = [
     { phase: "before stream", terminal: "done", allowed: true },
     { phase: "before stream", terminal: "error", allowed: true },
@@ -149,7 +159,7 @@ describe("AgyEventAdapter", () => {
 
   for (const expected of modelCases) {
     it(`setModel ${expected.phase} ${expected.allowed ? "updates" : "preserves"} metadata through ${expected.terminal}`, async (t) => {
-      const adapter = new AgyEventAdapter({ model: "original-model" });
+      const adapter = new TranslatorOutput({ model: "original-model" });
       const finish = () => adapter.handleEvent({
         event: "result",
         status: expected.terminal === "done" ? "success" : "error",
@@ -197,7 +207,7 @@ describe("AgyEventAdapter", () => {
   }
 
   it("maps init event to responseId on the start event", async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
     const events = adapter.stream[Symbol.asyncIterator]();
 
     adapter.handleEvent({
@@ -214,7 +224,7 @@ describe("AgyEventAdapter", () => {
   });
 
   it("maps streaming text deltas to text_start, text_delta, text_end and done", async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
 
     adapter.handleEvent({ event: "init" });
     adapter.handleEvent({ event: "step_update", delta: "Hello" });
@@ -244,7 +254,7 @@ describe("AgyEventAdapter", () => {
   });
 
   it("maps the nested agy stream-json event envelope", async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
 
     adapter.handleEvent({
       event: "step_update",
@@ -276,7 +286,7 @@ describe("AgyEventAdapter", () => {
   });
 
   it("maps nested delta object in step_update", async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
 
     adapter.handleEvent({
       event: "step_update",
@@ -291,68 +301,6 @@ describe("AgyEventAdapter", () => {
     const msg = doneEvent.message;
     assert.equal(msg.content[0]?.type, "text");
     assert.equal((msg.content[0] as any)?.text, "from nested object");
-  });
-
-  it("maps tool_call in step_update to toolcall_start, delta, end and reason 'toolUse'", async () => {
-    const adapter = new AgyEventAdapter({ model: "claude-sonnet-4-6" });
-
-    adapter.handleEvent({
-      event: "step_update",
-      tool_call: {
-        id: "call_abc123",
-        name: "mcp__pi__read_file",
-        arguments: JSON.stringify({ path: "README.md" }),
-      },
-    });
-
-    adapter.handleEvent({
-      event: "result",
-      status: "success",
-      usage: { input_tokens: 20, output_tokens: 15 },
-    });
-
-    const events = await collectStreamEvents(adapter);
-    const types = events.map((e) => e.type);
-
-    assert.equal(types.includes("toolcall_start"), true);
-    assert.equal(types.includes("toolcall_delta"), true);
-    assert.equal(types.includes("toolcall_end"), true);
-    assert.equal(types.includes("done"), true);
-
-    const doneEvent = events.find((e) => e.type === "done") as any;
-    const msg = doneEvent.message;
-    assert.equal(msg.stopReason, "toolUse");
-    assert.equal(msg.content.length, 1);
-    const tc = msg.content[0] as any;
-    assert.equal(tc.type, "toolCall");
-    assert.equal(tc.id, "call_abc123");
-    assert.equal(tc.name, "mcp__pi__read_file");
-    assert.deepEqual(tc.arguments, { path: "README.md" });
-  });
-
-  it("maps step_update with type 'tool' to tool call", async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
-
-    adapter.handleEvent({
-      event: "step_update",
-      type: "tool",
-      name: "mcp__pi__bash",
-      call_id: "bash_1",
-      input: { command: "ls -la" },
-    });
-    adapter.handleEvent({ event: "result", status: "success" });
-
-    const events = await collectStreamEvents(adapter);
-    assert.equal(events.some((e) => e.type === "toolcall_end"), true);
-
-    const doneEvent = events.find((e) => e.type === "done") as any;
-    const msg = doneEvent.message;
-    assert.equal(msg.stopReason, "toolUse");
-    const tc = msg.content[0] as any;
-    assert.equal(tc.type, "toolCall");
-    assert.equal(tc.id, "bash_1");
-    assert.equal(tc.name, "mcp__pi__bash");
-    assert.deepEqual(tc.arguments, { command: "ls -la" });
   });
 
   const quotaError = "Claude quota exceeded. Resets in 3h27m34s.";
@@ -390,9 +338,9 @@ describe("AgyEventAdapter", () => {
       reason: "stop",
     },
     {
-      name: "explicit success with a stale error preserves toolUse",
+      name: "explicit success with a stale error and native notification stops without execution",
       input: { event: "result", status: "SUCCESS", error: quotaError },
-      reason: "toolUse",
+      reason: "stop",
       toolCall: true,
     },
     {
@@ -498,7 +446,7 @@ describe("AgyEventAdapter", () => {
   for (const expected of resultCases) {
     it(expected.name, async () => {
       const previous = expected.previousFailure
-        ? new AgyEventAdapter({ model: "claude-sonnet-4-6" })
+        ? new TranslatorOutput({ model: "claude-sonnet-4-6" })
         : undefined;
       if (previous) {
         previous.handleEvent({ event: "result", status: "ERROR", error: quotaError });
@@ -508,7 +456,7 @@ describe("AgyEventAdapter", () => {
         assert.equal(error.error.errorMessage, quotaError);
       }
 
-      const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+      const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
       const text = "Hello! How can I help you today?";
       if (previous) {
         assert.equal(adapter.isCompleted(), false);
@@ -537,11 +485,7 @@ describe("AgyEventAdapter", () => {
       assert.equal(message.errorMessage, expected.errorMessage);
       assert.deepEqual(message.content[0], { type: "text", text });
       assert.equal(events.filter((event) => event.type === "text_end").length, 1);
-      if (expected.toolCall) {
-        assert.deepEqual(message.content[1], {
-          type: "toolCall", id: "call-1", name: "mcp__pi__read", arguments: { path: "README.md" },
-        });
-      }
+      assert.equal(message.content.some((block) => block.type === "toolCall"), false);
       if (previous) {
         for (const event of events) {
           const snapshot = event.type === "done" ? event.message : "partial" in event ? event.partial : undefined;
@@ -562,7 +506,7 @@ describe("AgyEventAdapter", () => {
 
   for (const expected of completedCases) {
     it(expected.name, async (t) => {
-      const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+      const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
       adapter.handleEvent({ event: "step_update", delta: "Completed text" });
       adapter.handleEvent(expected.input);
       const events = await collectStreamEvents(adapter);
@@ -586,7 +530,7 @@ describe("AgyEventAdapter", () => {
   }
 
   it("handleTermination handles process termination with reason aborted and closes active text", async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
 
     adapter.handleEvent({ event: "step_update", delta: "Unfinished response..." });
     adapter.handleTermination("aborted", "Child process was terminated");
@@ -602,10 +546,9 @@ describe("AgyEventAdapter", () => {
 
   it("allows Antigravity CLI internal dispatchers without exposing them as Pi tool calls", () => {
     for (const internalTool of ["manage_task", "call_mcp_tool"]) {
-      const adapter = new AgyEventAdapter({
+      const adapter = new TranslatorOutput({
         model: "gemini-3.8-flash-high",
         allowedToolNames: new Set(["read"]),
-        bridgeToolCallsExternally: true,
       });
 
       adapter.handleEvent({
@@ -622,10 +565,9 @@ describe("AgyEventAdapter", () => {
   });
 
   it("blocks native executable Antigravity CLI tool calls when a Pi tool allowlist is active", async () => {
-    const adapter = new AgyEventAdapter({
+    const adapter = new TranslatorOutput({
       model: "gemini-3.8-flash-high",
       allowedToolNames: new Set(["read"]),
-      bridgeToolCallsExternally: true,
     });
 
     adapter.handleEvent({
@@ -642,10 +584,9 @@ describe("AgyEventAdapter", () => {
   });
 
   it("emits Pi-native tool names for calls relayed through MCP", async () => {
-    const adapter = new AgyEventAdapter({
+    const adapter = new TranslatorOutput({
       model: "gemini-3.8-flash-high",
       allowedToolNames: new Set(["read"]),
-      bridgeToolCallsExternally: true,
     });
 
     adapter.handleBridgeToolCalls([{
@@ -662,7 +603,7 @@ describe("AgyEventAdapter", () => {
   });
 
   it("keeps the latest step usage when final usage is also present", async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
     adapter.handleEvent({
       event: "step_update",
       step_type: "agent_response",
@@ -701,7 +642,7 @@ describe("AgyEventAdapter", () => {
   });
 
   it("ignores session-cumulative result usage and keeps the last step snapshot", async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash" });
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash" });
     adapter.handleEvent({
       event: "step_update",
       step_type: "agent_response",
@@ -729,7 +670,7 @@ describe("AgyEventAdapter", () => {
   });
 
   it("applies zero-cost subscription semantics to usage", async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini-3.8-flash-high" });
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
     adapter.handleEvent({
       event: "result",
       status: "success",
@@ -779,7 +720,7 @@ for (const row of [
   { name: "aborted is not overridden", steps: [turnStep("agent_response")], status: "ABORTED", terminal: "error" },
 ]) {
   test(`current-turn completion: ${row.name}`, async () => {
-    const adapter = new AgyEventAdapter({ model: "gemini", errorState: { conversationId: "continued", lastError: "Historical Claude quota" } });
+    const adapter = new TranslatorOutput({ model: "gemini", errorState: { conversationId: "continued", lastError: "Historical Claude quota" } });
     for (const step of row.steps) adapter.handleEvent(step);
     adapter.handleEvent({ event: "result", result: { status: row.status, error: "Historical Claude quota" } });
 
@@ -801,7 +742,7 @@ for (const row of [
 ] as const) {
   test(`stored conversation error: ${row.name}`, () => {
     const errorState = { conversationId: "continued", lastError: row.previous as string | undefined };
-    const adapter = new AgyEventAdapter({ model: "gemini", errorState });
+    const adapter = new TranslatorOutput({ model: "gemini", errorState });
     adapter.handleEvent(turnStep("agent_response"));
     adapter.handleEvent({ event: "result", status: row.status, error: row.error }, row.source);
     assert.equal(adapter.message.stopReason, row.reason);
@@ -820,22 +761,21 @@ for (const row of [
   { name: "invalid JSON", input: '{broken', expected: { raw: "{broken" } },
 ]) {
   for (const source of ["arguments", "input", "flat input"] as const) {
-    test(`tool JSON parsing: ${source}, ${row.name}`, async () => {
-      const adapter = new AgyEventAdapter({ model: "test" });
+    test(`native arguments are not parsed or executed: ${source}, ${row.name}`, async (t) => {
+      const adapter = new TranslatorOutput({ model: "test" });
       const event: AgyEvent = source === "flat input"
         ? { event: "step_update", type: "tool", name: "read", call_id: "call-json", input: row.input }
         : { event: "step_update", tool_call: { id: "call-json", name: "read", [source]: row.input } };
 
+      const parse = t.mock.method(JSON, "parse");
+      t.after(() => parse.mock.restore());
       adapter.handleEvent(event);
+      assert.equal(parse.mock.callCount(), 0);
       adapter.handleEvent({ event: "result", status: "success" });
       const events = await collectStreamEvents(adapter);
 
-      const end = events.find((event) => event.type === "toolcall_end");
-      assert.ok(end?.type === "toolcall_end");
-      assert.deepEqual(end.toolCall, {
-        type: "toolCall", id: "call-json", name: "read", arguments: row.expected,
-      });
-      assert.deepEqual(adapter.message.content, [end.toolCall]);
+      assert.equal(events.some((event) => event.type === "toolcall_end"), false);
+      assert.deepEqual(adapter.message.content, []);
     });
   }
 }

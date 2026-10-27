@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { LiveSession, PiContextAdapter } from "./session.ts";
-import { RuntimeSessionStore, RuntimeSessionSync } from "./session-state.ts";
+import { RuntimeSessionStore, RuntimeSessionSync } from "./state.ts";
 
 for (const scenario of [
   { name: "checkpoint and credential without login epochs", stored: undefined, current: undefined, accepted: true },
@@ -16,11 +16,11 @@ for (const scenario of [
     const adapter = new PiContextAdapter();
     const id = adapter.bind(manager);
     const store = new RuntimeSessionStore(adapter);
-    await store.set(id, { conversationId: "conversation-a" }, [], scenario.stored);
+    await store.set(id, { sessionId: "conversation-a" }, [], scenario.stored, "cli:v1");
 
-    const restored = await store.get(id, scenario.current);
+    const restored = await store.get(id, scenario.current, "cli:v1");
 
-    assert.equal(restored?.conversationId, scenario.accepted ? "conversation-a" : undefined);
+    assert.equal(restored?.sessionId, scenario.accepted ? "conversation-a" : undefined);
     const decision = new RuntimeSessionSync().decide(new LiveSession(id), {
       syncKey: "model-and-tools", messages: [],
       conversationId: "conversation-a", ...(restored ? { checkpoint: restored } : {}),
@@ -47,7 +47,7 @@ test("reopening an unattached old session cannot resume its pre-login checkpoint
   const adapter = new PiContextAdapter();
   const store = new RuntimeSessionStore(adapter);
   adapter.bind(manager);
-  await store.set(current, { conversationId: "old-account-conversation" }, [], "login-a");
+  await store.set(current, { sessionId: "old-account-conversation" }, [], "login-a", "cli:v1");
 
   current = "session-b";
   adapter.bind(manager);
@@ -56,9 +56,9 @@ test("reopening an unattached old session cannot resume its pre-login checkpoint
   current = "session-a";
   adapter.bind(manager);
 
-  assert.equal(await store.get(current, "login-b"), undefined);
-  assert.equal((await store.get(current, "login-a"))?.conversationId, "old-account-conversation",
+  assert.equal(await store.get(current, "login-b", "cli:v1"), undefined);
+  assert.equal((await store.get(current, "login-a", "cli:v1"))?.sessionId, "old-account-conversation",
     "epoch validation must not rewrite or destroy old session data");
-  await store.set(current, { conversationId: "new-account-conversation" }, [], "login-b");
-  assert.equal((await store.get(current, "login-b"))?.conversationId, "new-account-conversation");
+  await store.set(current, { sessionId: "new-account-conversation" }, [], "login-b", "cli:v1");
+  assert.equal((await store.get(current, "login-b", "cli:v1"))?.sessionId, "new-account-conversation");
 });

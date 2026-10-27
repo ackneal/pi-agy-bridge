@@ -1,3 +1,4 @@
+import type { DriverAuthentication } from "../drivers/types.ts";
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
@@ -9,7 +10,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { defaultProviderAuthContext, type ApiKeyCredential } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { AgyAuthentication, createAgyBridgeCredential, isAgyBridgeEnabled } from "./auth.ts";
-import { registerAgyProvider } from "./provider.ts";
+import { Bridge } from "./provider.ts";
+import { CliDriver } from "../drivers/cli/driver.ts";
+
+const noProbeBackend: DriverAuthentication = {
+  label: "Antigravity CLI",
+  probe: async () => { throw new Error("Unexpected authentication probe"); },
+  login: async () => { throw new Error("Unexpected authentication login"); },
+};
 
 const marker: ApiKeyCredential = { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1" } };
 const credentials = [
@@ -22,7 +30,7 @@ for (const status of ["unknown", "authenticated", "unauthenticated"] as const) {
   for (const scenario of credentials) {
     for (const aborted of [false, true]) {
       test(`availability check: ${status}, ${scenario.name}, aborted=${aborted}`, async (t) => {
-        const authentication = new AgyAuthentication(undefined, async () => {});
+        const authentication = new AgyAuthentication(noProbeBackend, async () => {});
         t.after(() => authentication.close());
         authentication.status = status;
         const spawn = t.mock.method(cp, "spawn", () => { throw new Error("Antigravity CLI authentication timed out"); });
@@ -58,6 +66,12 @@ for (const status of ["unknown", "authenticated", "unauthenticated"] as const) {
 test("boot availability preserves stored scoped model selection without authentication probing", async (t) => {
   const { ModelRuntime, SettingsManager } = await import("@earendil-works/pi-coding-agent");
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-availability-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = directory;
+  t.after(() => {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  });
   t.after(() => rm(directory, { recursive: true, force: true }));
   const authPath = path.join(directory, "auth.json");
   const modelsPath = path.join(directory, "models.json");
@@ -68,14 +82,18 @@ test("boot availability preserves stored scoped model selection without authenti
     "gemini-3.8-flash": { contextWindow: 123456 },
   } } } }));
   const runtime = await ModelRuntime.create({ modelsPath, authPath, refreshOnCreate: false });
-  registerAgyProvider({
+  t.mock.method(CliDriver.prototype, "discoverModels", async () =>
+    parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)\ngemini-3.1-pro-high  Gemini 3.1 Pro (High)"));
+  const registrationRefresh = t.mock.method(runtime, "refresh", runtime.refresh.bind(runtime));
+  new Bridge({
     on: () => {}, registerCommand: () => {},
     registerProvider: runtime.registerNativeProvider.bind(runtime),
-  } as unknown as ExtensionAPI, {
-    models: parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)\ngemini-3.1-pro-high  Gemini 3.1 Pro (High)"),
-  });
+  } as unknown as ExtensionAPI, new CliDriver()).start();
+  // Native registration starts a cache refresh that can supersede discovery.
+  await Promise.all(registrationRefresh.mock.calls.map((call) => call.result));
+  registrationRefresh.mock.restore();
 
-  const refreshed = await runtime.refresh({ providers: ["agy"], allowNetwork: false });
+  const refreshed = await runtime.refresh({ providers: ["agy"], allowNetwork: true });
   assert.equal(refreshed.errors.size, 0);
   assert.deepEqual(await runtime.checkAuth("agy"), { type: "api_key", source: "Antigravity CLI" });
   const available = await runtime.getAvailable("agy");
@@ -97,7 +115,7 @@ test("boot availability preserves stored scoped model selection without authenti
 });
 
 test("request resolve rejects after bridge shutdown", async () => {
-  const authentication = new AgyAuthentication(undefined, async () => {});
+  const authentication = new AgyAuthentication(noProbeBackend, async () => {});
   authentication.close();
   await assert.rejects(Promise.resolve(authentication.method.resolve({
     ctx: defaultProviderAuthContext(), credential: marker, signal: new AbortController().signal,

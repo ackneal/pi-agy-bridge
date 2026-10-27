@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
-import { formatContextPrompt } from "./provider.ts";
-import { setDebugOverride } from "../shared/debug.ts";
+import { formatContextPrompt } from "./context-prompt.ts";
 
 const assistantMetadata: Pick<AssistantMessage, "api" | "provider" | "model" | "usage"> = {
   api: "agy",
@@ -267,11 +266,10 @@ for (const { name, input, expected, enabled } of ([
 ] satisfies { name: string; input: Context; expected: number[] }[]).flatMap((row) => [false, true].map((enabled) => ({ ...row, enabled })))) {
   it(`logs numeric rebuild metrics only when enabled (${name}, ${enabled})`, () => {
     const previous = process.env["AGY_BRIDGE_DEBUG"];
-    delete process.env["AGY_BRIDGE_DEBUG"];
+    process.env["AGY_BRIDGE_DEBUG"] = enabled ? "1" : "0";
     const write = process.stderr.write;
     let logged = "";
     process.stderr.write = ((chunk: string | Uint8Array) => { logged += String(chunk); return true; }) as typeof write;
-    setDebugOverride(enabled);
     try {
       const prompt = formatContextPrompt(input, false);
       assert.equal(Boolean(logged), enabled);
@@ -286,7 +284,6 @@ for (const { name, input, expected, enabled } of ([
       }
     } finally {
       process.stderr.write = write;
-      setDebugOverride(false);
       if (previous === undefined) delete process.env["AGY_BRIDGE_DEBUG"];
       else process.env["AGY_BRIDGE_DEBUG"] = previous;
     }

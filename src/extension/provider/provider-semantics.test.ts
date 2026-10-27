@@ -1,9 +1,12 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
+import { AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import type { AssistantMessage, Model, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AgyBridge, formatContextPrompt } from "./provider.ts";
+import { Bridge } from "./provider.ts";
+import { formatContextPrompt } from "./context-prompt.ts";
 
 const assistant: AssistantMessage = {
   role: "assistant",
@@ -111,10 +114,10 @@ for (const scenario of [
 ]) {
   it(`stream gate with unknown auth status: ${scenario.name}`, async (t) => {
     let provider: Provider | undefined;
-    const bridge = new AgyBridge({
+    const bridge = new Bridge({
       on: () => {}, registerCommand: () => {}, getActiveTools: () => [], getAllTools: () => [],
       registerProvider: (registered: Provider) => { provider = registered; },
-    } as unknown as ExtensionAPI);
+    } as unknown as ExtensionAPI, new CliDriver());
     t.after(() => bridge.liveSessions.disposeAll());
     const lookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => {
       throw new Error("Reached runtime using existing Antigravity CLI login");

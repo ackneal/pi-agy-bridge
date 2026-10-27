@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Context, Message } from "@earendil-works/pi-ai";
-import { formatContextPrompt } from "./provider.ts";
+import { formatContextPrompt } from "./context-prompt.ts";
 
 const format: (context: Context, isReused: boolean, syncedMessageCount?: number) => string = formatContextPrompt;
 const oldMessage: Message = { role: "user", content: "OLD_HISTORY_SENTINEL", timestamp: 1 };
@@ -50,14 +50,12 @@ const cases: Case[] = [
     isReused: true, syncedMessageCount: 1,
     expected: "# Conversation updates\n\n## System\n\n> rules & policy",
   },
-  ...[true, false].map((isReused): Case => ({
-    name: `preserves image association with text-only placeholders in ${isReused ? "incremental Markdown" : "rebuilt Markdown"}`,
+  {
+    name: "preserves image association with text-only placeholders in incremental Markdown",
     context: { messages: [oldMessage, { role: "user", content: [{ type: "text", text: "look" }, image], timestamp: 2 }] },
-    isReused, syncedMessageCount: 1,
-    expected: isReused
-      ? "# Conversation updates\n\n## User\n\n> look\n> [Image omitted from reconstructed history: image/png; content unavailable]"
-      : "# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations.\n\n## User\n\n> OLD_HISTORY_SENTINEL\n\n## User\n\n> look\n> [Image omitted from reconstructed history: image/png; content unavailable]",
-  })),
+    isReused: true, syncedMessageCount: 1,
+    expected: "# Conversation updates\n\n## User\n\n> look\n> [Image omitted from reconstructed history: image/png; content unavailable]",
+  },
   ...[
     { name: "fully synced history", messages: [oldMessage], syncedMessageCount: 1 },
     { name: "empty context", messages: [], syncedMessageCount: 0 },

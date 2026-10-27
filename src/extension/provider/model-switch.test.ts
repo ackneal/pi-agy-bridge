@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -5,11 +6,14 @@ import path from "node:path";
 import test from "node:test";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
+import { CliDriver } from "../drivers/cli/driver.ts";
+import { prepareDriverCwd } from "../drivers/cwd.ts";
+import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
 import type { AgyInput } from "../shared/types.ts";
-import { AgyBridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamAgyProvider } from "./provider.ts";
 
 type ModelSwitchCase = {
   name: string;
@@ -224,19 +228,26 @@ const cases: ModelSwitchCase[] = [
 for (const { name, arrange, expected } of cases) {
   test(`provider model switching: ${name}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-model-switch-"));
+    const originalGeminiHome = process.env.GEMINI_HOME;
+    process.env.GEMINI_HOME = directory;
+    t.after(() => {
+      if (originalGeminiHome === undefined) delete process.env.GEMINI_HOME;
+      else process.env.GEMINI_HOME = originalGeminiHome;
+    });
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
 
     t.after(async () => {
       try { await bridge.liveSessions.disposeAll(); }
       finally { t.mock.restoreAll(); await rm(directory, { recursive: true, force: true }); }
     });
 
-    await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
     const manager = SessionManager.inMemory(directory);
     const sessionId = bridge.piContextAdapter.bind(manager);
     const session = bridge.liveSessions.getOrCreate(sessionId);
@@ -254,13 +265,14 @@ for (const { name, arrange, expected } of cases) {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     };
     const prefix: Context["messages"] = [{ role: "user", content: "original request", timestamp: 1 }, assistant];
-    const oldProc = new AgyRuntime({ agentName: "pi-bridge", model: gemini.id });
+    const compatibilityKey = createHash("sha256").update(prepareDriverCwd("cli")).digest("hex");
+    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: gemini.id }, new Set(), {}, compatibilityKey);
     const oldMcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(oldProc, calculateSyncKey("Rules", [], gemini.id, "", "pi-bridge"), oldMcp, "same-conversation");
     const terminalHandle = session.resources.terminals.bind("pi-terminal");
     bridge.runtimeSessionSync.record(session, prefix);
     assistant.responseId = arrange.conversationId;
-    if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { conversationId: arrange.conversationId }, prefix);
+    if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { sessionId: arrange.conversationId, compatibilityKey }, prefix, undefined, bridge.driver.sessionVersion);
     if (arrange.omitPriorError) prefix.splice(1, 1);
     if (arrange.foreignHistory) {
       const { responseId: _responseId, ...foreignAssistant } = assistant;
@@ -274,7 +286,7 @@ for (const { name, arrange, expected } of cases) {
       assistant.stopReason = "toolUse";
       assistant.content = [{ type: "toolCall", id: "pending-call", name: "test-tool", arguments: {} }];
       bridge.runtimeSessionSync.record(session, prefix);
-      await bridge.runtimeSessionStore.set(sessionId, { conversationId: "same-conversation" }, prefix);
+      await bridge.runtimeSessionStore.set(sessionId, { sessionId: "same-conversation", compatibilityKey }, prefix, undefined, bridge.driver.sessionVersion);
     }
     const context: Context = { systemPrompt: "Rules", tools: [], messages: [...prefix, pending
       ? { role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 5 }
@@ -284,8 +296,8 @@ for (const { name, arrange, expected } of cases) {
     const lifecycle: string[] = [];
     t.mock.getter(AgyRuntime.prototype, "isRunning", () => arrange.outcome !== "dead" || start.mock.callCount() !== 1);
     t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp && pending; });
-    t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
-    t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
+    t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");
+    t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
     t.mock.method(BridgeIPC.prototype, "start", async () => {});
     t.mock.method(BridgeIPC.prototype, "close", async () => { lifecycle.push("close"); });
     t.mock.method(AgyRuntime.prototype, "abort", async () => { lifecycle.push("abort"); });
@@ -322,7 +334,7 @@ for (const { name, arrange, expected } of cases) {
     });
     const run = async (selected: Model<any>) => {
       const events: AssistantMessageEvent[] = [];
-      for await (const event of streamAgyProvider(selected, context, { sessionId, signal: controller.signal }, config, bridge)) events.push(event);
+      for await (const event of streamAgyProvider(selected, context, { sessionId, signal: controller.signal }, bridge)) events.push(event);
       await new Promise<void>((resolve) => setImmediate(resolve));
       return events.at(-1);
     };
@@ -337,8 +349,8 @@ for (const { name, arrange, expected } of cases) {
       assert.equal(session.activeProcess, null);
       assert.equal(session.activeMcpServer, null);
       assert.equal(resolve.mock.callCount(), 0);
-      const stored = await bridge.runtimeSessionStore.get(sessionId);
-      assert.equal(stored?.conversationId, expected.store === "retained" ? arrange.conversationId : undefined);
+      const stored = await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion);
+      assert.equal(stored?.sessionId, expected.store === "retained" ? arrange.conversationId : undefined);
       assert.equal(listeners.size, 0);
       return;
     }
@@ -346,10 +358,11 @@ for (const { name, arrange, expected } of cases) {
     assert.ok(terminal?.type === "done");
     assert.equal(terminal.message.model, expected.model);
     assert.equal(terminal.message.responseId, expected.responseId);
+    assert.ok(session.activeProcess instanceof CliRuntimeSession);
     assert.equal(session.activeProcess?.options.model, expected.model);
     assert.equal(session.activeProcess?.options.conversationId, expected.runtimeConversation);
     assert.equal(session.resources.terminals.resolve(terminalHandle), expected.preservesTerminal ? "pi-terminal" : undefined);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, expected.responseId);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, expected.responseId);
     assert.equal(listeners.size, 0);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
 
@@ -369,7 +382,7 @@ for (const { name, arrange, expected } of cases) {
       assert.equal(session.activeProcess?.options.conversationId, "same-conversation");
       assert.equal(session.resources.terminals.resolve(terminalHandle), "pi-terminal");
       assert.equal(send.mock.calls[0]!.arguments[0].message.content, "next request");
-      assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, next.message.responseId);
+      assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, next.message.responseId);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
       assert.equal(listeners.size, 0);
       return;

@@ -1,6 +1,4 @@
 // Compare conversation semantics, not metadata the Pi agent loop adds after streaming.
-export const MESSAGE_FORMAT = "pi-semantic-v1";
-
 export function serializeMessage(value: unknown): string {
   if (!isRecord(value)) throw new Error("Unsupported Pi message: expected an object");
   const { role, content } = value;

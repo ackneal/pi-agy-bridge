@@ -1,18 +1,35 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { afterEach, beforeEach } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
+import { CliDriver } from "../drivers/cli/driver.ts";
+import { buildCliProcessEnvironment } from "../discovery/plugin-install.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
+import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
-import type { RuntimeSessionDecision } from "../session/session-state.ts";
+import type { RuntimeSessionDecision } from "../session/state.ts";
 import type { AgyInput, AgyResultEvent } from "../shared/types.ts";
 import { formatContextUpdate } from "./context-prompt.ts";
-import { AgyBridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamAgyProvider } from "./provider.ts";
+
+let home: string;
+let previousHome: string | undefined;
+beforeEach(async () => {
+  home = await mkdtemp(path.join(os.tmpdir(), "agy-native-home-"));
+  previousHome = process.env.GEMINI_HOME;
+  process.env.GEMINI_HOME = home;
+});
+afterEach(async () => {
+  if (previousHome === undefined) delete process.env.GEMINI_HOME;
+  else process.env.GEMINI_HOME = previousHome;
+  await rm(home, { recursive: true, force: true });
+});
 
 const cases: { decision: RuntimeSessionDecision; incremental?: boolean; payload?: "replace" | "unchanged" | "reject" }[] = [
   { decision: { action: "continue" } },
@@ -32,8 +49,8 @@ for (const { decision, incremental, payload } of cases) {
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
     const agyPath = path.join(directory, "agy");
-    const config = { agyPath, pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new AgyBridge(pi, config);
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -44,12 +61,12 @@ for (const { decision, incremental, payload } of cases) {
     });
     await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
 
-    const environment = { PI_AGY_BRIDGE_MCP_COMMAND: "mock-mcp" };
+    const expectedUri = "unix:///synthetic.sock?session=runtime-turn";
     const startBridge = t.mock.method(BridgeIPC.prototype, "start", async () => {});
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const dispatch = t.mock.method(BridgeIPC.prototype, "setToolCallHandler");
-    const getEnvironment = t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => environment);
-    const install = t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
+    const getBridgeUri = t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => expectedUri);
+    const install = t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
     t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
     const startProc = t.mock.method(AgyRuntime.prototype, "start", async () => ({
       event: "init", conversation_id: decision.action === "resume" ? "old-conversation" : "new-conversation",
@@ -78,9 +95,9 @@ for (const { decision, incremental, payload } of cases) {
     bridge.start();
     const liveSession = bridge.liveSessions.getOrCreate("test-turn");
     liveSession.conversationId = "old-conversation";
-    let existingProcess: AgyRuntime | undefined;
+    let existingProcess: CliRuntimeSession | undefined;
     if (decision.action === "continue") {
-      existingProcess = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+      existingProcess = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {});
       const existingMcp = new BridgeIPC([], liveSession.id, liveSession.resources);
       liveSession.setSession(existingProcess, "old-sync-key", existingMcp, "old-conversation");
     }
@@ -112,7 +129,7 @@ for (const { decision, incremental, payload } of cases) {
       sessionId: "test-turn",
       ...(payload ? { onPayload } : {}),
     };
-    for await (const event of streamAgyProvider(model, context, options, config, bridge)) {
+    for await (const event of streamAgyProvider(model, context, options, bridge)) {
       events.push(event);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -140,13 +157,14 @@ for (const { decision, incremental, payload } of cases) {
     assert.equal(startProc.mock.callCount(), starts);
     assert.equal(startBridge.mock.callCount(), starts);
     assert.equal(install.mock.callCount(), starts);
-    assert.equal(getEnvironment.mock.callCount(), starts);
+    assert.equal(getBridgeUri.mock.callCount(), starts);
     assert.equal(close.mock.callCount(), 0);
     assert.equal(abort.mock.callCount(), 0);
     if (decision.action === "continue") {
       assert.equal(liveSession.activeProcess, existingProcess);
     } else {
-      assert.deepEqual(liveSession.activeProcess?.options.environment, environment);
+      assert.ok(liveSession.activeProcess instanceof CliRuntimeSession);
+      assert.deepEqual(liveSession.activeProcess?.options.environment, buildCliProcessEnvironment(expectedUri));
       assert.equal(liveSession.activeProcess?.options.conversationId,
         decision.action === "resume" ? "old-conversation" : undefined);
     }
@@ -191,8 +209,9 @@ for (const row of invalidBatchCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -201,7 +220,7 @@ for (const row of invalidBatchCases) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
     const send = t.mock.method(AgyRuntime.prototype, "send", async () => {});
@@ -214,7 +233,7 @@ for (const row of invalidBatchCases) {
     bridge.start();
     const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(directory));
     const session = bridge.liveSessions.getOrCreate(sessionId);
-    const proc = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+    const proc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {});
     session.setSession(proc, "old-sync-key", new BridgeIPC([], session.id, session.resources), "old-conversation");
     const gateway = new CapabilityGateway([
       { name: "test-tool", description: "test", parameters: { type: "object", properties: {} } },
@@ -242,7 +261,7 @@ for (const row of invalidBatchCases) {
       })),
     };
     bridge.runtimeSessionSync.record(session, []);
-    await bridge.runtimeSessionStore.set(sessionId, { conversationId: "old-conversation", hasPendingToolCalls: true }, []);
+    await bridge.runtimeSessionStore.set(sessionId, { sessionId: "old-conversation", hasPendingToolCalls: true }, [], undefined, bridge.driver.sessionVersion);
     const record = t.mock.method(bridge.runtimeSessionSync, "record", bridge.runtimeSessionSync.record.bind(bridge.runtimeSessionSync));
     const persist = t.mock.method(bridge.runtimeSessionStore, "set", bridge.runtimeSessionStore.set.bind(bridge.runtimeSessionStore));
     const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
@@ -253,7 +272,7 @@ for (const row of invalidBatchCases) {
     } as Model<any>;
 
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId }, config, bridge)) events.push(event);
+    for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     const terminal = events.at(-1);
@@ -270,7 +289,7 @@ for (const row of invalidBatchCases) {
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 0);
     assert.equal(invalidate.mock.callCount(), 1);
     assert.deepEqual(invalidate.mock.calls[0]!.arguments, [sessionId]);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
     assert.equal(session.activeProcess, null);
     assert.equal(session.activeMcpServer, null);
     assert.equal(listener, undefined);
@@ -309,8 +328,9 @@ for (const row of continueCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -319,7 +339,7 @@ for (const row of continueCases) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
     const controller = new AbortController();
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
@@ -373,7 +393,7 @@ for (const row of continueCases) {
     const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", async () => {});
     bridge.start();
     const session = bridge.liveSessions.getOrCreate("continue-regression");
-    const proc = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+    const proc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {});
     const mcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(proc, "old-sync-key", mcp, "old-conversation");
     const context: Context = {
@@ -403,11 +423,11 @@ for (const row of continueCases) {
           return { prompt: "must not be sent" };
         },
       } : {}),
-    }, config, bridge)) {
+    }, bridge)) {
       events.push(event);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(restore.mock.calls[0]!.arguments, [session.piSessionId, "current-login"]);
+    assert.deepEqual(restore.mock.calls[0]!.arguments, [session.piSessionId, "current-login", bridge.driver.sessionVersion]);
     assert.equal(resolve.mock.callCount(), row.pending ? 1 : 0);
     if (row.pending) assert.deepEqual(resolve.mock.calls[0]!.arguments, [
       context.messages.filter((message) => message.role === "toolResult"),
@@ -427,7 +447,7 @@ for (const row of continueCases) {
       assert.equal(events.some((event) => event.type === "error"), false);
       assert.equal(invalidate.mock.callCount(), 0);
       assert.deepEqual(persist.mock.calls[0]!.arguments, [
-        session.piSessionId, { conversationId: "old-conversation", hasPendingToolCalls: true }, context.messages, "current-login",
+        session.piSessionId, { sessionId: "old-conversation", hasPendingToolCalls: true }, context.messages, "current-login", bridge.driver.sessionVersion,
       ]);
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "done");
@@ -482,8 +502,9 @@ for (const row of pendingTerminalCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -492,7 +513,7 @@ for (const row of pendingTerminalCases) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
     const send = t.mock.method(AgyRuntime.prototype, "send", async () => {});
@@ -508,7 +529,7 @@ for (const row of pendingTerminalCases) {
     const manager = SessionManager.inMemory(directory);
     const sessionId = bridge.piContextAdapter.bind(manager);
     const session = bridge.liveSessions.getOrCreate(sessionId);
-    const proc = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+    const proc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {});
     const mcp = new BridgeIPC([], session.id, session.resources);
     session.setSession(proc, "old-sync-key", mcp, "old-conversation");
     const context: Context = {
@@ -519,7 +540,7 @@ for (const row of pendingTerminalCases) {
     };
     const epoch = "current-login";
     bridge.runtimeSessionSync.record(session, []);
-    await bridge.runtimeSessionStore.set(sessionId, { conversationId: "old-conversation" }, [], epoch);
+    await bridge.runtimeSessionStore.set(sessionId, { sessionId: "old-conversation" }, [], epoch, bridge.driver.sessionVersion);
     const record = t.mock.method(bridge.runtimeSessionSync, "record", bridge.runtimeSessionSync.record.bind(bridge.runtimeSessionSync));
     const persist = t.mock.method(bridge.runtimeSessionStore, "set", bridge.runtimeSessionStore.set.bind(bridge.runtimeSessionStore));
     const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", bridge.runtimeSessionStore.delete.bind(bridge.runtimeSessionStore));
@@ -542,7 +563,7 @@ for (const row of pendingTerminalCases) {
     const events: AssistantMessageEvent[] = [];
     for await (const event of streamAgyProvider(model, context, {
       sessionId, env: { AGY_BRIDGE_LOGIN_EPOCH: epoch },
-    }, config, bridge)) events.push(event);
+    }, bridge)) events.push(event);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     const terminal = events.at(-1);
@@ -568,11 +589,11 @@ for (const row of pendingTerminalCases) {
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), row.enqueued ? context.messages.length : 0);
     if (row.enqueued) {
       assert.deepEqual(record.mock.calls[0]!.arguments, [session, context.messages]);
-      assert.deepEqual(persist.mock.calls[0]!.arguments, [sessionId, { conversationId: "old-conversation", hasPendingToolCalls: true }, context.messages, epoch]);
+      assert.deepEqual(persist.mock.calls[0]!.arguments, [sessionId, { sessionId: "old-conversation", hasPendingToolCalls: true }, context.messages, epoch, bridge.driver.sessionVersion]);
     }
     assert.equal(invalidate.mock.callCount(), 1);
     assert.deepEqual(invalidate.mock.calls[0]!.arguments, [sessionId]);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), undefined);
     assert.equal(session.activeProcess, null);
     assert.equal(session.activeMcpServer, null);
     assert.equal(unsubscribe.mock.callCount(), 1);
@@ -606,8 +627,9 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: path.join(directory, "plugin"), models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -616,10 +638,10 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
     bridge.start();
     const session = bridge.liveSessions.getOrCreate("mixed-pending");
-    const oldProc = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+    const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {}, createHash("sha256").update(path.join(process.env.GEMINI_HOME!, "antigravity-cli")).digest("hex"));
     const oldMcp = new BridgeIPC([], session.id, session.resources);
     const model = {
       id: "test-model", name: "Test model", api: "agy", provider: "agy",
@@ -675,7 +697,7 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     const persist = t.mock.method(bridge.runtimeSessionStore, "set", async () => {});
 
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId: session.piSessionId }, config, bridge)) events.push(event);
+    for await (const event of streamAgyProvider(model, context, { sessionId: session.piSessionId }, bridge)) events.push(event);
     assert.equal(events.some((event) => event.type === "error"), false);
     const terminal = events.at(-1);
     assert.ok(terminal?.type === "done");
@@ -721,8 +743,9 @@ for (const conversionException of [false, true]) {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
       getActiveTools: () => [], getAllTools: () => [],
     } as unknown as ExtensionAPI;
-    const config = { agyPath: path.join(directory, "agy"), pluginDir: directory, models: [] };
-    const bridge = new AgyBridge(pi, config);
+    const agyPath = path.join(directory, "agy");
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    const bridge = new Bridge(pi, new CliDriver());
     t.after(async () => {
       try {
         await bridge.liveSessions.disposeAll();
@@ -731,7 +754,7 @@ for (const conversionException of [false, true]) {
         await rm(directory, { recursive: true, force: true });
       }
     });
-    await writeFile(config.agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
+    await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
     const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
     const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
     t.mock.method(AgyRuntime.prototype, "onEvent", () => () => {});
@@ -767,7 +790,7 @@ for (const conversionException of [false, true]) {
       await new Promise<void>((resolve) => setImmediate(resolve));
       return ref;
     });
-    const proc = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+    const proc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {});
     session.setSession(proc, "old-sync-key", new BridgeIPC([], session.id, session.resources), "old-conversation");
     let oldId = "";
     gateway.setToolCallHandler((batch) => {
@@ -794,7 +817,7 @@ for (const conversionException of [false, true]) {
       contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId }, config, bridge)) events.push(event);
+    for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(order, ["resolve", "persist", "install", "persist"]);
     const delivered = await oldResult;
@@ -825,7 +848,7 @@ for (const conversionException of [false, true]) {
     assert.equal(rebuild.mock.callCount(), 0);
     assert.equal(gateway.resolveToolResults([{ role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "next answer" }], isError: false, timestamp: 3 }]), 1);
     assert.ok(JSON.stringify(await nextResult).includes("next answer"));
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, "old-conversation");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, "old-conversation");
     if (conversionException) return;
 
     // The completed toolUse adapter must not release runtime failure ownership.
@@ -841,16 +864,16 @@ for (const conversionException of [false, true]) {
     assert.equal(session.activeMcpServer, null);
     assert.equal(invalidate.mock.callCount(), 1);
     assert.deepEqual(invalidate.mock.calls[0]!.arguments, [session.piSessionId]);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
 
-    const replacement = new AgyRuntime({ agentName: "pi-bridge", model: "test-model" });
+    const replacement = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {});
     const replacementBridge = new BridgeIPC([], session.id, session.resources);
     session.setSession(replacement, "replacement", replacementBridge, "replacement-conversation");
-    await setReference(sessionId, { conversationId: "replacement-conversation" }, context.messages);
+    await setReference(sessionId, { sessionId: "replacement-conversation" }, context.messages, undefined, bridge.driver.sessionVersion);
     failureHandler(new Error("late old callback"));
     assert.equal(session.activeProcess, replacement);
     assert.equal(session.activeMcpServer, replacementBridge);
     assert.equal(invalidate.mock.callCount(), 1);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId))?.conversationId, "replacement-conversation");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, "replacement-conversation");
   });
 }

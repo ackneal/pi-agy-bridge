@@ -1,3 +1,4 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -9,7 +10,7 @@ import test from "node:test";
 import { ModelRegistry, ModelRuntime, type ExtensionAPI, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { AgyAuthentication, createAgyBridgeCredential, getAgyBridgeAuthEnvironment } from "./auth.ts";
-import { registerAgyProvider } from "./provider.ts";
+import { Bridge } from "./provider.ts";
 
 for (const row of [
   { name: "automatically enables an existing Antigravity CLI login", stored: "missing", authenticated: true, enabled: true },
@@ -20,6 +21,12 @@ for (const row of [
 ] as const) {
   test(`startup subscription: ${row.name}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-auto-subscription-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = directory;
+    t.after(() => {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    });
     const authPath = path.join(directory, "auth.json");
     const marker = createAgyBridgeCredential("existing-epoch");
     if (row.stored !== "missing") {
@@ -70,11 +77,9 @@ for (const row of [
       registerCommand: () => {}, getActiveTools: () => [], getAllTools: () => [],
       registerProvider: runtime.registerNativeProvider.bind(runtime),
     } as unknown as ExtensionAPI;
-    const config = {
-      authPath,
-      models: parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)"),
-    };
-    registerAgyProvider(pi, config);
+    t.mock.method(CliDriver.prototype, "discoverModels", async () =>
+      parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)"));
+    new Bridge(pi, new CliDriver()).start();
     assert.ok(sessionStart);
     assert.equal(sessionStart({ type: "session_start", reason: "startup" }, ctx), undefined);
     await refreshFinished;
@@ -108,7 +113,7 @@ for (const row of [
       await Promise.allSettled(refreshOperations);
       await shutdown?.();
       const restartedRefresh = new Promise<void>((resolve, reject) => { refreshed = resolve; refreshFailed = reject; });
-      registerAgyProvider(pi, config);
+      new Bridge(pi, new CliDriver()).start();
       sessionStart({ type: "session_start", reason: "startup" }, ctx);
       await restartedRefresh;
       assert.equal(detect.mock.callCount(), 2);

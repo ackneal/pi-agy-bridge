@@ -3,16 +3,17 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { LiveSession, PiContextAdapter } from "./session.ts";
 import { debugLog, isDebugEnabled } from "../shared/debug.ts";
 
-import { MESSAGE_FORMAT, serializeMessage } from "./history.ts";
+import { serializeMessage } from "./history.ts";
 
 const ENTRY_TYPE = "pi-agy-bridge.runtime-session";
 
 export interface AgyConversationCheckpoint {
-  conversationId: string;
+  sessionId: string;
+  version: string;
   fingerprint?: string;
   messageCount?: number;
-  messageFormat?: string;
   hasPendingToolCalls?: boolean;
+  compatibilityKey?: string;
 }
 
 export class RuntimeSessionStore {
@@ -22,7 +23,7 @@ export class RuntimeSessionStore {
     this.piContext = piContext;
   }
 
-  public async get(piSessionId: string, loginEpoch?: string): Promise<AgyConversationCheckpoint | undefined> {
+  public async get(piSessionId: string, loginEpoch: string | undefined, version: string): Promise<AgyConversationCheckpoint | undefined> {
     const sessionManager = this.piContext.getSessionManager(piSessionId);
     if (!sessionManager) return undefined;
 
@@ -37,39 +38,49 @@ export class RuntimeSessionStore {
     }
     if (!entry || !isRecord(entry.data)) return undefined;
     if (entry.data.deleted === true || entry.data.loginEpoch !== loginEpoch) return undefined;
-    if (typeof entry.data.conversationId !== "string") return undefined;
+    if (entry.data.version !== version || typeof version !== "string") return undefined;
+    if (typeof entry.data.sessionId !== "string" || !entry.data.sessionId.trim()) return undefined;
+    if (!soundHash(entry.data)) return undefined;
+    if (entry.data.hasPendingToolCalls !== undefined && typeof entry.data.hasPendingToolCalls !== "boolean") return undefined;
+    if (entry.data.compatibilityKey !== undefined && (typeof entry.data.compatibilityKey !== "string" || !/^[a-f0-9]{64}$/.test(entry.data.compatibilityKey))) return undefined;
 
     return {
-      conversationId: entry.data.conversationId,
-      ...(typeof entry.data.messageFormat === "string" ? { messageFormat: entry.data.messageFormat } : {}),
-      ...(typeof entry.data.fingerprint === "string" ? { fingerprint: entry.data.fingerprint } : {}),
-      ...(typeof entry.data.messageCount === "number" ? { messageCount: entry.data.messageCount } : {}),
+      sessionId: entry.data.sessionId,
+      version,
+      fingerprint: entry.data.fingerprint as string,
+      messageCount: entry.data.messageCount as number,
       ...(typeof entry.data.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: entry.data.hasPendingToolCalls } : {}),
+      ...(typeof entry.data.compatibilityKey === "string" ? { compatibilityKey: entry.data.compatibilityKey } : {}),
     };
   }
 
   public async set(
     piSessionId: string,
-    checkpoint: AgyConversationCheckpoint,
+    checkpoint: Omit<AgyConversationCheckpoint, "version">,
     messages: readonly unknown[],
-    loginEpoch?: string
+    loginEpoch: string | undefined,
+    version: string
   ): Promise<AgyConversationCheckpoint> {
     const sessionManager = this.requireSessionManager(piSessionId);
+    if (!checkpoint.sessionId.trim()) throw new Error("Checkpoint session ID must be nonempty");
     const fingerprint = fingerprintSerializedMessages(messages.map(serializeMessage));
     const messageCount = messages.length;
     const pendingMetadata = typeof checkpoint.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: checkpoint.hasPendingToolCalls } : {};
+    const compatibilityMetadata = checkpoint.compatibilityKey !== undefined ? { compatibilityKey: checkpoint.compatibilityKey } : {};
     sessionManager.appendCustomEntry(ENTRY_TYPE, {
-      conversationId: checkpoint.conversationId,
-      ...(loginEpoch ? { loginEpoch } : {}),
+      sessionId: checkpoint.sessionId,
+      version,
+      ...(loginEpoch !== undefined ? { loginEpoch } : {}),
       fingerprint,
       messageCount,
-      messageFormat: MESSAGE_FORMAT,
       ...pendingMetadata,
+      ...compatibilityMetadata,
     });
 
     return {
-      conversationId: checkpoint.conversationId, fingerprint, messageCount, messageFormat: MESSAGE_FORMAT,
+      sessionId: checkpoint.sessionId, version, fingerprint, messageCount,
       ...pendingMetadata,
+      ...compatibilityMetadata,
     };
   }
 
@@ -84,21 +95,13 @@ export class RuntimeSessionStore {
   }
 }
 
-export function messagesMatch(checkpoint: AgyConversationCheckpoint, messages: readonly unknown[]): boolean {
-  return matchMessages(checkpoint, messages);
-}
-
 function matchMessages(
   checkpoint: AgyConversationCheckpoint,
   messages: readonly unknown[],
   serializedMessages?: readonly string[]
 ): boolean {
-  if (checkpoint.messageFormat !== MESSAGE_FORMAT) {
-    debugLog("session", "Unsupported persisted message format", { format: checkpoint.messageFormat, expected: MESSAGE_FORMAT });
-    return false;
-  }
-  if (checkpoint.fingerprint === undefined || checkpoint.messageCount === undefined) return false;
-  if (messages.length < checkpoint.messageCount) return false;
+  if (!soundHash(checkpoint)) return false;
+  if (messages.length < checkpoint.messageCount!) return false;
   const actualFingerprint = fingerprintSerializedMessages(serializedMessages
     ? serializedMessages.slice(0, checkpoint.messageCount)
     : messages.slice(0, checkpoint.messageCount).map(serializeMessage));
@@ -111,6 +114,11 @@ function matchMessages(
     });
   }
   return actualFingerprint === checkpoint.fingerprint;
+}
+
+function soundHash(value: { fingerprint?: unknown; messageCount?: unknown }): boolean {
+  return typeof value.messageCount === "number" && Number.isSafeInteger(value.messageCount) && value.messageCount >= 0 &&
+    typeof value.fingerprint === "string" && /^[a-f0-9]{64}$/.test(value.fingerprint);
 }
 
 function fingerprintSerializedMessages(messages: readonly string[]): string {
@@ -143,7 +151,9 @@ export type RuntimeSessionDecision =
   | { action: "rebuild" };
 
 export interface RuntimeSessionSyncInput {
+  /** Settings changes can resume a conversation or wait for pending tool calls. */
   syncKey: string;
+  compatibilityKey?: string;
   conversationId?: string;
   messages: readonly unknown[];
   checkpoint?: AgyConversationCheckpoint;
@@ -160,7 +170,8 @@ export class RuntimeSessionSync {
     const deadPendingRuntime = session.activeMcpServer?.hasPendingCalls && !session.activeProcess?.isRunning;
     const syncedCount = this.getSyncedMessageCount(session);
 
-    if (!deadPendingRuntime && this.matchesLiveSession(session, input, serializedMessages)) {
+    const liveCompatibilityMatches = input.compatibilityKey === undefined || session.compatibilityKey === input.compatibilityKey;
+    if (liveCompatibilityMatches && !deadPendingRuntime && this.matchesLiveSession(session, input, serializedMessages)) {
       if (session.activeProcess?.isRunning &&
         (session.syncKey === input.syncKey || session.activeMcpServer?.hasPendingCalls)) {
         return { action: "continue" };
@@ -173,13 +184,13 @@ export class RuntimeSessionSync {
     const checkpoint = input.checkpoint;
     // An older checkpoint cannot roll back a conversation whose newer live
     // messages are already known. A different branch conversation may still resume.
-    if (checkpoint && (checkpoint.conversationId !== session.conversationId || (!deadPendingRuntime && syncedCount === undefined)) &&
+    if (checkpoint && (checkpoint.sessionId !== session.conversationId || (!deadPendingRuntime && syncedCount === undefined)) &&
       this.matchesPersistedSession(checkpoint, input, serializedMessages)) {
       this.syncedMessages.set(session, serializedMessages.slice(0, checkpoint.messageCount));
-      return { action: "resume", conversationId: checkpoint.conversationId };
+      return { action: "resume", conversationId: checkpoint.sessionId };
     }
 
-    debugLog("session", "Rebuilding Antigravity CLI runtime instead of reusing", {
+    debugLog("session", "Rebuilding runtime instead of reusing", {
       syncKeyMatches: session.syncKey === input.syncKey,
       messageCount: input.messages.length,
       syncedMessageCount: syncedCount,
@@ -252,9 +263,10 @@ export class RuntimeSessionSync {
     serializedMessages: readonly string[]
   ): boolean {
     if (checkpoint.hasPendingToolCalls === true) return false;
+    if (input.compatibilityKey !== undefined && checkpoint.compatibilityKey !== input.compatibilityKey) return false;
 
     return (
-      this.matchesConversationId(checkpoint.conversationId, input.conversationId) &&
+      this.matchesConversationId(checkpoint.sessionId, input.conversationId) &&
       matchMessages(checkpoint, input.messages, serializedMessages) &&
       !this.hasUnsyncedAssistant(input.messages, checkpoint.messageCount!)
     );

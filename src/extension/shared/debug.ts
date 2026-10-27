@@ -2,19 +2,10 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-let bridgeConfigDebug = false;
 let artifactDirectory: string | undefined;
 let artifactSequence = 0;
 
-export function setDebugOverride(enabled: boolean): void {
-  bridgeConfigDebug = enabled;
-}
-
 export function isDebugEnabled(): boolean {
-  if (bridgeConfigDebug) {
-    return true;
-  }
-
   const envVal = process.env["AGY_BRIDGE_DEBUG"];
   return envVal === "1" || envVal?.toLowerCase() === "true";
 }
@@ -25,7 +16,7 @@ export function debugLog(scope: string, ...args: unknown[]): void {
   }
 
   const timestamp = new Date().toISOString();
-  const prefix = `[${timestamp}] [Antigravity CLI:${scope}]`;
+  const prefix = `[${timestamp}] [pi-agy-bridge:${scope}]`;
 
   const message = args.length > 0
     ? ` ${args.map(formatDebugValue).join(" ")}`

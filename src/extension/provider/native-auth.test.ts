@@ -10,14 +10,21 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
-import { BridgeIPC } from "../bridge/bridge-ipc.ts";
+import { BridgeIPC } from "../bridge/ipc.ts";
+import { CliDriver } from "../drivers/cli/driver.ts";
 import { AgyRuntime } from "../runtime/process.ts";
-import { AgyBridge, registerAgyProvider } from "./provider.ts";
+import { Bridge } from "./provider.ts";
 
 for (const scenario of ["native logout and relogin", "native URL and code login", "cancelled login", "headless unknown never retries"] as const) {
   test(scenario, async (t) => {
     const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-native-auth-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = directory;
+    t.after(() => {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    });
     t.after(async () => {
       t.mock.restoreAll();
       syncBuiltinESMExports();
@@ -114,18 +121,20 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     let provider: Provider | undefined;
     const commands: string[] = [];
     const models = parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)");
-    registerAgyProvider({
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => executable);
+    t.mock.method(CliDriver.prototype, "discoverModels", async () => models);
+    new Bridge({
       on: () => {}, registerCommand: (name: string) => commands.push(name),
       getActiveTools: () => [], getAllTools: () => [],
       registerProvider: (registered: Provider) => {
         provider = registered;
         runtime.registerNativeProvider(registered);
       },
-    } as unknown as ExtensionAPI, { models, agyPath: executable, authPath: path.join(directory, "auth.json") });
-    await runtime.refresh({ providers: ["agy"], allowNetwork: false });
+    } as unknown as ExtensionAPI, new CliDriver()).start();
+    await runtime.refresh({ providers: ["agy"], allowNetwork: true });
     assert.ok(provider?.auth.oauth?.login);
     assert.equal(provider.auth.oauth.isSubscription, true);
-    assert.deepEqual(commands, ["agy-bridge:doctor"]);
+    assert.deepEqual(commands, ["agy-bridge:doctor", "agy-bridge:driver"]);
     assert.deepEqual(await runtime.getAvailable("agy"), []);
     assert.equal(processCount, 0, "availability checks must not launch authentication");
     const controller = new AbortController();
@@ -172,6 +181,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     }
 
     const credential = await login;
+    await runtime.refresh({ providers: ["agy"], allowNetwork: true });
     assert.match(progress[0] ?? "", /Checking Antigravity CLI authentication status/);
     assert.ok(credential.type === "oauth");
     assert.equal(credential.access, "");
@@ -193,6 +203,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     assert.equal(processCount, countBeforeDisabledRequest, "disabled requests must not launch Antigravity CLI");
 
     const relogin = await runtime.login("agy", "oauth", interaction);
+    await runtime.refresh({ providers: ["agy"], allowNetwork: true });
     assert.ok(relogin.type === "oauth");
     assert.notEqual(relogin.loginEpoch, credential.loginEpoch);
     assert.equal((await runtime.getAvailable("agy")).length, 1);
@@ -200,8 +211,8 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     const countBeforeExpiredRequest = processCount;
     t.mock.method(BridgeIPC.prototype, "start", async () => {});
     t.mock.method(BridgeIPC.prototype, "close", async () => {});
-    t.mock.getter(BridgeIPC.prototype, "processEnvironment", () => ({}));
-    t.mock.method(AgyBridge.prototype, "ensureAgyPluginInstalled", async () => {});
+    t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");
+    t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
     const startRuntime = t.mock.method(AgyRuntime.prototype, "start", async () => {
       throw new Error("Authentication required. Run agy to log in.");
     });

@@ -1,5 +1,3 @@
-import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-
 /**
  * Thrown when agy version requirements are not met or runtime protocol compatibility checks fail
  * (such as unbridged native tools detected in init event).
@@ -116,15 +114,3 @@ export type AgyEvent =
   | AgyStepUpdateEvent
   | AgyResultEvent
   | { event: string; [key: string]: unknown };
-
-export interface AgyBridgeConfig {
-  agyPath?: string;
-  /** Pi credential path for startup auto-configuration. Defaults to getAgentDir()/auth.json. */
-  authPath?: string;
-  agentName?: string;
-  /** @deprecated Use pluginDir. */
-  agentDir?: string;
-  pluginDir?: string;
-  debug?: boolean;
-  models?: ProviderModelConfig[];
-}

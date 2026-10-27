@@ -1,9 +1,10 @@
+import { CliDriver } from "../drivers/cli/driver.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Context, Tool } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { AgyBridge } from "./provider.ts";
+import { Bridge } from "./provider.ts";
 
 type RegistryTool = ReturnType<ExtensionAPI["getAllTools"]>[number];
 
@@ -81,14 +82,14 @@ const cases: {
   },
 ];
 
-describe("AgyBridge.getTools", () => {
+describe("Bridge.getTools", () => {
   for (const testCase of cases) {
     it(testCase.name, (t) => {
       const getAllTools = t.mock.fn(() => registry);
       const getActiveTools = t.mock.fn(() => testCase.activeNames);
       // Do not start the bridge: tool selection needs no doctor registration or runtime.
       const pi = { getAllTools, getActiveTools } satisfies Pick<ExtensionAPI, "getAllTools" | "getActiveTools">;
-      const bridge = new AgyBridge(pi as unknown as ExtensionAPI);
+      const bridge = new Bridge(pi as unknown as ExtensionAPI, new CliDriver());
 
       assert.deepEqual(bridge.getTools(testCase.context), testCase.expected);
       assert.equal(getAllTools.mock.callCount(), testCase.registryReads);
