@@ -40,6 +40,22 @@ const cases: Case[] = [
   })),
   { name: "unclassified named activity at prompt end", actions: [{ update: { toolCallId: "native", title: "unknown operation", status: "in_progress" } }], warned: true },
   { name: "client announcement without callback or raw input", actions: [{ update: client }], warned: false },
+  ...[
+    { title: "running client_view_file", warned: false },
+    { title: "RUNNING CLIENT_VIEW_FILE", warned: false },
+    { title: "rUnNiNg ClIeNt_ViEw_FiLe", warned: false },
+    { title: " \tRunning client_view_file\n", warned: false },
+    { title: " \tRUNNING CLIENT_VIEW_FILE\n", warned: false },
+    { title: "Running not_client_view_file", warned: true },
+    { title: "Running client_view_file_extra", warned: true },
+    { title: "Other Running client_view_file", warned: true },
+    { title: "client_view_file", warned: true },
+    { title: "Running  client_view_file", warned: true },
+  ].map(({ title, warned }): Case => ({
+    name: `client title ${JSON.stringify(title)}`, actions: [{ update: { ...client, title } }], warned,
+  })),
+  { name: "normalized client title with wrong kind warns", actions: [{ update: { ...client, title: " RUNNING CLIENT_VIEW_FILE ", kind: "other" } }], warned: true },
+  { name: "normalized client title with foreign MCP warns", actions: [{ update: { ...client, title: " RUNNING CLIENT_VIEW_FILE ", _meta: { mcp: { server: "other", tool: "read" } } } }], warned: true },
   ...(["completed", "failed"] as const).map((status): Case => ({
     name: `client ${status} without callback`, actions: [{ update: client }, { update: { toolCallId: "client", status } }], warned: false,
   })),

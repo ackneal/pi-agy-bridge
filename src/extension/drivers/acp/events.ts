@@ -6,6 +6,11 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isClientViewFile(call: ToolCallUpdate): boolean {
+  return call.title?.trim().toLowerCase() === "running client_view_file" &&
+    call.kind === "read" && call._meta?.mcp === undefined;
+}
+
 type ObservedCall = { call: ToolCallUpdate; warned?: boolean };
 
 export class EventProcessor {
@@ -74,7 +79,7 @@ export class EventProcessor {
     }
     // Notifications describe activity; only the Artifact Reader authorizes client reads.
     // RPC ordering, read failures, and paths do not change this classification.
-    if (call.title === "Running client_view_file" && call.kind === "read" && mcp === undefined) return;
+    if (isClientViewFile(call)) return;
     // Missing identity in an incremental update is not proof of a native call.
     // Require an allowlisted route once identifiable activity finishes.
     if (final && (call.title !== undefined || call.kind !== undefined || call.rawInput !== undefined || call._meta !== undefined || call.name !== undefined)) {
