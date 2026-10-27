@@ -1,17 +1,25 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AcpInstallProgress } from "../drivers/acp/installation.ts";
+import { ProgressStatus } from "./progress.ts";
 
 type ProgressUI = Pick<ExtensionContext["ui"], "setStatus" | "notify">;
 
 export class AcpInstallationProgress {
   private readonly getUI: () => ProgressUI | undefined;
   private readonly write: (message: string) => void;
+  private readonly statusManager: ProgressStatus;
+  private readonly statusId = Symbol();
   private lastProgress: AcpInstallProgress | undefined;
   private lastStderrAt = -Infinity;
   private downloaded = false;
 
-  constructor(getUI: () => ProgressUI | undefined, write: (message: string) => void = (message) => process.stderr.write(`${message}\n`)) {
+  constructor(
+    getUI: () => ProgressUI | undefined,
+    write: (message: string) => void = (message) => process.stderr.write(`${message}\n`),
+    statusManager = new ProgressStatus(),
+  ) {
     this.getUI = getUI;
+    this.statusManager = statusManager;
     this.write = write;
   }
 
@@ -50,9 +58,7 @@ export class AcpInstallationProgress {
   }
 
   private status(ui: ProgressUI | undefined, message: string | undefined): boolean {
-    if (!ui) return false;
-    try { ui.setStatus("pi-agy-bridge:acp-install", message); return true; }
-    catch { return false; }
+    return this.statusManager.set(this.statusId, ui, message);
   }
 
   private notify(ui: ProgressUI | undefined, message: string, type: "info" | "error"): void {

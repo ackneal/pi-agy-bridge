@@ -26,6 +26,7 @@ import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
 import { collectDoctorReport } from "./doctor.ts";
 import { formatAcpToolWarning } from "./tool-warning.ts";
 import { AcpInstallationProgress } from "./installation-progress.ts";
+import { ProgressStatus } from "./progress.ts";
 import { resolveAcpRelease } from "../drivers/acp/release.ts";
 
 export function streamAgyProvider(
@@ -134,8 +135,8 @@ export function streamAgyProvider(
 export class Bridge {
   private readonly pi: ExtensionAPI;
   private ui: ExtensionContext["ui"] | undefined;
-  private readonly progress = new Map<symbol, { ui: ExtensionContext["ui"]; message: string }>();
-  private readonly installationProgress = new AcpInstallationProgress(() => this.ui);
+  private readonly progressStatus = new ProgressStatus();
+  private readonly installationProgress = new AcpInstallationProgress(() => this.ui, undefined, this.progressStatus);
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private discoveryError: DriverFailure | undefined;
@@ -264,15 +265,8 @@ export class Bridge {
   private showProgress(ctx: ExtensionContext | undefined, message: string): () => void {
     if (!ctx?.hasUI) return () => {};
 
-    const ui = ctx.ui;
-    const id = Symbol();
-    this.progress.set(id, { ui, message });
-    ui.setStatus("agy-bridge", message);
-    return () => {
-      const current = [...this.progress.keys()].at(-1) === id;
-      this.progress.delete(id);
-      if (current) ui.setStatus("agy-bridge", [...this.progress.values()].at(-1)?.message);
-    };
+    this.ui = ctx.ui;
+    return this.progressStatus.show(ctx.ui, message);
   }
 
   private async showDoctor(ctx?: ExtensionContext, warning?: string, lifetime = this.runtimeLifetime.signal): Promise<void> {
@@ -426,9 +420,7 @@ export class Bridge {
       })();
     });
     this.pi.on("session_shutdown", async () => {
-      const activeProgress = [...this.progress.values()].at(-1);
-      this.progress.clear();
-      activeProgress?.ui.setStatus("agy-bridge", undefined);
+      this.progressStatus.clear();
       this.installationProgress.clear();
       this.driver.onInstallationProgress = undefined;
       this.ui = undefined;
