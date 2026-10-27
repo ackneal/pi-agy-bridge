@@ -27,8 +27,19 @@ for (const epoch of ["test epoch", "a/b:%", "123"]) {
     assert.ok(refreshed.expires > Date.now());
     assert.equal(isAgyBridgeEnabled(refreshed), true);
     assert.deepEqual(await auth.oauth.toAuth(refreshed), { apiKey: `agy-bridge:${encodeURIComponent(epoch)}` });
-    assert.deepEqual(getAgyBridgeAuthEnvironment((await auth.oauth.toAuth(refreshed)).apiKey), {
+    const derivedKey = (await auth.oauth.toAuth(refreshed)).apiKey!;
+    assert.deepEqual(getAgyBridgeAuthEnvironment(derivedKey), {
       AGY_BRIDGE_ENABLED: "1", AGY_BRIDGE_LOGIN_EPOCH: epoch,
+    });
+    assert.equal(isAgyBridgeEnabled({ type: "api_key", key: derivedKey }), true);
+    assert.deepEqual(await auth.method.resolve({
+      ctx: { env: async () => undefined, fileExists: async () => false },
+      credential: { type: "api_key", key: derivedKey },
+      signal: new AbortController().signal,
+    }), {
+      auth: {},
+      env: { AGY_BRIDGE_ENABLED: "1", AGY_BRIDGE_LOGIN_EPOCH: epoch },
+      source: "Antigravity CLI",
     });
     assert.equal(auth.method.login, undefined);
     assert.equal(auth.oauth.isSubscription, true);

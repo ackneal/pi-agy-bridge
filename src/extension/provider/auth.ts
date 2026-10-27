@@ -12,7 +12,9 @@ export function createAgyBridgeCredential(loginEpoch: string = randomUUID()): OA
 }
 
 export function isAgyBridgeEnabled(credential: Credential | undefined): boolean {
-  if (credential?.type === "api_key") return credential.env?.AGY_BRIDGE_ENABLED === "1";
+  if (credential?.type === "api_key") {
+    return credential.env?.AGY_BRIDGE_ENABLED === "1" || getAgyBridgeAuthEnvironment(credential.key) !== undefined;
+  }
   return credential?.type === "oauth" && credential.agyBridge === true
     && typeof credential.loginEpoch === "string" && credential.loginEpoch.trim().length > 0
     && credential.access === "" && credential.refresh === "";
@@ -60,7 +62,8 @@ export class AgyAuthentication {
         signal.throwIfAborted();
         self.lifecycle.signal.throwIfAborted();
 
-        const epoch = credential?.env?.AGY_BRIDGE_LOGIN_EPOCH;
+        const keyEnv = getAgyBridgeAuthEnvironment(credential?.key);
+        const epoch = credential?.env?.AGY_BRIDGE_LOGIN_EPOCH ?? keyEnv?.AGY_BRIDGE_LOGIN_EPOCH;
         return {
           auth: {},
           env: { AGY_BRIDGE_ENABLED: "1", ...(typeof epoch === "string" && epoch.length > 0 ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },
