@@ -11,7 +11,6 @@ export class AcpInstallationProgress {
   private readonly statusId = Symbol();
   private lastProgress: AcpInstallProgress | undefined;
   private lastStderrAt = -Infinity;
-  private downloaded = false;
 
   constructor(
     getUI: () => ProgressUI | undefined,
@@ -31,17 +30,11 @@ export class AcpInstallationProgress {
 
     if (progress.phase === "complete" || progress.phase === "error" || progress.phase === "cancelled") {
       this.status(ui, undefined);
-      if (progress.phase === "error") this.notify(ui, progress.message, "error");
-      else if (progress.phase === "complete" && this.downloaded) this.notify(ui, progress.message, "info");
+      if (progress.phase === "error") this.notify(ui, progress.message);
       else if (!ui) this.write(progress.message);
-      this.downloaded = false;
       return;
     }
 
-    if (progress.phase === "download" && !this.downloaded) {
-      this.downloaded = true;
-      if (ui) this.notify(ui, `Installing Antigravity ACP ${progress.version} (${progress.platform}). The first download may take several minutes.`, "info");
-    }
     const displayed = this.status(ui, progress.message);
     const now = Date.now();
     if (!displayed && (progress.phase !== previousPhase || now - this.lastStderrAt >= 2000)) {
@@ -52,7 +45,6 @@ export class AcpInstallationProgress {
 
   clear(): void {
     this.lastProgress = undefined;
-    this.downloaded = false;
     this.lastStderrAt = -Infinity;
     this.status(this.getUI(), undefined);
   }
@@ -61,9 +53,9 @@ export class AcpInstallationProgress {
     return this.statusManager.set(this.statusId, ui, message);
   }
 
-  private notify(ui: ProgressUI | undefined, message: string, type: "info" | "error"): void {
+  private notify(ui: ProgressUI | undefined, message: string): void {
     if (ui) {
-      try { ui.notify(message, type); return; }
+      try { ui.notify(message, "error"); return; }
       catch { /* A broken UI must not stop the installation or hide its error. */ }
     }
     this.write(message);

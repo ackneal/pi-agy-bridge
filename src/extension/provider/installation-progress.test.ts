@@ -9,8 +9,8 @@ function event(phase: AcpInstallProgress["phase"], message: string = phase): Acp
 
 test("ACP installation progress presents lifecycle transitions", () => {
   for (const scenario of [
-    { name: "download then completion", phases: ["download", "verify", "complete"] as const, notifications: 2 },
-    { name: "cached validation", phases: ["validate", "complete"] as const, notifications: 0 },
+    { name: "download then completion", phases: ["download", "verify", "complete"] as const },
+    { name: "cached validation", phases: ["validate", "complete"] as const },
   ]) {
     const statuses: Array<[string, string | undefined]> = [];
     const notices: string[] = [];
@@ -20,8 +20,10 @@ test("ACP installation progress presents lifecycle transitions", () => {
       notify: (message) => notices.push(message),
     }), (line) => stderr.push(line));
     for (const phase of scenario.phases) presenter.update(event(phase));
-    assert.equal(notices.length, scenario.notifications, scenario.name);
-    assert.equal(statuses.at(-1)?.[1], undefined, scenario.name);
+    assert.deepEqual(notices, [], scenario.name);
+    assert.deepEqual(statuses.map(([, message]) => message), [
+      ...scenario.phases.slice(0, -1), undefined,
+    ], scenario.name);
     assert.deepEqual(stderr, [], "working UI does not also print progress to stderr");
   }
 });
@@ -29,16 +31,16 @@ test("ACP installation progress presents lifecycle transitions", () => {
 test("errors and cancellation clear status; duplicate events are suppressed", () => {
   for (const phase of ["error", "cancelled"] as const) {
     const statuses: Array<string | undefined> = [];
-    const notices: string[] = [];
+    const notices: Array<{ message: string; type: string | undefined }> = [];
     const presenter = new AcpInstallationProgress(() => ({
       setStatus: (_key, message) => statuses.push(message),
-      notify: (message) => notices.push(message),
+      notify: (message, type) => notices.push({ message, type }),
     }), () => {});
     const progress = event(phase, "failed");
     presenter.update(progress);
     presenter.update(progress);
     assert.equal(statuses.at(-1), undefined);
-    assert.equal(notices.length, phase === "error" ? 1 : 0);
+    assert.deepEqual(notices, phase === "error" ? [{ message: "failed", type: "error" }] : []);
   }
 });
 
@@ -61,7 +63,7 @@ test("download stderr output is throttled while phase changes are always written
 });
 
 for (const terminal of ["error", "cancelled", "complete"] as const) {
-  test(`progress supports retry after ${terminal} without stale completion notices`, () => {
+  test(`progress supports retry after ${terminal} without informational notices`, () => {
     const notices: string[] = [];
     const presenter = new AcpInstallationProgress(() => ({ setStatus() {}, notify: (message) => notices.push(message) }), () => {});
     presenter.update(event("download"));
@@ -70,7 +72,7 @@ for (const terminal of ["error", "cancelled", "complete"] as const) {
     presenter.update(event("complete", "cache ready"));
     assert.ok(!notices.includes("cache ready"));
     presenter.update(event("download"));
-    assert.equal(notices.filter((message) => message.startsWith("Installing Antigravity ACP")).length, 2);
+    assert.deepEqual(notices, terminal === "error" ? ["error"] : []);
     presenter.clear();
     presenter.update(event("complete", "after clear"));
     assert.ok(!notices.includes("after clear"));

@@ -42,7 +42,7 @@ Start Pi after installation. ACP is selected by default. Only explicitly selecte
 
 ### 2. Sign In (If Needed)
 
-If the bridge is not yet configured in Pi, it checks for existing selected-backend authentication in the background at startup. With default ACP, this can start the first server download. Pi shows download progress and installation status; wait for installation and authentication to finish before selecting a model.
+If the bridge is not yet configured in Pi, it checks for existing selected-backend authentication in the background at startup. With default ACP, this can start the first server download. Pi shows download progress and installation status in its footer, then clears the installation status when finished; normal installation progress does not add chat notifications. Errors still produce notifications. Wait for installation and authentication to finish before selecting a model.
 
 To sign in through Pi, run `/login`, select the selected Antigravity backend labeled **[pi-agy-bridge]**, and follow the authorization prompts.
 
