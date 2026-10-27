@@ -36,6 +36,8 @@ export class AcpRuntimeSession implements DriverSession {
   private readonly allowedToolNames: ReadonlySet<string>;
   private listeners = new Set<(event: RuntimeEvent) => void>();
   private submitting = false;
+  private completion: Promise<void> | undefined;
+  private failure: Promise<void> | undefined;
   readonly options: Omit<AcpSessionOptions, "onUpdate">;
   constructor(options: Omit<AcpSessionOptions, "onUpdate">, allowedToolNames: ReadonlySet<string> = new Set()) {
     this.options = options;
@@ -45,7 +47,7 @@ export class AcpRuntimeSession implements DriverSession {
       onPermission: (request) => this.permissions?.reply(request) ?? { outcome: { outcome: "cancelled" } },
       onClose: (error) => {
         this.permissions?.reset();
-        this.emit({ type: "complete", reason: "error", error: error instanceof Error ? error.message : String(error), resumable: false });
+        if (!this.completion) this.completion = this.fail(error);
       },
       onUpdate: (update: SessionNotification) => {
         this.permissions?.observe(update);
@@ -56,8 +58,21 @@ export class AcpRuntimeSession implements DriverSession {
   get isRunning(): boolean { return this.session.isRunning; }
   async prepare(signal?: AbortSignal): Promise<void> {
     await this.session.prepare(signal);
-    this.translator = new AcpEventTranslator(this.session.id);
+    this.translator = new AcpEventTranslator(this.session.id, this.allowedToolNames);
     this.permissions = new AcpMcpPermissions(this.session.id, this.allowedToolNames);
+  }
+  private fail(error: unknown): Promise<void> {
+    // Claim failure ownership before cleanup can synchronously trigger onClose.
+    this.failure ??= Promise.resolve().then(async () => {
+      try {
+        await this.session.dispose();
+      } catch (cleanupError) {
+        debugLog("session", "ACP runtime cleanup failed:", cleanupError);
+      }
+      this.completion = undefined;
+      this.emit({ type: "complete", reason: "error", error: String(error), resumable: false });
+    });
+    return this.failure;
   }
   private emit = (event: RuntimeEvent): void => { for (const listener of this.listeners) listener(event); };
   onRuntimeEvent(handler: (event: RuntimeEvent) => void): () => void {
@@ -70,8 +85,8 @@ export class AcpRuntimeSession implements DriverSession {
     return JSON.stringify(content);
   }
   async submit(input: DriverSubmission): Promise<void> {
-    if (this.submitting || this.session.hasActivePrompt) throw new Error("ACP prompt already active");
-    if (!this.isRunning) throw new Error("ACP session is not running");
+    if (this.submitting || this.completion || this.session.hasActivePrompt) throw new Error("ACP prompt already active");
+    if (!this.isRunning || this.failure) throw new Error("ACP session is not running");
     this.submitting = true;
     try {
       const content = acpContext(input.context.messages.slice(input.reconstructContext ? 0 : input.syncedMessageCount));
@@ -84,6 +99,7 @@ export class AcpRuntimeSession implements DriverSession {
           debugLog("provider", "onPayload hook threw:", error);
         }
       }
+      if (this.completion || this.failure || !this.isRunning) throw new Error("ACP runtime closed before input delivery");
       if (!payload || typeof payload !== "object" || !("sessionId" in payload) || payload.sessionId !== this.session.id || !("prompt" in payload) || !Array.isArray(payload.prompt) || !payload.prompt.length) throw new Error("Invalid ACP payload");
       const prompt: ContentBlock[] = payload.prompt.map((block: unknown) => {
         if (!block || typeof block !== "object" || !("type" in block)) throw new Error("Invalid ACP content block");
@@ -95,17 +111,19 @@ export class AcpRuntimeSession implements DriverSession {
       this.emit({ type: "start" });
       this.emit({ type: "session-reference", reference: this.session.id });
       // Do not await the native prompt: MCP can suspend it across Pi turns.
-      void this.session.prompt(prompt).then((response) => {
+      this.completion = this.session.prompt(prompt).then((response) => {
+        this.completion = undefined;
         this.translator?.complete(response, this.emit);
-      }, (error: unknown) => {
-        this.emit({ type: "complete", reason: "error", error: String(error), resumable: false });
-        void this.session.dispose().catch((cleanupError) => debugLog("session", "ACP runtime cleanup failed:", cleanupError));
-      });
+      }, (error: unknown) => this.fail(error));
     } finally { this.submitting = false; }
   }
-  abort(): Promise<void> {
+  async abort(): Promise<void> {
     this.listeners.clear();
     this.permissions?.reset();
-    return this.session.cancel();
+    try {
+      await this.session.cancel();
+    } finally {
+      await this.completion;
+    }
   }
 }

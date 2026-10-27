@@ -4,6 +4,10 @@ import type { RequestPermissionRequest, RequestPermissionResponse, SessionNotifi
 const SERVER = "pi-agy-bridge_pi";
 const LIMIT = 1024;
 
+export function isRegisteredPiMcpTool(mcp: unknown, allowedToolNames: ReadonlySet<string>): mcp is { server: string; tool: string } {
+  return record(mcp) && mcp.server === SERVER && typeof mcp.tool === "string" && allowedToolNames.has(mcp.tool);
+}
+
 /** Permits only MCP transport; the Pi gateway still owns execution and policy.
  * Callers must not feed replay notifications into this gate.
  */
@@ -67,7 +71,7 @@ export class AcpMcpPermissions {
     }
     if (update._meta !== undefined) {
       const mcp = update._meta?.mcp;
-      if (!record(mcp) || mcp.server !== SERVER || typeof mcp.tool !== "string" || !this.allowedToolNames.has(mcp.tool)) return null;
+      if (!isRegisteredPiMcpTool(mcp, this.allowedToolNames)) return null;
       if (prior?._meta !== undefined && !isDeepStrictEqual(prior._meta?.mcp, mcp)) return null;
     }
     if (update.rawInput !== undefined && (!record(update.rawInput) || !record(update.rawInput.arguments))) return null;
@@ -79,8 +83,7 @@ export class AcpMcpPermissions {
 
   private complete(call: ToolCallUpdate): boolean {
     const mcp = call._meta?.mcp;
-    return record(mcp) && mcp.server === SERVER && typeof mcp.tool === "string" &&
-      this.allowedToolNames.has(mcp.tool) && call.title === `${SERVER}_${mcp.tool}` &&
+    return isRegisteredPiMcpTool(mcp, this.allowedToolNames) && call.title === `${SERVER}_${mcp.tool}` &&
       record(call.rawInput) && record(call.rawInput.arguments);
   }
 }

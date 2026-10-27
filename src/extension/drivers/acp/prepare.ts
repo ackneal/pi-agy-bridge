@@ -9,6 +9,8 @@ import { debugLog } from "../../shared/debug.ts";
 import { AcpRuntimeSession } from "./runtime.ts";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructions.ts";
 
+class AcpPreparationCleanupError extends AggregateError {}
+
 export async function prepareAcpRuntime(
   model: Model<any>, context: Context, tools: readonly Tool[], options: SimpleStreamOptions | undefined,
   connection: AcpConnectionOptions,
@@ -75,7 +77,7 @@ export async function prepareAcpRuntime(
       const failures: unknown[] = [];
       try { await bridge.close(); } catch (cleanupError) { failures.push(cleanupError); }
       try { await proc?.abort(); } catch (cleanupError) { failures.push(cleanupError); }
-      if (failures.length) throw new AggregateError([error, ...failures], "ACP preparation and cleanup failed");
+      if (failures.length) throw new AcpPreparationCleanupError([error, ...failures], "ACP preparation and cleanup failed");
       throw error;
     } finally {
       options?.signal?.removeEventListener("abort", cancel);
@@ -87,6 +89,7 @@ export async function prepareAcpRuntime(
       return { ...await startRuntime(decision.conversationId), reconstructContext: false };
     } catch (error) {
       check();
+      if (error instanceof AcpPreparationCleanupError) throw error;
       await dependencies.store.delete(liveSession.piSessionId).catch((storeError) => {
         debugLog("session", "Failed to clear invalid ACP checkpoint:", storeError);
       });

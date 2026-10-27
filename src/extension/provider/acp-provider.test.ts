@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test, { afterEach, beforeEach } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
-import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionAPI, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
@@ -34,38 +34,58 @@ const model = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 } as Model<any>;
 
-test("announced native execution without a permission request invalidates the ACP runtime", async (t) => {
-  const pi = { getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI;
-  const directory = await mkdtemp(path.join(tmpdir(), "agy-acp-provider-"));
+for (const row of [
+  { scenario: "native-execute", tool: "run_command", args: { command: "echo synthetic" } },
+  { scenario: "native-read", tool: "view_file", args: { absolute_path: "/synthetic/input.txt" } },
+  { scenario: "native-search", tool: "grep_search", args: { query: "synthetic" } },
+  { scenario: "native-unknown", tool: "unknown_tool", args: { value: "synthetic" } },
+]) {
+  test(`announced ${row.scenario} warns in Pi without invalidating the ACP runtime`, async (t) => {
+    let start!: (event: SessionStartEvent, ctx: ExtensionContext) => void;
+    const notify = t.mock.fn();
+    const pi = {
+      getActiveTools: () => [], getAllTools: () => [], registerCommand: () => {}, registerProvider: () => {},
+      on: (event: string, handler: typeof start) => { if (event === "session_start") start = handler; },
+    } as unknown as ExtensionAPI;
+    const directory = await mkdtemp(path.join(tmpdir(), "agy-acp-provider-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
-    await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}" native-execute\n`, { mode: 0o755 });
+    await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}" ${row.scenario}\n`, { mode: 0o755 });
     t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
-  const bridge = new Bridge(pi);
-  const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
-  const session = bridge.liveSessions.getOrCreate(sessionId);
-  t.after(() => bridge.liveSessions.disposeAll());
-  t.mock.method(bridge, "getTools", () => []);
-  t.mock.method(BridgeIPC.prototype, "start", async () => {});
-  t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock");
-  const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
+    const bridge = new Bridge(pi);
+    const sessionManager = SessionManager.inMemory(tmpdir());
+    const sessionId = bridge.piContextAdapter.bind(sessionManager);
+    const session = bridge.liveSessions.getOrCreate(sessionId);
+    t.after(() => bridge.liveSessions.disposeAll());
+    t.mock.method(bridge, "getTools", () => []);
+    t.mock.method(BridgeIPC.prototype, "start", async () => {});
+    t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock");
+    const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
+    bridge.start();
+    start({ type: "session_start", reason: "reload" }, {
+      sessionManager, hasUI: true, ui: { notify }, modelRegistry: { refresh: async () => {} },
+    } as unknown as ExtensionContext);
 
-  const events: AssistantMessageEvent[] = [];
-  for await (const event of streamAgyProvider(model, {
-    messages: [{ role: "user", content: "Use only Pi tools", timestamp: 0 }],
-  }, { sessionId }, bridge)) events.push(event);
+    const events: AssistantMessageEvent[] = [];
+    for await (const event of streamAgyProvider(model, {
+      messages: [{ role: "user", content: "Use only Pi tools", timestamp: 0 }],
+    }, { sessionId }, bridge)) events.push(event);
 
-  const terminal = events.filter(event => event.type === "done" || event.type === "error");
-  assert.equal(terminal.length, 1);
-  assert.equal(terminal[0]?.type, "error");
-  assert.ok(terminal[0]?.type === "error");
-  assert.match(terminal[0].error.errorMessage!, /run_command/);
-  assert.equal(session.activeProcess, null);
-  assert.equal(session.activeMcpServer, null);
-  assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
-  await session.dispose();
-  assert.equal(close.mock.callCount(), 1);
-});
+    const terminal = events.filter(event => event.type === "done" || event.type === "error");
+    assert.equal(terminal.length, 1);
+    assert.equal(terminal[0]?.type, "done");
+    assert.ok(session.activeProcess instanceof AcpRuntimeSession);
+    assert.equal(session.activeProcess.isRunning, true);
+    assert.ok(session.activeMcpServer);
+    assert.equal(close.mock.callCount(), 0);
+    assert.equal(notify.mock.callCount(), 1);
+    assert.deepEqual(notify.mock.calls[0]!.arguments, [
+      `Antigravity ACP: unverified tool activity — ${row.tool} ${JSON.stringify(row.args)}`, "warning",
+    ]);
+    const checkpoint = await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion);
+    assert.equal(checkpoint?.sessionId, session.activeProcess.session.id);
+  });
+}
 
 for (const scenario of ["completion", "cancel", "failure", "unknown", "missing", "duplicate"] as const) {
   test(`ACP provider tool gap: ${scenario}`, { timeout: 10000 }, async (t) => {
@@ -108,6 +128,11 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
         });
       });
     });
+    const cancel = AcpSession.prototype.cancel;
+    t.mock.method(AcpSession.prototype, "cancel", async function (this: AcpSession) {
+      try { await cancel.call(this); }
+      finally { rejectPrompt?.(new Error("synthetic native prompt cancelled")); }
+    });
     const controller = new AbortController();
     const context: Context = { tools, messages: [{ role: "user", content: "Read synthetic.txt", timestamp: 1 }] };
     const collect = async (input: Context) => {
@@ -135,7 +160,13 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
 
     if (scenario === "cancel" || scenario === "failure") {
       if (scenario === "cancel") controller.abort();
-      else rejectPrompt(new Error("synthetic native prompt failed"));
+      else {
+        const failed = new Promise<void>(resolve => runtime.onRuntimeEvent(event => {
+          if (event.type === "complete") resolve();
+        }));
+        rejectPrompt(new Error("synthetic native prompt failed"));
+        await failed;
+      }
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(session.activeProcess, null);
       assert.equal(session.activeMcpServer, null);

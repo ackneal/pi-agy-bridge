@@ -74,4 +74,5 @@ export type RuntimeEvent =
   | { type: "text-delta"; delta: string }
   | { type: "usage"; usage: AssistantMessage["usage"] }
   | { type: "complete"; reason: "stop" | "toolUse" | "error" | "aborted"; error?: string | undefined; resumable: boolean }
-  | { type: "blocked-native-tool"; name: string };
+  | { type: "blocked-native-tool"; name: string }
+  | { type: "tool-warning"; name: string; args: unknown };

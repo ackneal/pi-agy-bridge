@@ -16,7 +16,9 @@ for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
           sessionId: scope === "foreign" ? "other" : "session",
           update: { sessionUpdate, toolCallId: "call", title: "display only", kind, status: "pending" },
         }, scope === "replay" ? "replay" : "live", (fact) => facts.push(fact));
-        assert.deepEqual(facts, scope === "live" ? [{ type: "blocked-native-tool", name: "display only" }] : []);
+        assert.equal(facts.length, 0, "partial announcements must have a chance to supply identity");
+        if (scope === "live") translator.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
+        assert.deepEqual(facts, scope === "live" ? [{ type: "tool-warning", name: "display only", args: undefined }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }] : []);
       });
     }
   }
@@ -32,7 +34,7 @@ for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
     test(`non-authoritative announcement unchanged: ${sessionUpdate} ${row.name}`, () => {
       const { name: _name, ...call } = row;
       const facts: RuntimeEvent[] = [];
-      new AcpEventTranslator("session").translate({
+      new AcpEventTranslator("session", new Set(["edit"])).translate({
         sessionId: "session", update: sessionUpdate === "tool_call"
           ? { sessionUpdate, toolCallId: "call", status: "pending", ...call }
           : { sessionUpdate, toolCallId: "call", status: "pending", ...call },
@@ -44,10 +46,12 @@ for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
 
 test("native update without title uses kind for display", () => {
   const facts: RuntimeEvent[] = [];
-  new AcpEventTranslator("session").translate({
+  const translator = new AcpEventTranslator("session");
+  translator.translate({
     sessionId: "session", update: { sessionUpdate: "tool_call_update", toolCallId: "call", kind: "execute" },
   }, "live", (fact) => facts.push(fact));
-  assert.deepEqual(facts, [{ type: "blocked-native-tool", name: "execute" }]);
+  translator.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
+  assert.deepEqual(facts, [{ type: "tool-warning", name: "execute", args: undefined }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }]);
 });
 
 for (const row of [

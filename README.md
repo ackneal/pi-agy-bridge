@@ -79,7 +79,7 @@ The bridge exposes Pi's current tools through a local MCP server. Requests trave
 
 Pi also manages custom tools and skills. Pi tool calls execute through the MCP bridge.
 
-The ACP driver requests `enabledTools: []`, denies non-MCP permission requests, and exposes no client write or terminal capability. These are configuration and protocol checks, not a sandbox around AGY. Backend enforcement of native-tool filtering and system-instruction delivery still needs real-backend validation.
+The ACP driver requests `enabledTools: []`, denies non-MCP permission requests, and exposes no client write or terminal capability. Unverified ACP tool notifications produce a warning in Pi without stopping the conversation. The warning does not grant permissions or mean execution was prevented. These are configuration and protocol checks, not a sandbox around AGY. Backend enforcement of native-tool filtering and system-instruction delivery still needs real-backend validation.
 
 ### Sessions and Context
 

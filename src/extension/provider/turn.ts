@@ -17,6 +17,7 @@ interface TurnOptions {
   signal: AbortSignal | undefined;
   loginEpoch: string | undefined;
   sessionVersion: string;
+  onWarning?: (name: string, args: unknown) => void;
 }
 
 export class Turn {
@@ -107,6 +108,14 @@ export class Turn {
 
   private handleEvent(event: RuntimeEvent): void {
     if (!this.ownsRuntime()) return;
+    if (event.type === "tool-warning") {
+      try {
+        this.options.onWarning?.(event.name, event.args);
+      } catch (error) {
+        debugLog("warning", "Could not display ACP tool warning:", error);
+      }
+      return;
+    }
 
     const { adapter } = this.options;
     const mcpServer = this.runtime!.mcpServer;

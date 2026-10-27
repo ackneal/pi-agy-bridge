@@ -52,10 +52,16 @@ const connection = acp.agent()
   })
   .onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
     if (scenario === "hang-prompt") await new Promise(() => {});
-    if (scenario === "native-execute") {
+    const native = {
+      "native-execute": { title: "run_command", kind: "execute", rawInput: { command: "echo synthetic" } },
+      "native-read": { title: "Running view_file", kind: "read", rawInput: { absolute_path: "/synthetic/input.txt" } },
+      "native-search": { title: "Running grep_search", kind: "search", rawInput: { query: "synthetic" } },
+      "native-unknown": { title: "Running unknown_tool", kind: "other", rawInput: { value: "synthetic" } },
+    } as const;
+    if (scenario && scenario in native) {
       await client.notify(acp.methods.client.session.update, {
         sessionId: params.sessionId,
-        update: { sessionUpdate: "tool_call", toolCallId: "native", title: "run_command", kind: "execute", status: "in_progress" },
+        update: { sessionUpdate: "tool_call", toolCallId: "native", ...native[scenario as keyof typeof native], status: "in_progress" },
       });
     }
     await client.notify(acp.methods.client.session.update, {

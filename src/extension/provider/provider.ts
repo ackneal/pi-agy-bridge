@@ -24,6 +24,7 @@ import { debugArtifact, debugLog } from "../shared/debug.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
 import { collectDoctorReport } from "./doctor.ts";
+import { formatAcpToolWarning } from "./tool-warning.ts";
 
 export function streamAgyProvider(
   model: Model<any>,
@@ -75,6 +76,7 @@ export function streamAgyProvider(
     signal: options?.signal,
     loginEpoch: options?.env?.AGY_BRIDGE_LOGIN_EPOCH,
     sessionVersion: bridge.driver.sessionVersion,
+    onWarning: (name, args) => bridge.warnTool(name, args),
   });
 
   (async () => {
@@ -129,6 +131,7 @@ export function streamAgyProvider(
 
 export class Bridge {
   private readonly pi: ExtensionAPI;
+  private ui: ExtensionContext["ui"] | undefined;
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private discoveryError: DriverFailure | undefined;
@@ -221,6 +224,19 @@ export class Bridge {
     await modelRegistry?.refresh({ providers: ["agy"], allowNetwork: false });
 
     debugLog("provider", `Switched bridge driver to: ${this.driver.label} (${driverId})`);
+  }
+
+  public warnTool(name: string, args: unknown): void {
+    const message = formatAcpToolWarning(name, args);
+    if (this.ui) {
+      try {
+        this.ui.notify(message, "warning");
+        return;
+      } catch (error) {
+        debugLog("warning", "Could not display ACP tool warning in Pi:", error);
+      }
+    }
+    process.stderr.write(`${message}\n`);
   }
 
   public getTools(context: Context): Tool[] {
@@ -324,6 +340,7 @@ export class Bridge {
     });
 
     this.pi.on("session_start", (event, ctx) => {
+      this.ui = ctx.hasUI ? ctx.ui : undefined;
       this.sessionIds.add(this.piContextAdapter.bind(ctx.sessionManager));
       const lifetime = this.runtimeLifetime.signal;
       const autoConfigure = event.reason === "startup" && !this.startupAuthenticationStarted;
@@ -348,6 +365,7 @@ export class Bridge {
       })();
     });
     this.pi.on("session_shutdown", async () => {
+      this.ui = undefined;
       this.lifetime.abort(new Error("Antigravity bridge session ended"));
       this.authentication.close();
       this.runtimeLifetime.abort(new Error(`${this.driver.label} bridge session ended`));
