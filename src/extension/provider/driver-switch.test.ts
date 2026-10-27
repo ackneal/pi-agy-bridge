@@ -1,5 +1,6 @@
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
+import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
@@ -11,6 +12,31 @@ import { ModelRuntime, type ExtensionAPI, type ExtensionCommandContext, type Ext
 import type { Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
+
+for (const result of ["success", "installation failure"] as const) {
+  test(`switch to uninstalled ACP attempts preparation: ${result}`, async (t) => {
+    useAcpExecutable(t, undefined);
+    const discovery = t.mock.method(AcpDriver.prototype, "discoverModels", async function(this: AcpDriver) {
+      assert.equal(typeof this.onInstallationProgress, "function");
+      if (result === "installation failure") throw new Error("synthetic ACP installation failure");
+      return [];
+    });
+    const bridge = new Bridge({ on() {}, registerCommand() {}, registerProvider() {} } as unknown as ExtensionAPI, new CliDriver());
+    t.after(() => bridge.liveSessions.disposeAll());
+    const disposal = t.mock.method(bridge.liveSessions, "disposeAll", async () => {});
+    bridge.start();
+    if (result === "success") {
+      await bridge.switchDriver("acp");
+      assert.equal(bridge.driver.id, "acp");
+      assert.equal(disposal.mock.callCount(), 1);
+    } else {
+      await assert.rejects(bridge.switchDriver("acp"), /synthetic ACP installation failure/);
+      assert.equal(bridge.driver.id, "cli");
+      assert.equal(disposal.mock.callCount(), 0);
+    }
+    assert.equal(discovery.mock.callCount(), 1);
+  });
+}
 
 async function mockExecutables(t: TestContext) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-switch-executables-"));
@@ -28,7 +54,7 @@ async function mockExecutables(t: TestContext) {
     };
   });
   t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
-  t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
+  useAcpExecutable(t, process.execPath);
 }
 
 for (const scenario of [
@@ -149,7 +175,7 @@ for (const outcome of ["success", "failure"] as const) {
 }
 
 test("shutdown during driver disposal cannot register a new provider", async (t) => {
-  t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
+  useAcpExecutable(t, process.execPath);
   t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
   let shutdown!: () => Promise<void>;
   let registrations = 0;

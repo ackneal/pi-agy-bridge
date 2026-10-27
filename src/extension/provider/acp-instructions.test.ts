@@ -1,5 +1,6 @@
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
+import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -43,7 +44,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+    useAcpExecutable(t, executable);
     const bridge = new Bridge(pi);
     const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
     const session = bridge.liveSessions.getOrCreate(sessionId);

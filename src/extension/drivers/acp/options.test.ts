@@ -19,17 +19,17 @@ const rows: { name: string; files: Fixture[]; custom?: string; env?: string; exp
   { name: "broken symlink rejected", files: [["custom", "broken"]], custom: "custom" },
   { name: "filesystem error rejected", files: [["custom", "loop"]], custom: "custom" },
   { name: "environment wins over search", files: [["env", "executable"], [local, "executable"]], env: "env", expected: "env" },
-  { name: "environment non-executable falls back", files: [["env", "plain"], [local, "executable"]], env: "env", expected: local },
+  { name: "environment non-executable does not fall back to implicit search", files: [["env", "plain"], [local, "executable"]], env: "env" },
   { name: "environment directory rejected", files: [["env", "directory"]], env: "env" },
   { name: "environment executable symlink accepted", files: [["target", "executable"], ["env", "symlink"]], env: "env", expected: "env" },
-  { name: "versioned par preferred", files: [[par, "executable"], [bin, "executable"], [local, "executable"]], expected: par },
-  { name: "non-executable par skipped", files: [[par, "plain"], [bin, "executable"]], expected: bin },
-  { name: "directory par skipped", files: [[par, "directory"], [bin, "executable"]], expected: bin },
-  { name: "direct executable symlink accepted", files: [["target", "executable"], [direct, "symlink"]], expected: direct },
-  { name: "direct non-executable skipped", files: [[direct, "plain"], [local, "executable"]], expected: local },
-  { name: "local non-executable rejected", files: [[local, "plain"]] },
-  { name: "local directory rejected", files: [[local, "directory"]] },
-  { name: "unreadable search shape falls back", files: [[".local/opt/agy-acp", "plain"], [local, "executable"]], expected: local },
+  { name: "implicit versioned distribution ignored", files: [[par, "executable"], [bin, "executable"], [local, "executable"]] },
+  { name: "implicit versioned executable ignored", files: [[par, "plain"], [bin, "executable"]] },
+  { name: "implicit versioned directory ignored", files: [[par, "directory"], [bin, "executable"]] },
+  { name: "implicit executable symlink ignored", files: [["target", "executable"], [direct, "symlink"]] },
+  { name: "direct non-executable skipped", files: [[direct, "plain"], [local, "executable"]] },
+  { name: "local non-executable ignored", files: [[local, "plain"]] },
+  { name: "local directory ignored", files: [[local, "directory"]] },
+  { name: "unreadable implicit search ignored", files: [[".local/opt/agy-acp", "plain"], [local, "executable"]] },
   { name: "no candidates", files: [] },
 ];
 
@@ -119,7 +119,7 @@ for (const row of connectionRows) {
     const result = resolveAcpConnectionOptions(row.executable);
 
     const root = override === "~/custom" ? path.join(home, "custom") : override || path.join(home, ".gemini");
-    assert.deepEqual(result, { executable: row.executable, cwd: path.join(root, "antigravity-acp") });
+    assert.deepEqual(result, { executable: row.executable, cwd: path.join(root, "antigravity-acp"), ...(process.platform === "linux" ? { args: ["--uid="] } : {}) });
     assert.notEqual(result.cwd, process.cwd());
     assert.ok(fs.statSync(result.cwd).isDirectory());
     assert.deepEqual(resolveAcpConnectionOptions(row.executable), result);

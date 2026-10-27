@@ -3,6 +3,7 @@ import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
+import type { AcpInstallProgress } from "./acp/installation.ts";
 
 export interface DriverAuthentication {
   label: string;
@@ -34,6 +35,7 @@ export interface BridgeDriver {
   readonly authentication: DriverAuthentication;
   readonly initialModels: readonly AnyModel[];
   readonly pluginError?: DriverFailure | undefined;
+  onInstallationProgress?: ((progress: AcpInstallProgress) => void) | undefined;
   validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void;
   /** Returns the runtime already owned by input.session, whether reused or newly installed. */
   prepareSession(input: PrepareDriverInput): Promise<{ proc: DriverSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }>;

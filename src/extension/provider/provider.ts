@@ -25,6 +25,8 @@ import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } fr
 import { autoConfigureAgyAuthentication } from "./startup-auth.ts";
 import { collectDoctorReport } from "./doctor.ts";
 import { formatAcpToolWarning } from "./tool-warning.ts";
+import { AcpInstallationProgress } from "./installation-progress.ts";
+import { resolveAcpRelease } from "../drivers/acp/release.ts";
 
 export function streamAgyProvider(
   model: Model<any>,
@@ -133,6 +135,7 @@ export class Bridge {
   private readonly pi: ExtensionAPI;
   private ui: ExtensionContext["ui"] | undefined;
   private readonly progress = new Map<symbol, { ui: ExtensionContext["ui"]; message: string }>();
+  private readonly installationProgress = new AcpInstallationProgress(() => this.ui);
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private discoveryError: DriverFailure | undefined;
@@ -151,6 +154,7 @@ export class Bridge {
   constructor(pi: ExtensionAPI, driver?: BridgeDriver) {
     this.pi = pi;
     this.driver = driver ?? createBridgeDriver("acp");
+    this.driver.onInstallationProgress = (progress) => this.installationProgress.update(progress);
     this.authentication = new AgyAuthentication(this.driver.authentication, async () => {
       this.runtimeLifetime.abort(new Error(`${this.driver.label} login changed the bridge session`));
       this.usageRefresh = undefined;
@@ -203,7 +207,8 @@ export class Bridge {
     if (this.driver.id === driverId) return;
 
     const driver = createBridgeDriver(driverId);
-    if (!driver.detectExecutable()) throw new Error(`${driver.label} executable not found`);
+    driver.onInstallationProgress = (progress) => this.installationProgress.update(progress);
+    if (driver.id === "cli" && !driver.detectExecutable()) throw new Error(`${driver.label} executable not found`);
     const lifetime = this.runtimeLifetime.signal;
     const models = await driver.discoverModels(lifetime);
     lifetime.throwIfAborted();
@@ -331,12 +336,20 @@ export class Bridge {
         if (!target) {
           const acpPath = createBridgeDriver("acp").detectExecutable();
           const cliPath = createBridgeDriver("cli").detectExecutable();
+          let acpStatus = acpPath ? `✓ Found (${acpPath})` : "Not installed — downloads automatically on first ACP use";
+          if (!acpPath) {
+            if (process.env.AGY_ACP_BIN?.trim()) acpStatus = "✗ Invalid AGY_ACP_BIN — fix its path/permissions or unset it";
+            else {
+              try { resolveAcpRelease(); }
+              catch (error) { acpStatus = error instanceof Error ? error.message : String(error); }
+            }
+          }
           const status = [
             `Current driver: **${this.driver.label}** (${this.driver.id})`,
             "Default: ACP. Driver changes are explicit; automatic fallback is disabled.",
             "",
             "Available drivers:",
-            `- **acp**: ${acpPath ? `✓ Found (${acpPath})` : "✗ Not found"}`,
+            `- **acp**: ${acpStatus}`,
             `- **cli**: ${cliPath ? `✓ Found (${cliPath})` : "✗ Not found"}`,
             "",
             "Usage: `/agy-bridge:driver cli` or `/agy-bridge:driver acp`",
@@ -416,6 +429,8 @@ export class Bridge {
       const activeProgress = [...this.progress.values()].at(-1);
       this.progress.clear();
       activeProgress?.ui.setStatus("agy-bridge", undefined);
+      this.installationProgress.clear();
+      this.driver.onInstallationProgress = undefined;
       this.ui = undefined;
       this.lifetime.abort(new Error("Antigravity bridge session ended"));
       this.authentication.close();

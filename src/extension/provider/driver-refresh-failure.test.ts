@@ -33,11 +33,9 @@ for (const scenario of [
       return catalog.map((model) => ({ ...model, agyDriver: "acp" as const }));
     });
     t.mock.method(AcpDriver.prototype, "usage", async () => undefined);
-    let detects = 0;
     t.mock.method(AcpDriver.prototype, "detectExecutable", () => {
-      detects++;
-      if (scenario.doctorFailure && detects > 1) throw new Error("synthetic diagnostics failure");
-      return detects === 1 ? "/mock/acp" : undefined;
+      if (scenario.doctorFailure) throw new Error("synthetic diagnostics failure");
+      return undefined;
     });
     bridge.start();
     const refresh = t.mock.fn(async (_options: unknown) => {

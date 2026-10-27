@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { AcpDriver } from "../drivers/acp/driver.ts";
+import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -51,7 +52,7 @@ for (const row of [
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}" ${row.scenario}\n`, { mode: 0o755 });
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+    useAcpExecutable(t, executable);
     const bridge = new Bridge(pi);
     const sessionManager = SessionManager.inMemory(tmpdir());
     const sessionId = bridge.piContextAdapter.bind(sessionManager);
@@ -94,7 +95,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+    useAcpExecutable(t, executable);
     assert.equal(new Bridge(pi).driver.id, "acp");
     assert.equal(new Bridge(pi, new CliDriver()).driver.id, "cli");
     const bridge = new Bridge(pi);
@@ -210,7 +211,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+    useAcpExecutable(t, executable);
   const bridge = new Bridge(pi);
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
   const session = bridge.liveSessions.getOrCreate(sessionId);
@@ -272,7 +273,7 @@ test("agy-bridge:driver command shows status and switches active driver", async 
   const setStatus = t.mock.fn();
   const ctx = { hasUI: true, ui: { setStatus }, modelRegistry: { refresh: async () => {} } } as unknown as ExtensionCommandContext;
   t.mock.method(CliDriver.prototype, "detectExecutable", () => process.execPath);
-  t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
+  useAcpExecutable(t, process.execPath);
   t.mock.method(CliDriver.prototype, "discoverModels", async () => []);
   t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
   bridge.start();

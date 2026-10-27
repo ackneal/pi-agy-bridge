@@ -1,6 +1,5 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { prepareDriverCwd } from "../cwd.ts";
 import { expandHome } from "../../shared/paths.ts";
@@ -29,28 +28,6 @@ export function detectAcpExecutable(customPath?: string): string | undefined {
     if (isExecutableFile(expanded)) return expanded;
   }
 
-  const optDir = path.join(os.homedir(), ".local", "opt", "agy-acp");
-  if (fs.existsSync(optDir)) {
-    try {
-      const entries = fs.readdirSync(optDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const par = path.join(optDir, entry.name, "agy_acp_server.par");
-          if (isExecutableFile(par)) return par;
-          const bin = path.join(optDir, entry.name, "agy_acp_server");
-          if (isExecutableFile(bin)) return bin;
-        } else if ((entry.name === "agy_acp_server.par" || entry.name === "agy_acp_server") && isExecutableFile(path.join(optDir, entry.name))) {
-          return path.join(optDir, entry.name);
-        }
-      }
-    } catch {
-      // Ignore filesystem inspection errors
-    }
-  }
-
-  const localBin = path.join(os.homedir(), ".local", "bin", "agy_acp_server");
-  if (isExecutableFile(localBin)) return localBin;
-
   return undefined;
 }
 
@@ -64,7 +41,7 @@ export function resolveAcpEffort(model: Model<any>, options: SimpleStreamOptions
 }
 
 export function resolveAcpConnectionOptions(executable?: string): AcpConnectionOptions {
-  if (!executable?.trim()) throw new Error("Antigravity ACP executable not found; please install agy-acp or set AGY_ACP_BIN");
+  if (!executable?.trim()) throw new Error("Antigravity ACP executable not found; retry ACP preparation or set AGY_ACP_BIN");
 
-  return { executable, cwd: prepareDriverCwd("acp") };
+  return { executable, cwd: prepareDriverCwd("acp"), ...(process.platform === "linux" ? { args: ["--uid="] } : {}) };
 }

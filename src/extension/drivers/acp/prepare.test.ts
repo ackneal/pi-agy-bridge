@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { prepareAcpRuntime } from "./prepare.ts";
 import { AcpDriver } from "./driver.ts";
+import { useAcpExecutable } from "./executable-fixture.ts";
 import { CliRuntimeSession } from "../cli/runtime.ts";
 import { LiveSession } from "../../session/session.ts";
 import { RuntimeSessionSync } from "../../session/state.ts";
@@ -24,7 +25,7 @@ test("ACP clears the previous driver once before checkpoint lookup", async (t) =
   live.setSession(previous, "previous-sync");
   const abort = t.mock.method(previous, "abort", async () => {});
   const driver = new AcpDriver();
-  t.mock.method(driver, "detectExecutable", () => process.execPath);
+  useAcpExecutable(t, process.execPath);
   const dispose = t.mock.method(live, "dispose", live.dispose.bind(live));
   const stopped = new Error("Stopped at checkpoint lookup");
   const get = t.mock.fn(async () => {

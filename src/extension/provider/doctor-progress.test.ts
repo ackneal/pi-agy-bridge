@@ -41,10 +41,7 @@ test("doctor command progress and reporting", async (t) => {
         await gate;
         return undefined;
       });
-      let detections = 0;
       const detect = t.mock.method(row.switch ? AcpDriver.prototype : bridge.driver, "detectExecutable", () => {
-        detections++;
-        if (row.switch && detections === 1) return "/unused/acp";
         if (row.failure) throw new Error("synthetic diagnostics failure");
         return undefined;
       });
@@ -60,7 +57,7 @@ test("doctor command progress and reporting", async (t) => {
         ? row.switch ? [["agy-bridge", "Switching to Antigravity ACP…"], ["agy-bridge", undefined], checking] : [checking]
         : []);
       assert.equal(usage.mock.callCount(), 1);
-      assert.equal(detect.mock.callCount(), row.switch ? 1 : 0);
+      assert.equal(detect.mock.callCount(), 0);
       assert.equal(sendMessage.mock.callCount(), 0);
       if (row.shutdown) await shutdown();
       release();
@@ -68,7 +65,7 @@ test("doctor command progress and reporting", async (t) => {
 
       assert.deepEqual(setStatus.mock.calls.at(-1)?.arguments, row.hasUI ? ["agy-bridge", undefined] : undefined);
       assert.equal(setStatus.mock.callCount(), row.hasUI ? row.switch ? 4 : 2 : 0);
-      assert.equal(detect.mock.callCount(), row.shutdown ? 0 : row.switch ? 2 : 1);
+      assert.equal(detect.mock.callCount(), row.shutdown ? 0 : 1);
       if (row.switch) assert.equal(bridge.driver.id, "acp");
       assert.equal(sendMessage.mock.callCount(), row.shutdown ? 0 : 1);
       if (!row.shutdown) {

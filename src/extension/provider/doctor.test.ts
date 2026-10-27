@@ -103,7 +103,8 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       { name: "missing version", output: "Python 3.13.2\n", runtime: "  ✓ Antigravity ACP" },
       { name: "empty version", output: "Build label:\n", runtime: "  ✓ Antigravity ACP" },
     ]) {
-      await fs.writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\n[ "$#" -eq 1 ] && [ "$1" = '--version' ] || exit 99\nprintf '%s' '${row.output}'\n`);
+      const expectedArgs = process.platform === "linux" ? "--uid= --version" : "--version";
+      await fs.writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\n[ "$*" = '${expectedArgs}' ] || exit 99\nprintf '%s' '${row.output}'\n`);
       await fs.writeFile(calls, "");
 
       const acpReport = await collectDoctorReport({
@@ -126,7 +127,7 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       assert.match(acpReport, /  ✓ Models: 2 configured\n  ! Auth: unauthenticated/, row.name);
       assert.match(acpReport, /\n\nQuota remaining \(unavailable\)\n\nErrors\n  ! discovery \(2026-01-02T00:00:00Z\): discovery failed\n  ! authentication \(2026-01-03T00:00:00Z\): login failed$/, row.name);
       assert.doesNotMatch(acpReport, /Antigravity CLI|Plugin|Gemini 4 Argon|Python/, row.name);
-      assert.equal(await fs.readFile(calls, "utf8"), "--version\n", row.name);
+      assert.equal(await fs.readFile(calls, "utf8"), `${expectedArgs}\n`, row.name);
       assert.equal(await fs.readFile(path.join(source, "plugin.json"), "utf8"), "{}");
       assert.equal(await fs.readFile(path.join(target, "plugin.json"), "utf8"), "{}");
     }

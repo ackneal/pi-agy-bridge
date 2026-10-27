@@ -1,5 +1,6 @@
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
+import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
@@ -9,14 +10,14 @@ import { AcpConnection } from "../drivers/acp/connection.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
 
-for (const failure of ["missing executable", "initialization", "session", "authentication"] as const) {
+for (const failure of ["installation", "initialization", "session", "authentication"] as const) {
   test(`default ACP never falls back to installed CLI after ${failure} failure`, async (t) => {
     let provider!: Provider;
     const bridge = new Bridge({
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
-    } as unknown as ExtensionAPI, new AcpDriver());
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => failure === "missing executable" ? undefined : process.execPath);
+    } as unknown as ExtensionAPI, new AcpDriver(async () => { throw new Error("synthetic installation failure"); }));
+    useAcpExecutable(t, failure === "installation" ? undefined : process.execPath);
     const start = t.mock.method(AcpConnection.prototype, "start", async () => {
       if (failure === "initialization") throw new Error("synthetic initialization failure");
       return { protocolVersion: acp.PROTOCOL_VERSION };
@@ -35,7 +36,7 @@ for (const failure of ["missing executable", "initialization", "session", "authe
     assert.equal(bridge.driver.id, "acp");
     assert.equal(provider.auth!.oauth!.name, "Antigravity ACP");
     assert.ok(provider.getModels().some((model) => model.id === "gemini-3.8-flash"));
-    assert.equal(start.mock.callCount(), failure === "missing executable" ? 0 : 1);
+    assert.equal(start.mock.callCount(), failure === "installation" ? 0 : 1);
   });
 }
 

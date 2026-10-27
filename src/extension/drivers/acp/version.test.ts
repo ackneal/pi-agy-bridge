@@ -8,12 +8,14 @@ import { readAcpVersion } from "./version.ts";
 type Case = {
   name: string;
   script?: string;
+  args?: string[];
   expected?: string;
   errorCode?: number | string;
 };
 
 const cases: Case[] = [
   { name: "reads the multiline Build label, not Python", script: "printf 'Python 3.13.2\\nBuild label: 1.4.1\\nOther: 2.0\\n'", expected: "1.4.1" },
+  { name: "preserves required Linux arguments", script: "printf 'Build label: 1.4.3\\n'", args: ["--uid="], expected: "1.4.3" },
   { name: "trims the label", script: "printf 'Build label:   1.4.1  \\n'", expected: "1.4.1" },
   { name: "does not guess from unrelated versions", script: "printf 'Python 3.13.2\\nVersion: 1.4.1\\n'" },
   { name: "rejects an empty label", script: "printf 'Build label:\\n'" },
@@ -32,13 +34,14 @@ for (const row of cases) {
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp server");
     if (row.script !== undefined) {
-      await writeFile(executable, `#!/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = "--version" ] || exit 64\n${row.script}\n`, { mode: 0o700 });
+      const expectedArgs = [...(row.args ?? []), "--version"].join(" ");
+      await writeFile(executable, `#!/bin/sh\n[ "$*" = '${expectedArgs}' ] || exit 64\n${row.script}\n`, { mode: 0o700 });
     }
 
     if (row.errorCode !== undefined) {
-      await assert.rejects(readAcpVersion(executable), { code: row.errorCode });
+      await assert.rejects(readAcpVersion(executable, row.args ?? []), { code: row.errorCode });
     } else {
-      assert.equal(await readAcpVersion(executable), row.expected);
+      assert.equal(await readAcpVersion(executable, row.args ?? []), row.expected);
     }
   });
 }
