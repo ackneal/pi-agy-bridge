@@ -132,6 +132,7 @@ export function streamAgyProvider(
 export class Bridge {
   private readonly pi: ExtensionAPI;
   private ui: ExtensionContext["ui"] | undefined;
+  private readonly progress = new Map<symbol, string>();
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private discoveryError: DriverFailure | undefined;
@@ -197,7 +198,7 @@ export class Bridge {
     return task;
   }
 
-  public async switchDriver(driverId: DriverId, modelRegistry?: ExtensionContext["modelRegistry"]): Promise<void> {
+  public async switchDriver(driverId: DriverId, modelRegistry?: ExtensionContext["modelRegistry"]): Promise<string | undefined> {
     this.lifetime.signal.throwIfAborted();
     if (this.driver.id === driverId) return;
 
@@ -221,9 +222,13 @@ export class Bridge {
     this.usageError = undefined;
 
     this.registerProvider(models);
-    await modelRegistry?.refresh({ providers: ["agy"], allowNetwork: false });
+    debugLog("provider", `Switched bridge driver to: ${driver.label} (${driverId})`);
 
-    debugLog("provider", `Switched bridge driver to: ${this.driver.label} (${driverId})`);
+    try {
+      await modelRegistry?.refresh({ providers: ["agy"], allowNetwork: false });
+    } catch (error) {
+      return `Switched to ${driver.label}, but Pi model registry refresh failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
   }
 
   public warnTool(name: string, args: unknown): void {
@@ -249,9 +254,23 @@ export class Bridge {
     return this.pi.getAllTools().filter((tool) => activeTools.has(tool.name) && tool.exposure !== "hidden");
   }
 
-  private async showDoctor(ctx?: ExtensionContext): Promise<void> {
+  private showProgress(ctx: ExtensionContext | undefined, message: string): () => void {
+    if (!ctx?.hasUI) return () => {};
+
+    const id = Symbol();
+    this.progress.set(id, message);
+    ctx.ui.setStatus("agy-bridge", message);
+    return () => {
+      const current = [...this.progress.keys()].at(-1) === id;
+      this.progress.delete(id);
+      if (current) ctx.ui.setStatus("agy-bridge", [...this.progress.values()].at(-1));
+    };
+  }
+
+  private async showDoctor(ctx?: ExtensionContext, warning?: string): Promise<void> {
     const lifetime = this.runtimeLifetime.signal;
-    if (ctx?.hasUI) ctx.ui.setStatus("agy-bridge", `Checking ${this.driver.label} diagnostics…`);
+    const finishProgress = this.showProgress(ctx, `Checking ${this.driver.label} diagnostics…`);
+    const suffix = warning ? `\n\nWarning\n  ! ${warning}` : "";
     try {
       const usage = await this.refreshUsage(lifetime);
       if (lifetime.aborted) return;
@@ -271,18 +290,18 @@ export class Bridge {
 
       this.pi.sendMessage({
         customType: "pi-agy-bridge:doctor",
-        content: report,
+        content: report + suffix,
         display: true,
       }, { triggerTurn: false });
     } catch (error) {
       if (lifetime.aborted) return;
       this.pi.sendMessage({
         customType: "pi-agy-bridge:doctor",
-        content: `Failed to collect diagnostics: ${error instanceof Error ? error.message : String(error)}`,
+        content: `Failed to collect diagnostics: ${error instanceof Error ? error.message : String(error)}${suffix}`,
         display: true,
       }, { triggerTurn: false });
     } finally {
-      if (ctx?.hasUI) ctx.ui.setStatus("agy-bridge", undefined);
+      finishProgress();
     }
   }
 
@@ -347,9 +366,10 @@ export class Bridge {
         }
 
         const label = target === "cli" ? "Antigravity CLI" : "Antigravity ACP";
-        if (ctx?.hasUI) ctx.ui.setStatus("agy-bridge", `Switching to ${label}…`);
+        const finishProgress = this.showProgress(ctx, `Switching to ${label}…`);
+        let warning: string | undefined;
         try {
-          await this.switchDriver(target, ctx?.modelRegistry);
+          warning = await this.switchDriver(target, ctx?.modelRegistry);
         } catch (error) {
           this.pi.sendMessage({
             customType: "pi-agy-bridge:driver",
@@ -358,9 +378,9 @@ export class Bridge {
           }, { triggerTurn: false });
           return;
         } finally {
-          if (ctx?.hasUI) ctx.ui.setStatus("agy-bridge", undefined);
+          finishProgress();
         }
-        await this.showDoctor(ctx);
+        await this.showDoctor(ctx, warning);
       },
     });
 
