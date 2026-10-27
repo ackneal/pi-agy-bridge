@@ -249,39 +249,63 @@ export class Bridge {
     return this.pi.getAllTools().filter((tool) => activeTools.has(tool.name) && tool.exposure !== "hidden");
   }
 
+  private async showDoctor(ctx?: ExtensionContext): Promise<void> {
+    const lifetime = this.runtimeLifetime.signal;
+    if (ctx?.hasUI) ctx.ui.setStatus("agy-bridge", `Checking ${this.driver.label} diagnostics…`);
+    try {
+      const usage = await this.refreshUsage(lifetime);
+      if (lifetime.aborted) return;
+
+      const report = await collectDoctorReport({
+        driver: this.driver.id,
+        executable: this.driver.detectExecutable(),
+        pluginError: this.driver.pluginError,
+        catalogModels: this.models,
+        discoveryError: this.discoveryError,
+        authStatus: this.authentication.status,
+        authError: this.authentication.failure,
+        usage,
+        usageError: this.usageError,
+      });
+      if (lifetime.aborted) return;
+
+      this.pi.sendMessage({
+        customType: "pi-agy-bridge:doctor",
+        content: report,
+        display: true,
+      }, { triggerTurn: false });
+    } catch (error) {
+      if (lifetime.aborted) return;
+      this.pi.sendMessage({
+        customType: "pi-agy-bridge:doctor",
+        content: `Failed to collect diagnostics: ${error instanceof Error ? error.message : String(error)}`,
+        display: true,
+      }, { triggerTurn: false });
+    } finally {
+      if (ctx?.hasUI) ctx.ui.setStatus("agy-bridge", undefined);
+    }
+  }
+
   public start(): void {
     this.pi.registerCommand("agy-bridge:doctor", {
       description: "Check the selected Antigravity driver, models, tools, authentication, and quota",
-      handler: async () => {
-        const lifetime = this.runtimeLifetime.signal;
-        const usage = await this.refreshUsage(lifetime);
-        if (lifetime.aborted) return;
-
-        const report = await collectDoctorReport({
-          driver: this.driver.id,
-          executable: this.driver.detectExecutable(),
-          pluginError: this.driver.pluginError,
-          catalogModels: this.models,
-          discoveryError: this.discoveryError,
-          authStatus: this.authentication.status,
-          authError: this.authentication.failure,
-          usage,
-          usageError: this.usageError,
-        });
-        if (lifetime.aborted) return;
-
-        this.pi.sendMessage({
-          customType: "pi-agy-bridge:doctor",
-          content: report,
-          display: true,
-        }, { triggerTurn: false });
-      },
+      handler: async (_args, ctx) => this.showDoctor(ctx),
     });
 
     this.pi.registerCommand("agy-bridge:driver", {
-      description: "Show or switch the Antigravity driver (/agy-bridge:driver [cli|acp])",
+      description: "Select or switch the Antigravity driver (/agy-bridge:driver [cli|acp])",
       handler: async (args, ctx) => {
-        const target = args?.trim().toLowerCase();
+        let target = args?.trim().toLowerCase();
+        if (!target && ctx?.hasUI) {
+          const drivers = ["acp", "cli"] as const;
+          const labels = drivers.map((id) => `${id.toUpperCase()}${id === this.driver.id ? " (current)" : ""}`);
+          const selected = await ctx.ui.select("Select Antigravity driver", labels);
+          if (selected === undefined) return;
+          const driver = drivers[labels.indexOf(selected)];
+          if (!driver) return;
+          target = driver;
+        }
+
         if (!target) {
           const acpPath = createBridgeDriver("acp").detectExecutable();
           const cliPath = createBridgeDriver("cli").detectExecutable();
@@ -322,20 +346,21 @@ export class Bridge {
           return;
         }
 
+        const label = target === "cli" ? "Antigravity CLI" : "Antigravity ACP";
+        if (ctx?.hasUI) ctx.ui.setStatus("agy-bridge", `Switching to ${label}…`);
         try {
           await this.switchDriver(target, ctx?.modelRegistry);
-          this.pi.sendMessage({
-            customType: "pi-agy-bridge:driver",
-            content: `Successfully switched driver to **${this.driver.label}** (${target}).`,
-            display: true,
-          }, { triggerTurn: false });
         } catch (error) {
           this.pi.sendMessage({
             customType: "pi-agy-bridge:driver",
             content: `Failed to switch driver: ${error instanceof Error ? error.message : String(error)}`,
             display: true,
           }, { triggerTurn: false });
+          return;
+        } finally {
+          if (ctx?.hasUI) ctx.ui.setStatus("agy-bridge", undefined);
         }
+        await this.showDoctor(ctx);
       },
     });
 

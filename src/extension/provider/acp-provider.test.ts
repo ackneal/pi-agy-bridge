@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test, { afterEach, beforeEach } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
-import { SessionManager, type ExtensionAPI, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
@@ -250,12 +250,12 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
 });
 
 test("agy-bridge:driver command shows status and switches active driver", async (t) => {
-  const registeredCommands = new Map<string, (args?: string) => Promise<void>>();
+  const registeredCommands = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void>>();
   const sentMessages: { customType?: string; content: string }[] = [];
   const pi = {
     getActiveTools: () => [],
     getAllTools: () => [],
-    registerCommand: (name: string, options: { description: string; handler: (args?: string) => Promise<void> }) => {
+    registerCommand: (name: string, options: { description: string; handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) => {
       registeredCommands.set(name, options.handler);
     },
     registerProvider: () => {},
@@ -266,6 +266,11 @@ test("agy-bridge:driver command shows status and switches active driver", async 
   } as unknown as ExtensionAPI;
 
   const bridge = new Bridge(pi);
+  t.after(() => bridge.liveSessions.disposeAll());
+  t.mock.method(CliDriver.prototype, "usage", async () => undefined);
+  t.mock.method(AcpDriver.prototype, "usage", async () => undefined);
+  const setStatus = t.mock.fn();
+  const ctx = { hasUI: true, ui: { setStatus }, modelRegistry: { refresh: async () => {} } } as unknown as ExtensionCommandContext;
   t.mock.method(CliDriver.prototype, "detectExecutable", () => process.execPath);
   t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
   t.mock.method(CliDriver.prototype, "discoverModels", async () => []);
@@ -276,32 +281,48 @@ test("agy-bridge:driver command shows status and switches active driver", async 
   assert.ok(handler);
 
   // 1. Status query
-  await handler();
+  await handler("", { ...ctx, hasUI: false });
   assert.equal(sentMessages.length, 1);
   assert.equal(sentMessages[0]?.customType, "pi-agy-bridge:driver");
   assert.match(sentMessages[0]!.content, /Current driver: \*\*Antigravity ACP\*\* \(acp\)/);
   assert.match(sentMessages[0]!.content, /Available drivers:/);
 
   // 2. Unknown driver
-  await handler("invalid-driver");
+  await handler("invalid-driver", ctx);
   assert.equal(sentMessages.length, 2);
   assert.match(sentMessages[1]!.content, /Unknown driver "invalid-driver"/);
 
   // 3. Already active
-  await handler("acp");
+  await handler("acp", ctx);
   assert.equal(sentMessages.length, 3);
   assert.match(sentMessages[2]!.content, /Already using driver/);
 
+  assert.equal(setStatus.mock.callCount(), 0);
+
   // 4. Switch to CLI
-  await handler("cli");
+  await handler("cli", ctx);
   assert.equal(sentMessages.length, 4);
-  assert.match(sentMessages[3]!.content, /Successfully switched driver to \*\*Antigravity CLI\*\* \(cli\)/);
+  assert.match(sentMessages[3]!.content, /Antigravity CLI/);
   assert.equal(bridge.driver.id, "cli");
 
   // 5. Switch back to ACP
-  await handler("acp");
+  await handler("acp", ctx);
   assert.equal(sentMessages.length, 5);
-  assert.match(sentMessages[4]!.content, /Successfully switched driver to \*\*Antigravity ACP\*\* \(acp\)/);
+  assert.match(sentMessages[4]!.content, /Antigravity ACP/);
   assert.equal(bridge.driver.id, "acp");
+  for (const index of [3, 4]) {
+    assert.equal(sentMessages[index]?.customType, "pi-agy-bridge:doctor");
+    assert.match(sentMessages[index]!.content, /^agy-bridge doctor\n/);
+  }
+  assert.deepEqual(setStatus.mock.calls.map(call => call.arguments), [
+    ["agy-bridge", "Switching to Antigravity CLI…"],
+    ["agy-bridge", undefined],
+    ["agy-bridge", "Checking Antigravity CLI diagnostics…"],
+    ["agy-bridge", undefined],
+    ["agy-bridge", "Switching to Antigravity ACP…"],
+    ["agy-bridge", undefined],
+    ["agy-bridge", "Checking Antigravity ACP diagnostics…"],
+    ["agy-bridge", undefined],
+  ]);
 });
 

@@ -65,7 +65,7 @@ To keep using CLI after upgrading, explicitly switch in Pi:
 /agy-bridge:driver acp
 ```
 
-Run `/agy-bridge:driver` without arguments for status. A switch applies to the current bridge instance only and is not automatically saved across restart.
+Run `/agy-bridge:driver` without arguments to open Pi's driver selection menu, with the current driver marked. Cancel to keep the current driver. Without UI, the command shows status instead. Explicit `cli` or `acp` arguments switch directly. Switching shows progress in Pi's footer and returns a single doctor report after success, without a separate switch confirmation. A switch applies to the current bridge instance only and is not automatically saved across restart.
 
 Each driver locates its own executable and handles startup. Set `AGY_ACP_BIN` to override ACP executable discovery. Both drivers use `${GEMINI_HOME:-~/.gemini}` as the base directory. Native sessions run in its `antigravity-cli/` or `antigravity-acp/` subdirectory, creating it if needed. Project file access goes through Pi MCP tools, not the native working directory.
 
@@ -109,7 +109,7 @@ If a runtime or tool failure makes the conversation unsafe to reuse, the next re
 
 ## Troubleshooting
 
-Run `/agy-bridge:doctor` in Pi for a shared report of the selected backend's version, Node, Pi MCP bridge entrypoint, models, and authentication. Version checks use `--version`; ACP omits the version if no build label is reported. CLI also reports plugin status and queries quota on demand; a successful query confirms authentication. ACP displays `Quota remaining (unavailable)`.
+Run `/agy-bridge:doctor` in Pi for a shared report of the selected backend's version, Node, Pi MCP bridge entrypoint, models, and authentication. Pi's footer shows diagnostic progress and clears when the command finishes. Version checks use `--version`; ACP omits the version if no build label is reported. CLI also reports plugin status and queries quota on demand; a successful query confirms authentication. ACP displays `Quota remaining (unavailable)`.
 
 - **ACP unavailable**: Check `AGY_ACP_BIN` and executable permissions. Missing/non-executable ACP or startup, authentication, and network failures never choose CLI. Fix ACP or explicitly run `/agy-bridge:driver cli`.
 - **Unauthenticated models**: Default ACP model entries or cached models may appear before login; their presence does not confirm authentication, connectivity, or request success. Run `/login` for the selected backend.
