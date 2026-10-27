@@ -1,4 +1,5 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   AnyModel,
@@ -13,6 +14,7 @@ import { PiRuntimeOutput } from "./output.ts";
 import { restoreStoredAgyModels } from "../discovery/models.ts";
 import { Turn } from "./turn.ts";
 import {
+  LiveSession,
   LiveSessionRegistry,
   PiContextAdapter,
 } from "../session/session.ts";
@@ -34,7 +36,12 @@ export function streamAgyProvider(
 ): AssistantMessageEventStream {
   debugArtifact("provider-context", { model: model.id, sessionId: options?.sessionId, context });
   const contextTools = context.tools ?? [];
-  const tools = bridge.getTools(context);
+  // Summary routing IDs are not Pi session identities. Keep these requests
+  // isolated from the conversation and its executable tools.
+  const piSessionId = options?.sessionId;
+  const standalone = !piSessionId || (options?.cacheRetention === "none" &&
+    !bridge.piContextAdapter.getSessionManager(piSessionId));
+  const tools = standalone ? [] : bridge.getTools(context);
   debugLog("mcp", "Pi provider context keys:", Object.keys(context));
   debugLog("mcp", "Pi provider context tools:", contextTools.map((tool) => tool.name));
   debugLog("mcp", "Pi bridge tools:", tools.map((tool) => tool.name));
@@ -51,12 +58,6 @@ export function streamAgyProvider(
     return stream;
   }
 
-  const piSessionId = options?.sessionId;
-  if (!piSessionId) {
-    adapter.handleTermination("error", `Pi did not provide a sessionId for the ${bridge.driver.label} runtime`);
-    return stream;
-  }
-
   try {
     bridge.driver.validateSelection(model, options);
   } catch (error) {
@@ -64,7 +65,9 @@ export function streamAgyProvider(
     return stream;
   }
 
-  const liveSession = bridge.liveSessions.getOrCreate(piSessionId);
+  const liveSession = standalone
+    ? new LiveSession(piSessionId ?? randomUUID())
+    : bridge.liveSessions.getOrCreate(piSessionId!);
   const preparationId = liveSession.beginPreparation();
   const turn = new Turn({
     session: liveSession,
@@ -76,6 +79,7 @@ export function streamAgyProvider(
     signal: options?.signal,
     loginEpoch: options?.env?.AGY_BRIDGE_LOGIN_EPOCH,
     sessionVersion: bridge.driver.sessionVersion,
+    persistent: !standalone,
     onWarning: (name, args) => bridge.warnTool(name, args),
   });
 
@@ -121,6 +125,14 @@ export function streamAgyProvider(
       await turn.send({ model, context, options, reconstructContext: runtime.reconstructContext, syncedMessageCount });
     } catch (error) {
       turn.fail(error);
+    } finally {
+      if (standalone) {
+        try {
+          await stream.result();
+        } finally {
+          await liveSession.dispose();
+        }
+      }
     }
   })().catch((error) => {
     debugLog("session", `${bridge.driver.label} turn cleanup failed:`, error);
