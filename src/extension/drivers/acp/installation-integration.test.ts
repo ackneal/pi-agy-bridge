@@ -30,12 +30,12 @@ async function isolate(t: TestContext): Promise<string> {
   return home;
 }
 
-function preparation(signal: AbortSignal, checkpoint: Error): PrepareDriverInput {
+function preparation(signal: AbortSignal, checkpoint?: Error): PrepareDriverInput {
   const session = new LiveSession("resolver-test");
   return {
     model: { id: "raw" } as Model<any>, context: { messages: [] }, tools: [], options: { signal }, session,
     preparationId: session.beginPreparation(), sync: new RuntimeSessionSync(),
-    store: { get: async () => { throw checkpoint; }, delete: async () => {} },
+    store: { get: async () => { if (checkpoint) throw checkpoint; return undefined; }, delete: async () => {} },
   };
 }
 
@@ -61,7 +61,7 @@ for (const entry of ["probe", "login", "models", "prepare"] as const) {
     const attempt = entry === "probe" ? driver.authentication.probe(signal, () => {}) :
       entry === "login" ? driver.authentication.login({ signal, notify: (value) => { if (value.type === "progress") loginProgress.push(value.message); },
         prompt: async () => { throw new Error("Unexpected authentication prompt"); } }, () => {}) :
-      entry === "models" ? driver.discoverModels(signal) : driver.prepareSession(preparation(signal, new Error("Unexpected checkpoint read")));
+      entry === "models" ? driver.discoverModels(signal) : driver.prepareSession(preparation(signal));
     await assert.rejects(attempt, (error) => error === failure);
     assert.equal(resolutions, 1);
     assert.deepEqual(progress, [event]);
@@ -84,15 +84,17 @@ for (const kind of ["missing", "directory", "non-executable"] as const) {
   });
 }
 
-test("explicit executable bypasses installation and reaches session preparation", async (t) => {
+test("explicit executable bypasses installation before opening a connection", async (t) => {
   const home = await isolate(t);
   process.env.AGY_ACP_BIN = path.join(home, "custom");
   await writeFile(process.env.AGY_ACP_BIN, "not a real ACP server", { mode: 0o700 });
   let resolutions = 0;
   const driver = new AcpDriver(async () => { resolutions++; throw new Error("Unexpected managed download"); });
-  const checkpoint = new Error("Reached checkpoint after resolving override");
-  await assert.rejects(driver.prepareSession(preparation(new AbortController().signal, checkpoint)), (error) => error === checkpoint);
+  const stopped = new Error("Reached explicit ACP connection");
+  const start = t.mock.method(AcpConnection.prototype, "start", async () => { throw stopped; });
+  await assert.rejects(driver.discoverModels(new AbortController().signal), (error) => error === stopped);
   assert.equal(resolutions, 0);
+  assert.equal(start.mock.callCount(), 1);
 });
 
 for (const kind of ["aborted", "superseded"] as const) {

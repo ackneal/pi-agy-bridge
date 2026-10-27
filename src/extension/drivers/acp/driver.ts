@@ -2,6 +2,7 @@ import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { AgyUsage } from "../../runtime/usage.ts";
 import type { BridgeDriver, DriverAuthentication, PrepareDriverInput } from "../types.ts";
 import { defaultModelCatalog } from "../../discovery/model-metadata.ts";
+import { prepareDriverCwd } from "../cwd.ts";
 import { createAcpAuthenticationBackend } from "./auth.ts";
 import { discoverAcpModels } from "./discovery.ts";
 import { detectAcpExecutable, resolveAcpConnectionOptions, resolveAcpEffort } from "./options.ts";
@@ -66,7 +67,10 @@ export class AcpDriver implements BridgeDriver {
   async prepareSession(input: PrepareDriverInput) {
     input.options?.signal?.throwIfAborted();
     if (!input.session.ownsPreparation(input.preparationId)) throw new Error("ACP preparation superseded");
-    const connection = await this.connectionOptions(input.options?.signal);
+    const connection = {
+      cwd: prepareDriverCwd("acp"),
+      resolve: () => this.connectionOptions(input.options?.signal),
+    };
     const dependencies = { store: input.store, sync: input.sync, sessionVersion: this.sessionVersion };
     return prepareAcpRuntime(input.model, input.context, input.tools, input.options, connection, dependencies, input.session, input.preparationId);
   }

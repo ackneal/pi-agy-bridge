@@ -13,7 +13,7 @@ class AcpPreparationCleanupError extends AggregateError {}
 
 export async function prepareAcpRuntime(
   model: Model<any>, context: Context, tools: readonly Tool[], options: SimpleStreamOptions | undefined,
-  connection: AcpConnectionOptions,
+  connection: { cwd: string; resolve: () => Promise<AcpConnectionOptions> },
   dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide">; sessionVersion: string },
   liveSession: LiveSession, preparationId: symbol,
 ): Promise<{ proc: AcpRuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
@@ -26,7 +26,10 @@ export async function prepareAcpRuntime(
   const systemPrompt = composeAcpSystemPrompt(context);
   const compatibilityKey = fingerprintAcpSystemPrompt(JSON.stringify([connection.cwd, systemPrompt]));
   const syncKey = calculateSyncKey(systemPrompt, tools.map((tool) => JSON.stringify(tool)), model.id, requested, "acp");
+  let resolvedConnection: AcpConnectionOptions | undefined;
   if (liveSession.driverId !== undefined && liveSession.driverId !== "acp") {
+    resolvedConnection = await connection.resolve();
+    check();
     await liveSession.dispose({ preparationId });
     check();
   }
@@ -43,6 +46,9 @@ export async function prepareAcpRuntime(
     const matches = proc.options.model === model.id && proc.options.effort === requested;
     return { proc, mcpServer: liveSession.activeMcpServer, reconstructContext: false, modelId: matches ? model.id : latest?.model ?? proc.options.model };
   }
+  resolvedConnection ??= await connection.resolve();
+  check();
+
   await liveSession.dispose({ preparationId, preserveConversation: decision.action === "resume", preserveResources: decision.action === "resume" && decision.conversationId === liveSession.conversationId });
   check();
 
@@ -59,7 +65,8 @@ export async function prepareAcpRuntime(
       await bridge.start();
       check();
       proc = new AcpRuntimeSession({
-        ...connection,
+        ...resolvedConnection,
+        cwd: connection.cwd,
         mcp: createMcpLaunchDescriptor(bridge.bridgeUri),
         model: model.id,
         ...(requested ? { effort: requested } : {}),

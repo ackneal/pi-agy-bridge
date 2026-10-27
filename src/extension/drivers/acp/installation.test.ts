@@ -140,6 +140,27 @@ for (const scenario of ["checksum mismatch", "invalid ZIP", "missing required fi
   });
 }
 
+test("publication corruption is rejected and repaired on the next call", async (t) => {
+  const f = await fixture(t);
+  const originalRename = fs.rename;
+  let mutated = false;
+  fs.rename = async (source, destination) => {
+    await originalRename(source, destination);
+    if (!mutated && path.basename(String(source)) === "distribution") {
+      mutated = true;
+      await fs.writeFile(path.join(String(destination), "agy_acp_server.par"), "corrupted after publication");
+    }
+  };
+  try {
+    await assert.rejects(ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher }), /integrity validation/);
+  } finally {
+    fs.rename = originalRename;
+  }
+  const repaired = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
+  assert.equal(await fs.readFile(repaired.executable, "utf8"), contents[0]!.data);
+  assert.equal(f.downloads(), 2);
+});
+
 test("same-process ACP consumers share progress and cancellation does not cancel another consumer", async (t) => {
   const f = await fixture(t);
   const cancelled = new AbortController();

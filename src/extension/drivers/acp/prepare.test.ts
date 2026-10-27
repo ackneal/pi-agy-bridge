@@ -51,7 +51,7 @@ test("superseded ACP preparation stops before checkpoint or resource acquisition
   const stale = live.beginPreparation();
   live.beginPreparation();
   let reads = 0;
-  await assert.rejects(prepareAcpRuntime({ id: "raw" } as Parameters<typeof prepareAcpRuntime>[0], { messages: [] }, [], undefined, { cwd: process.cwd(), executable: process.execPath }, {
+  await assert.rejects(prepareAcpRuntime({ id: "raw" } as Parameters<typeof prepareAcpRuntime>[0], { messages: [] }, [], undefined, { cwd: process.cwd(), resolve: async () => { throw new Error("Superseded preparation must not resolve installation"); } }, {
     store: { get: async () => { reads++; return undefined; }, delete: async () => {} }, sync: new RuntimeSessionSync(), sessionVersion: "acp:v1",
   }, live, stale), /superseded/);
   assert.equal(reads, 0);

@@ -316,8 +316,10 @@ async function install(options: InstallationOptions, signal: AbortSignal, emit: 
     signal.throwIfAborted();
 
     await publishDistribution(distribution, directory, manifest, release, signal, onValidate);
-    const snapshot = await inventory(directory, signal, false);
-    validated.set(directory, snapshot.stamp);
+    validated.delete(directory);
+    if (!await validateInstallation(directory, release, signal, onValidate)) {
+      throw new Error(`Published ACP installation failed integrity validation: ${directory}`);
+    }
     progress("complete", `Antigravity ACP ${release.version} is ready`);
     return { executable: path.join(directory, release.executable), args: [...release.args] };
   } catch (error) {
