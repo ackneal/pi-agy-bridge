@@ -64,6 +64,11 @@ export class AcpMcpPermissions {
   }
 
   private merge(prior: ToolCallUpdate | undefined, update: ToolCallUpdate): ToolCallUpdate | null {
+    // ACP defines a null name as unchanged, including in permission requests.
+    if (update.name === null) {
+      const { name: _name, ...rest } = update;
+      update = rest;
+    }
     if (update.status === "completed" || update.status === "failed") return null;
     if (update.kind !== undefined && update.kind !== "other") return null;
     for (const key of ["title", "rawInput", "name"] as const) {

@@ -65,7 +65,7 @@ To keep using CLI after upgrading, explicitly switch in Pi:
 /agy-bridge:driver acp
 ```
 
-Run `/agy-bridge:driver` without arguments for status. A switch applies to the current bridge instance only and is not automatically saved across restart.
+Run `/agy-bridge:driver` without arguments to open Pi's driver selection menu, with the current driver marked. Cancel to keep the current driver. Without UI, the command shows status instead. Explicit `cli` or `acp` arguments switch directly. Switching shows progress in Pi's footer and returns a single doctor report after success, without a separate switch confirmation. If Pi's model registry refresh fails after switching, the report includes a warning; the new driver remains selected. A switch applies to the current bridge instance only and is not automatically saved across restart.
 
 Each driver locates its own executable and handles startup. Set `AGY_ACP_BIN` to override ACP executable discovery. Both drivers use `${GEMINI_HOME:-~/.gemini}` as the base directory. Native sessions run in its `antigravity-cli/` or `antigravity-acp/` subdirectory, creating it if needed. Project file access goes through Pi MCP tools, not the native working directory.
 
@@ -80,6 +80,8 @@ The bridge exposes Pi's current tools through a local MCP server. Requests trave
 Pi also manages custom tools and skills. Pi tool calls execute through the MCP bridge.
 
 The ACP driver requests `enabledTools: []`, denies non-MCP permission requests, and exposes no client write or terminal capability. Unverified ACP tool notifications produce a warning in Pi without stopping the conversation. The warning does not grant permissions or mean execution was prevented. These are configuration and protocol checks, not a sandbox around AGY. Backend enforcement of native-tool filtering and system-instruction delivery still needs real-backend validation.
+
+ACP notifications are observational, not execution or authorization evidence. A notification titled `Running client_view_file` with kind `read` and no MCP identity is classified as Client Read without requiring a matching RPC, so it does not produce a tool warning. This does not prove that a read occurred, succeeded, or was authorized. Every actual Client Read request still passes through the restricted Artifact Reader; a rejected read does not by itself require a tool warning.
 
 ### Sessions and Context
 
@@ -109,7 +111,7 @@ If a runtime or tool failure makes the conversation unsafe to reuse, the next re
 
 ## Troubleshooting
 
-Run `/agy-bridge:doctor` in Pi for a shared report of the selected backend's version, Node, Pi MCP bridge entrypoint, models, and authentication. Version checks use `--version`; ACP omits the version if no build label is reported. CLI also reports plugin status and queries quota on demand; a successful query confirms authentication. ACP displays `Quota remaining (unavailable)`.
+Run `/agy-bridge:doctor` in Pi for a shared report of the selected backend's version, Node, Pi MCP bridge entrypoint, models, and authentication. Pi's footer shows the latest active command's progress. When that command finishes, it restores any earlier pending operation's status or clears the status if none remain. Version checks use `--version`; ACP omits the version if no build label is reported. CLI also reports plugin status and queries quota on demand; a successful query confirms authentication. ACP displays `Quota remaining (unavailable)`.
 
 - **ACP unavailable**: Check `AGY_ACP_BIN` and executable permissions. Missing/non-executable ACP or startup, authentication, and network failures never choose CLI. Fix ACP or explicitly run `/agy-bridge:driver cli`.
 - **Unauthenticated models**: Default ACP model entries or cached models may appear before login; their presence does not confirm authentication, connectivity, or request success. Run `/login` for the selected backend.

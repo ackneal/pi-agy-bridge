@@ -20,6 +20,17 @@ type Case = { name: string; arrange?: (gate: AcpMcpPermissions) => void; request
 const cases: Case[] = [
   { name: "arbitrary declared MCP args", allowed: true },
   { name: "undefined kind", request: request({ toolCall: { toolCallId: "id", rawInput: call().rawInput } }), allowed: true },
+  { name: "null update name preserves identity", arrange: (g) => {
+    observe(g, call({ name: "custom" }));
+    observe(g, { toolCallId: "id", name: null });
+  }, request: request({ toolCall: call({ name: "custom" }) }), allowed: true },
+  { name: "null request name preserves identity", arrange: (g) => observe(g, call({ name: "custom" })),
+    request: request({ toolCall: call({ name: null }) }), allowed: true },
+  { name: "changed non-null name revokes permanently", arrange: (g) => {
+    observe(g, call({ name: "custom" }));
+    observe(g, { toolCallId: "id", name: "other" });
+    observe(g, call({ name: "custom" }));
+  }, request: request({ toolCall: call({ name: "custom" }) }) },
   { name: "no announcement", arrange: () => {} },
   { name: "cross session request", request: request({ sessionId: "foreign" }) },
   { name: "cross session announcement", arrange: (g) => observe(g, call(), "foreign") },

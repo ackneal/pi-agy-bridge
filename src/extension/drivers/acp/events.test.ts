@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionNotification, SessionUpdate, StopReason } from "@agentclientprotocol/sdk";
 import type { RuntimeEvent } from "../types.ts";
-import { AcpEventTranslator } from "./events.ts";
+import { EventProcessor } from "./events.ts";
 
 const textUpdate: SessionUpdate = { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } };
 
@@ -11,13 +11,13 @@ for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
     for (const scope of ["live", "replay", "foreign"] as const) {
       test(`native notification without permission: ${sessionUpdate} ${kind} ${scope}`, () => {
         const facts: RuntimeEvent[] = [];
-        const translator = new AcpEventTranslator("session");
-        translator.translate({
+        const processor = new EventProcessor("session");
+        processor.process({
           sessionId: scope === "foreign" ? "other" : "session",
           update: { sessionUpdate, toolCallId: "call", title: "display only", kind, status: "pending" },
         }, scope === "replay" ? "replay" : "live", (fact) => facts.push(fact));
         assert.equal(facts.length, 0, "partial announcements must have a chance to supply identity");
-        if (scope === "live") translator.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
+        if (scope === "live") processor.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
         assert.deepEqual(facts, scope === "live" ? [{ type: "tool-warning", name: "display only", args: undefined }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }] : []);
       });
     }
@@ -34,7 +34,7 @@ for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
     test(`non-authoritative announcement unchanged: ${sessionUpdate} ${row.name}`, () => {
       const { name: _name, ...call } = row;
       const facts: RuntimeEvent[] = [];
-      new AcpEventTranslator("session", new Set(["edit"])).translate({
+      new EventProcessor("session", new Set(["edit"])).process({
         sessionId: "session", update: sessionUpdate === "tool_call"
           ? { sessionUpdate, toolCallId: "call", status: "pending", ...call }
           : { sessionUpdate, toolCallId: "call", status: "pending", ...call },
@@ -46,11 +46,11 @@ for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
 
 test("native update without title uses kind for display", () => {
   const facts: RuntimeEvent[] = [];
-  const translator = new AcpEventTranslator("session");
-  translator.translate({
+  const processor = new EventProcessor("session");
+  processor.process({
     sessionId: "session", update: { sessionUpdate: "tool_call_update", toolCallId: "call", kind: "execute" },
   }, "live", (fact) => facts.push(fact));
-  translator.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
+  processor.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
   assert.deepEqual(facts, [{ type: "tool-warning", name: "execute", args: undefined }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }]);
 });
 
@@ -76,12 +76,12 @@ for (const row of [
   },
   { name: "replay usage suppressed", update: { sessionUpdate: "usage_update", used: 42, size: 1000 }, source: "replay", sessionId: "session", expected: [] },
 ] satisfies { name: string; update: SessionUpdate; source: "live" | "replay"; sessionId: string; expected: RuntimeEvent[] }[]) {
-  test(`translate notification: ${row.name}`, () => {
-    const translator = new AcpEventTranslator("session");
+  test(`process notification: ${row.name}`, () => {
+    const processor = new EventProcessor("session");
     const facts: RuntimeEvent[] = [];
     const notification: SessionNotification = { sessionId: row.sessionId, update: row.update };
 
-    translator.translate(notification, row.source, (fact) => facts.push(fact));
+    processor.process(notification, row.source, (fact) => facts.push(fact));
 
     assert.deepEqual(facts, row.expected);
   });
@@ -95,10 +95,10 @@ for (const row of [
   { reason: "max_turn_requests", expected: { type: "complete", reason: "error", error: "ACP prompt stopped: max_turn_requests", resumable: false } },
 ] satisfies { reason: StopReason; expected: RuntimeEvent }[]) {
   test(`complete prompt: ${row.reason}`, () => {
-    const translator = new AcpEventTranslator("session");
+    const processor = new EventProcessor("session");
     const facts: RuntimeEvent[] = [];
 
-    translator.complete({ stopReason: row.reason }, (fact) => facts.push(fact));
+    processor.complete({ stopReason: row.reason }, (fact) => facts.push(fact));
 
     assert.deepEqual(facts, [{ type: "session-reference", reference: "session" }, row.expected]);
   });
