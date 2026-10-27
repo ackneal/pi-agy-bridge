@@ -62,7 +62,10 @@ export class AcpRuntimeSession implements DriverSession {
       }),
     });
     this.session = new AcpSession({ ...options,
-      onRead: (request, signal) => this.reader.read(request, signal),
+      onRead: (request, signal) => {
+        this.translator?.observeClientRead(request);
+        return this.reader.read(request, signal);
+      },
       onPermission: (request) => this.permissions?.reply(request) ?? { outcome: { outcome: "cancelled" } },
       onClose: (error) => {
         this.permissions?.reset();
@@ -86,7 +89,13 @@ export class AcpRuntimeSession implements DriverSession {
   private fail(error: unknown): Promise<void> {
     // Claim failure ownership before cleanup can synchronously trigger onClose.
     this.failure ??= Promise.resolve().then(async () => {
-      await this.reader.endPrompt();
+      try {
+        await this.reader.endPrompt();
+      } catch (cleanupError) {
+        debugLog("session", "ACP read cleanup failed:", cleanupError);
+      }
+      this.userPrompt = "";
+
       try {
         await this.session.dispose();
       } catch (cleanupError) {
@@ -139,24 +148,24 @@ export class AcpRuntimeSession implements DriverSession {
       this.emit({ type: "start" });
       this.emit({ type: "session-reference", reference: this.session.id });
       // Do not await the native prompt: MCP can suspend it across Pi turns.
-      this.completion = this.session.prompt(prompt).finally(async () => {
+      this.completion = this.session.prompt(prompt).then(async (response) => {
         await this.reader.endPrompt();
         this.userPrompt = "";
-      }).then((response) => {
         this.completion = undefined;
         this.translator?.complete(response, this.emit);
-      }, (error: unknown) => this.fail(error));
+      }).catch((error: unknown) => this.fail(error));
     } finally { this.submitting = false; }
   }
   async abort(): Promise<void> {
     const readsClosed = this.reader.endPrompt();
     this.listeners.clear();
     this.permissions?.reset();
-    try {
-      await this.session.cancel();
-    } finally {
-      await readsClosed;
-      await this.completion;
-    }
+    const results = await Promise.allSettled([readsClosed, this.session.cancel()]);
+    await this.completion;
+    this.userPrompt = "";
+
+    const failures = results.filter(result => result.status === "rejected");
+    if (failures.length === 1) throw failures[0]!.reason;
+    if (failures.length > 1) throw new AggregateError(failures.map(result => result.reason), "ACP abort cleanup failed");
   }
 }
