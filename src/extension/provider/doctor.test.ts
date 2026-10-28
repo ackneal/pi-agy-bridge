@@ -61,14 +61,31 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       if (row.models !== undefined) assert.doesNotMatch(report, /cached/);
     }
     for (const row of [
-      { authStatus: undefined, expected: /! Auth: unknown/ },
-      { authStatus: "unknown", expected: /! Auth: unknown/ },
-      { authStatus: "authenticated", expected: /✓ Auth: authenticated/ },
-      { authStatus: "unauthenticated", expected: /! Auth: unauthenticated/ },
+      {
+        name: "unknown without local credential information remains unknown",
+        authStatus: "unknown",
+        expected: /x Auth: unknown/,
+        authError: undefined,
+        errors: false,
+      },
+      {
+        name: "unknown with an auth error remains unknown",
+        authStatus: "unknown",
+        expected: /x Auth: unknown/,
+        authError: { time: "2026-01-03T00:00:00Z", message: "login check failed" },
+        errors: true,
+      },
+      { name: "authenticated", authStatus: "authenticated", expected: /✓ Auth: authenticated/, authError: undefined, errors: false },
+      { name: "unauthenticated", authStatus: "unauthenticated", expected: /x Auth: unauthenticated/, authError: undefined, errors: false },
+      { name: "saved credential is not backend verification", authStatus: "saved", expected: /x Auth: saved login \(backend unverified\)/, authError: undefined, errors: false },
     ] as const) {
-      const report = await collectDoctorReport({ ...options, authStatus: row.authStatus });
-      assert.match(report, row.expected);
-      assert.doesNotMatch(report, /Errors/);
+      const report = await collectDoctorReport({ ...options, authStatus: row.authStatus, authError: row.authError });
+      assert.match(report, row.expected, row.name);
+      if (row.errors) {
+        assert.match(report, /Errors\n  ! authentication \(2026-01-03T00:00:00Z\): login check failed/, row.name);
+      } else {
+        assert.doesNotMatch(report, /Errors/, row.name);
+      }
     }
     await fs.writeFile(path.join(source, "plugin.json"), '{}');
     const report = await collectDoctorReport({
@@ -89,7 +106,7 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       /✓ Models: 2 configured/,
       /✓ Node /,
       /✓ Pi MCP bridge entrypoint/,
-      /! Auth: unauthenticated/,
+      /x Auth: unauthenticated/,
       /Quota remaining\n  Gemini 4 Argon  weekly 40%/,
       /Errors/,
       /! plugin \(2026-01-01T00:00:00Z\): install failed/,
@@ -124,7 +141,7 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       assert.ok(acpReport.split("\n").includes(row.runtime), row.name);
       assert.match(acpReport, /  ✓ Node /, row.name);
       assert.match(acpReport, /  ✓ Pi MCP bridge entrypoint found\n/, row.name);
-      assert.match(acpReport, /  ✓ Models: 2 configured\n  ! Auth: unauthenticated/, row.name);
+      assert.match(acpReport, /  ✓ Models: 2 configured\n  x Auth: unauthenticated/, row.name);
       assert.match(acpReport, /\n\nQuota remaining \(unavailable\)\n\nErrors\n  ! discovery \(2026-01-02T00:00:00Z\): discovery failed\n  ! authentication \(2026-01-03T00:00:00Z\): login failed$/, row.name);
       assert.doesNotMatch(acpReport, /Antigravity CLI|Plugin|Gemini 4 Argon|Python/, row.name);
       assert.equal(await fs.readFile(calls, "utf8"), `${expectedArgs}\n`, row.name);

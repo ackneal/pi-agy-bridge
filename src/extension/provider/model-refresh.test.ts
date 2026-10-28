@@ -34,6 +34,10 @@ for (const scenario of [
       registerProvider: (registered: Provider) => { provider = registered; },
     } as unknown as ExtensionAPI;
     t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+    t.mock.method(CliDriver.prototype, "discoverModels", async () => {
+      if (scenario.fail) throw new Error("discovery failed");
+      return parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)");
+    });
     new Bridge(pi, new CliDriver()).start();
     assert.ok(provider?.refreshModels);
     const publications: ModelsPublication[] = [];
@@ -101,6 +105,7 @@ test("Pi persists raw Antigravity CLI discovery and reapplies models.json overri
     registerProvider: runtime.registerNativeProvider.bind(runtime),
   } as unknown as ExtensionAPI;
   t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
+  t.mock.method(CliDriver.prototype, "discoverModels", async () => parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)\ngemini-3.1-pro-high  Gemini 3.1 Pro (High)"));
   await registerAndAwaitRefresh(t, runtime, () => new Bridge(pi, new CliDriver()).start());
 
   await runtime.refresh({ providers: ["agy"], allowNetwork: false });

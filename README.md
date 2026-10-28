@@ -42,13 +42,15 @@ Start Pi after installation. ACP is selected by default. Only explicitly selecte
 
 ### 2. Sign In (If Needed)
 
-At startup, the selected driver checks authentication in the background, even when Pi already stores an `agy` bridge credential. CLI queries usage; ACP checks `session/new`. Successful checks save one bridge credential tagged with the current driver. An explicit authentication-required result removes the bridge credential and prompts you to run `/login`. Network failures and timeouts do not remove a credential for the current driver. Checks never open a login flow. With default ACP, checking can start the first server download. Pi shows installation progress in its footer and clears it when finished; normal installation progress does not add chat notifications. Installation errors still produce notifications. If authentication is required, run `/login`.
+Startup checks the selected backend without interactive login. CLI uses its headless usage query, which also supplies quota data. ACP opens a temporary session with a browser interceptor: if the server tries to open an authentication page, the bridge reports that login is required and stops the owned process group. Only explicit `/login` permits ACP to open your browser. Successful checks save a driver-scoped bridge credential; an authentication-required result removes it. Network and transport failures remain unknown, not signed out. ACP model discovery uses the same protection and retains cached models when login is required; without a cache, its bundled model catalog remains available.
+
+If startup finds that you are signed out, Pi shows a footer reminder for eight seconds instead of a permanent warning. Successful login clears it immediately. Headless sessions print the reminder once.
 
 To sign in through Pi, run `/login`, select **Antigravity [pi-agy-bridge]**, and follow the authorization prompts.
 
 Your backend tokens remain with the selected backend. Pi stores only a local bridge credential under `agy`, including the driver (`cli` or `acp`) it was checked for. Switching drivers replaces this record after successful verification; it does not keep two login states.
 
-> **Note:** `/logout` disables the bridge in Pi but does not sign you out of the selected backend. Restarting Pi may automatically enable the bridge again.
+> **Note:** Pi's `/logout` disables the bridge in Pi but does not sign you out of the selected backend. Restarting Pi may enable the bridge again if the backend is still authenticated.
 
 ### 3. Choose a Model
 
@@ -73,7 +75,7 @@ Both drivers use `${GEMINI_HOME:-~/.gemini}` as the base directory. Native sessi
 
 The bridge pins **Antigravity ACP Server 1.4.3**, the ACP Registry's stable entry. This is not an LTS designation. It supports macOS and Linux on x64 and ARM64. The [official Google integration documentation](https://antigravity.google/docs/ide/extensions/zed) points to the [ACP Registry manifest](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json), which supplies Google-hosted archive URLs, SHA-256 values, and launch settings.
 
-- Installation starts only when selected ACP needs to launch: authentication, model discovery, or a session. Startup authentication can trigger it. Package installation and driver status do not download binaries. ACP doctor also prepares the server when needed for its active authentication check.
+- Installation starts when selected ACP needs to launch for an authentication check, model discovery, explicit `/login`, or a conversation request. Startup and doctor can trigger installation; package installation and driver status do not. Pi shows installation progress in its footer; normal progress does not add chat notifications. Installation errors still produce notifications.
 - Downloads show MiB and percentage when the server provides a total, followed by verification, extraction, and validation status. Archives are approximately 109–321 MiB; Linux needs about 1 GiB after extraction. Allow additional space for the temporary archive.
 - The archive SHA-256 must match the pin before extraction. The complete distribution, including `localharness_external`, retains its executable permissions. Linux launches preserve the required `--uid=` argument.
 - Installations live under `<Pi Agent Home>/pi-agy-bridge/acp/<archive filename without .zip>/`, for example `~/.pi/agent/pi-agy-bridge/acp/agy-acp-server-1.4.3-darwin-arm64/`. The archive filename already includes the version. Pi's `getAgentDir()` respects custom Agent Home configuration, including `PI_CODING_AGENT_DIR`; the usual default is `~/.pi/agent`.
@@ -85,7 +87,7 @@ The bridge pins **Antigravity ACP Server 1.4.3**, the ACP Registry's stable entr
 
 ### Custom Executable
 
-Set `AGY_ACP_BIN` to an executable path to bypass managed installation and checksum verification. This explicitly trusts that executable and its companion distribution. An invalid override is an error; unset it to restore automatic installation. Existing manual installs in `~/.local/opt/agy-acp` or `~/.local/bin/agy_acp_server` now require this override instead of implicit discovery.
+Set `AGY_ACP_BIN` to an executable path to bypass managed installation and checksum verification. This explicitly trusts that executable and its companion distribution. The background browser interceptor is verified against the pinned Google server; a custom server must honor Python's `BROWSER` override to provide the same protection. An invalid override is an error; unset it to restore automatic installation. Existing manual installs in `~/.local/opt/agy-acp` or `~/.local/bin/agy_acp_server` now require this override instead of implicit discovery.
 
 ### Version Pins and Upgrades
 

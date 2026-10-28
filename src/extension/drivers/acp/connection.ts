@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { writeSync } from "node:fs";
+import { accessSync, constants, writeSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
@@ -8,6 +9,7 @@ export interface AcpConnectionOptions {
   cwd: string;
   args?: string[];
   requestTimeoutMs?: number;
+  allowInteractiveAuthentication?: boolean;
   onUpdate?: (notification: acp.SessionNotification) => void | Promise<void>;
   onClose?: (error: unknown) => void;
   onPermission?: (request: acp.RequestPermissionRequest) => acp.RequestPermissionResponse | Promise<acp.RequestPermissionResponse>;
@@ -48,8 +50,15 @@ export class AcpConnection {
     signal?.throwIfAborted();
     if (process.platform === "win32") throw new Error("ACP owned process groups require POSIX");
 
+    let env = process.env;
+    if (!this.options.allowInteractiveAuthentication) {
+      const blocker = fileURLToPath(new URL("./noninteractive-browser.js", import.meta.url));
+      accessSync(blocker, constants.R_OK);
+      env = { ...process.env, BROWSER: `${JSON.stringify(process.execPath)} ${JSON.stringify(blocker)} %s` };
+    }
+
     const child = spawn(this.options.executable, this.options.args ?? [], {
-      cwd: this.options.cwd, stdio: "pipe", detached: true,
+      cwd: this.options.cwd, stdio: "pipe", detached: true, env,
     });
     this.child = child;
     if (child.pid !== undefined) {
@@ -68,7 +77,19 @@ export class AcpConnection {
       resolve();
     }));
     child.on("error", (error) => this.stop(error));
-    child.stderr.resume();
+    if (this.options.allowInteractiveAuthentication) {
+      child.stderr.resume();
+    } else {
+      const marker = "Open the following link to authenticate the ACP server:";
+      let tail = "";
+      child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+        const output = tail + chunk;
+        if (output.includes(marker)) {
+          this.stop(new acp.RequestError(-32000, "Authentication required. Run /login to authenticate."));
+        }
+        tail = output.slice(-marker.length);
+      });
+    }
     // Stream errors also occur on failed spawn and broken pipes.
     child.stdin.on("error", (error) => this.stop(error));
     child.stdout.on("error", (error) => this.stop(error));
@@ -110,6 +131,7 @@ export class AcpConnection {
   }
 
   async request<M extends acp.AgentRequestMethod>(method: M, params: acp.AgentRequestParamsByMethod[M]): Promise<acp.AgentRequestResponsesByMethod[M]> {
+    this.shutdown.signal.throwIfAborted();
     if (!this.isRunning || !this.sdk) throw new Error("ACP connection is not running");
     return this.bounded(() => this.sdk!.agent.request(method, params), method, method !== acp.methods.agent.session.prompt);
   }

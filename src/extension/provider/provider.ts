@@ -24,7 +24,7 @@ import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts"
 import { debugArtifact, debugLog } from "../shared/debug.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { synchronizeAgyAuthentication } from "./auth-sync.ts";
-import { collectDoctorReport } from "./doctor.ts";
+import { collectDoctorReport, type DoctorOptions } from "./doctor.ts";
 import { formatAcpToolWarning } from "./tool-warning.ts";
 import { AcpInstallationProgress } from "./installation-progress.ts";
 import { ProgressStatus } from "./progress.ts";
@@ -161,6 +161,7 @@ export class Bridge {
   private usageRefresh: Promise<AgyUsage | undefined> | undefined;
   private readonly authentication: AgyAuthentication;
   private startupAuthenticationStarted = false;
+  private authenticationReminder: { dismiss: () => void; timer: ReturnType<typeof setTimeout> } | undefined;
   private runtimeLifetime = new AbortController();
   private readonly lifetime = new AbortController();
   private readonly sessionIds = new Set<string>();
@@ -186,6 +187,14 @@ export class Bridge {
     }, this.driver.id);
   }
 
+  private clearAuthenticationReminder(): void {
+    const reminder = this.authenticationReminder;
+    if (!reminder) return;
+    this.authenticationReminder = undefined;
+    clearTimeout(reminder.timer);
+    reminder.dismiss();
+  }
+
   private async refreshUsage(signal: AbortSignal): Promise<AgyUsage | undefined> {
     if (signal.aborted) return undefined;
     if (this.usageRefresh) return this.usageRefresh;
@@ -204,8 +213,10 @@ export class Bridge {
       .catch((error) => {
         if (!signal.aborted) {
           this.authentication.usage = undefined;
-          this.authentication.status = error instanceof AgyAuthenticationRequiredError ? "unauthenticated" : "unknown";
-          this.usageError = {
+          const authenticationRequired = error instanceof AgyAuthenticationRequiredError;
+          this.authentication.status = authenticationRequired ? "unauthenticated" : "unknown";
+          if (authenticationRequired) this.authentication.failure = undefined;
+          this.usageError = authenticationRequired ? undefined : {
             time: new Date().toISOString(),
             message: error instanceof Error ? error.message : String(error),
           };
@@ -229,9 +240,10 @@ export class Bridge {
     driver.onInstallationProgress = (progress) => this.installationProgress.update(progress);
     if (driver.id === "cli" && !driver.detectExecutable()) throw new Error(`${driver.label} executable not found`);
     const lifetime = this.runtimeLifetime.signal;
-    const models = await driver.discoverModels(lifetime);
+    const models = await driver.discoverModels(lifetime) ?? driver.initialModels;
     lifetime.throwIfAborted();
 
+    this.clearAuthenticationReminder();
     this.runtimeLifetime.abort(new Error("Antigravity bridge driver changed"));
     await this.liveSessions.disposeAll();
     this.lifetime.signal.throwIfAborted();
@@ -306,6 +318,7 @@ export class Bridge {
       if (lifetime.aborted) return;
       const usage = await this.refreshUsage(lifetime);
       if (lifetime.aborted) return;
+      if (this.authentication.status === "authenticated") this.clearAuthenticationReminder();
       try {
         await synchronizeAgyAuthentication(this.authentication, driver.id, authPath, lifetime, original);
         await ctx?.modelRegistry?.refresh({ providers: ["agy"], allowNetwork: false });
@@ -316,13 +329,20 @@ export class Bridge {
       }
       if (lifetime.aborted) return;
 
+      let authStatus: DoctorOptions["authStatus"] = this.authentication.status;
+      if (authStatus === "unknown" && !this.authentication.failure && !this.usageError) {
+        authStatus = isAgyBridgeEnabled(readStoredCredential("agy", authPath), driver.id)
+          ? "saved"
+          : "unauthenticated";
+      }
+
       const report = await collectDoctorReport({
         driver: this.driver.id,
         executable: this.driver.detectExecutable(),
         pluginError: this.driver.pluginError,
         catalogModels: this.models,
         discoveryError: this.discoveryError,
-        authStatus: this.authentication.status,
+        authStatus,
         authError: this.authentication.failure,
         usage,
         usageError: this.usageError,
@@ -331,7 +351,7 @@ export class Bridge {
 
       this.pi.sendMessage({
         customType: "pi-agy-bridge:doctor",
-        content: report + (this.authentication.status === "unauthenticated"
+        content: report + (authStatus === "unauthenticated"
           ? "\nRun /login and select Antigravity [pi-agy-bridge]." : "")
           + suffix,
         display: true,
@@ -436,6 +456,7 @@ export class Bridge {
     });
 
     this.pi.on("session_start", (event, ctx) => {
+      this.clearAuthenticationReminder();
       this.ui = ctx.hasUI ? ctx.ui : undefined;
       this.sessionIds.add(this.piContextAdapter.bind(ctx.sessionManager));
       const lifetime = this.runtimeLifetime.signal;
@@ -459,8 +480,17 @@ export class Bridge {
             if (lifetime.aborted) return;
             if (this.authentication.status === "unauthenticated") {
               const message = "Antigravity is not signed in. Run /login and select Antigravity [pi-agy-bridge].";
-              if (ctx.hasUI) ctx.ui.notify(message, "warning");
-              else this.pi.sendMessage({ customType: "pi-agy-bridge:auth", content: message, display: true }, { triggerTurn: false });
+              if (ctx.hasUI) {
+                this.clearAuthenticationReminder();
+                const dismiss = this.progressStatus.show(ctx.ui, message);
+                const timer = setTimeout(() => {
+                  if (this.authenticationReminder?.timer === timer) this.clearAuthenticationReminder();
+                }, 8000);
+                timer.unref?.();
+                this.authenticationReminder = { dismiss, timer };
+              } else {
+                this.pi.sendMessage({ customType: "pi-agy-bridge:auth", content: message, display: true }, { triggerTurn: false });
+              }
             }
           } catch (error) {
             debugLog("auth", `${this.driver.label} startup auto-configuration skipped:`, error);
@@ -476,6 +506,7 @@ export class Bridge {
       })();
     });
     this.pi.on("session_shutdown", async () => {
+      this.clearAuthenticationReminder();
       this.progressStatus.clear();
       this.installationProgress.clear();
       this.driver.onInstallationProgress = undefined;
@@ -520,7 +551,17 @@ export class Bridge {
       id: "agy",
       name: "Antigravity [pi-agy-bridge]",
       baseUrl: "agy",
-      auth: { oauth: this.authentication.oauth, apiKey: this.authentication.method },
+      auth: {
+        oauth: {
+          ...this.authentication.oauth,
+          login: async (interaction) => {
+            const credential = await this.authentication.oauth.login(interaction);
+            this.clearAuthenticationReminder();
+            return credential;
+          },
+        },
+        apiKey: this.authentication.method,
+      },
       getModels: () => this.models.filter((model) => isModelType(model, "chat")),
       getAllModels: () => this.models,
       filterModels: (catalog, credential) => isAgyBridgeEnabled(credential, driver.id) ? catalog : [],
@@ -540,7 +581,7 @@ export class Bridge {
 
         try {
           const discovered = await driver.discoverModels(signal);
-          if (signal.aborted) return;
+          if (signal.aborted || discovered === undefined) return;
           await context.publish({
             persist: { models: discovered },
             update: () => {

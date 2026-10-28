@@ -171,6 +171,8 @@ export class AgyAuthentication {
       );
       signal.throwIfAborted();
       if (generation !== this.generation || this.loggingIn) throw new Error("Antigravity CLI status check was replaced by a newer attempt");
+      if (authenticated === undefined) return undefined;
+
       this.status = authenticated ? "authenticated" : "unauthenticated";
       this.failure = undefined;
       if (authenticated && capturedUsage) {

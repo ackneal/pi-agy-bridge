@@ -7,7 +7,8 @@ import type { AcpInstallProgress } from "./acp/installation.ts";
 
 export interface DriverAuthentication {
   label: string;
-  probe(signal: AbortSignal, onUsage: (usage: AgyUsage) => void): Promise<boolean>;
+  /** Undefined means the check was skipped because safe noninteractive probing is unavailable. */
+  probe(signal: AbortSignal, onUsage: (usage: AgyUsage) => void): Promise<boolean | undefined>;
   login(interaction: ProviderAuthInteraction, onUsage: (usage: AgyUsage) => void): Promise<void>;
 }
 
@@ -39,7 +40,8 @@ export interface BridgeDriver {
   validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void;
   /** Returns the runtime already owned by input.session, whether reused or newly installed. */
   prepareSession(input: PrepareDriverInput): Promise<{ proc: DriverSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }>;
-  discoverModels(signal: AbortSignal): Promise<AnyModel[]>;
+  /** Undefined retains the cached/default catalog when safe discovery is unavailable. */
+  discoverModels(signal: AbortSignal): Promise<AnyModel[] | undefined>;
   usage(signal: AbortSignal): Promise<AgyUsage | undefined>;
   detectExecutable(): string | undefined;
 }

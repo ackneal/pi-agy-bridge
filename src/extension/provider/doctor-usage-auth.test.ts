@@ -58,7 +58,8 @@ for (const row of [
     assert.equal(message.customType, "pi-agy-bridge:doctor");
     assert.ok(message.content.includes(`Auth: ${row.status}`));
     assert.equal(message.content.includes("Quota remaining"), row.hasQuota);
-    if (row.outcome !== "success") assert.match(message.content, /! usage /);
+    if (row.outcome === "network failure") assert.match(message.content, /! usage /);
+    else assert.doesNotMatch(message.content, /! usage /);
     if (row.outcome === "network failure") assert.match(message.content, /synthetic network failure/);
   });
 }

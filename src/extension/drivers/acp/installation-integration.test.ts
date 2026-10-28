@@ -30,6 +30,13 @@ async function isolate(t: TestContext): Promise<string> {
   return home;
 }
 
+function login(driver: AcpDriver): Promise<void> {
+  return driver.authentication.login({
+    signal: new AbortController().signal, notify: () => {},
+    prompt: async () => { throw new Error("Unexpected authentication prompt"); },
+  }, () => {});
+}
+
 function preparation(signal: AbortSignal, checkpoint?: Error): PrepareDriverInput {
   const session = new LiveSession("resolver-test");
   return {
@@ -39,7 +46,7 @@ function preparation(signal: AbortSignal, checkpoint?: Error): PrepareDriverInpu
   };
 }
 
-for (const entry of ["probe", "login", "models", "prepare"] as const) {
+for (const entry of ["login", "prepare"] as const) {
   test(`ACP ${entry} resolves installation and progress before opening a connection`, async (t) => {
     await isolate(t);
     const signal = new AbortController().signal;
@@ -58,14 +65,27 @@ for (const entry of ["probe", "login", "models", "prepare"] as const) {
     const start = t.mock.method(AcpConnection.prototype, "start", async () => { throw new Error("Unexpected ACP launch"); });
     assert.equal(driver.detectExecutable(), undefined);
     assert.equal(resolutions, 0);
-    const attempt = entry === "probe" ? driver.authentication.probe(signal, () => {}) :
-      entry === "login" ? driver.authentication.login({ signal, notify: (value) => { if (value.type === "progress") loginProgress.push(value.message); },
-        prompt: async () => { throw new Error("Unexpected authentication prompt"); } }, () => {}) :
-      entry === "models" ? driver.discoverModels(signal) : driver.prepareSession(preparation(signal));
+    const attempt = entry === "login" ? driver.authentication.login({ signal, notify: (value) => { if (value.type === "progress") loginProgress.push(value.message); },
+        prompt: async () => { throw new Error("Unexpected authentication prompt"); } }, () => {}) : driver.prepareSession(preparation(signal));
     await assert.rejects(attempt, (error) => error === failure);
     assert.equal(resolutions, 1);
     assert.deepEqual(progress, [event]);
     assert.deepEqual(loginProgress, entry === "login" ? [event.message] : []);
+    assert.equal(start.mock.callCount(), 0);
+  });
+}
+
+for (const entry of ["probe", "models"] as const) {
+  test(`ACP ${entry} resolves installation before opening a connection`, async (t) => {
+    await isolate(t);
+    let resolutions = 0;
+    const driver = new AcpDriver(async () => { resolutions++; throw new Error("Unexpected installation"); });
+    const start = t.mock.method(AcpConnection.prototype, "start", async () => { throw new Error("Unexpected ACP launch"); });
+    const operation = entry === "probe"
+      ? driver.authentication.probe(new AbortController().signal, () => {})
+      : driver.discoverModels(new AbortController().signal);
+    await assert.rejects(operation, /Unexpected installation/);
+    assert.equal(resolutions, 1);
     assert.equal(start.mock.callCount(), 0);
   });
 }
@@ -79,7 +99,7 @@ for (const kind of ["missing", "directory", "non-executable"] as const) {
     process.env.AGY_ACP_BIN = override;
     let resolutions = 0;
     const driver = new AcpDriver(async () => { resolutions++; throw new Error("Unexpected managed download"); });
-    await assert.rejects(driver.discoverModels(new AbortController().signal), /AGY_ACP_BIN is not an executable file/);
+    await assert.rejects(login(driver), /AGY_ACP_BIN is not an executable file/);
     assert.equal(resolutions, 0);
   });
 }
@@ -92,7 +112,7 @@ test("explicit executable bypasses installation before opening a connection", as
   const driver = new AcpDriver(async () => { resolutions++; throw new Error("Unexpected managed download"); });
   const stopped = new Error("Reached explicit ACP connection");
   const start = t.mock.method(AcpConnection.prototype, "start", async () => { throw stopped; });
-  await assert.rejects(driver.discoverModels(new AbortController().signal), (error) => error === stopped);
+  await assert.rejects(login(driver), (error) => error === stopped);
   assert.equal(resolutions, 0);
   assert.equal(start.mock.callCount(), 1);
 });
@@ -133,7 +153,7 @@ for (const stale of [false, true]) {
     assert.equal(resolutions, 0);
     const start = t.mock.method(AcpConnection.prototype, "start", async () => { throw new Error("Unexpected launch without integrity resolution"); });
 
-    await assert.rejects(driver.discoverModels(new AbortController().signal), (error) => error === failure);
+    await assert.rejects(login(driver), (error) => error === failure);
 
     assert.equal(resolutions, 1);
     assert.equal(start.mock.callCount(), 0);

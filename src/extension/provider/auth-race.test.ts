@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { PassThrough } from "node:stream";
 import test, { type TestContext } from "node:test";
 import { defaultProviderAuthContext } from "@earendil-works/pi-ai";
-import { createCliAuthenticationBackend } from "../drivers/cli/auth.ts";
+import { loginAgyAuthentication, probeAgyAuthentication } from "../runtime/auth.ts";
 import { AgyAuthentication } from "./auth.ts";
 
 function setup(t: TestContext, beforeLogin: () => Promise<void> = async () => {}) {
@@ -24,7 +24,11 @@ function setup(t: TestContext, beforeLogin: () => Promise<void> = async () => {}
     return child;
   });
   syncBuiltinESMExports();
-  const auth = new AgyAuthentication(createCliAuthenticationBackend(() => "/fake/agy"), beforeLogin);
+  const auth = new AgyAuthentication({
+    label: "Antigravity CLI",
+    probe: (signal, onUsage) => probeAgyAuthentication("/fake/agy", signal, onUsage),
+    login: (interaction, onUsage) => loginAgyAuthentication(interaction, "/fake/agy", onUsage),
+  }, beforeLogin);
   t.after(() => {
     auth.close();
     for (const child of children) child.emit("close", 0, null);

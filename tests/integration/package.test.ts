@@ -31,6 +31,7 @@ describe("Antigravity CLI MCP package", () => {
       for (const required of [
         "src/extension/index.ts",
         "src/extension/discovery/model.json",
+        "src/extension/drivers/acp/noninteractive-browser.js",
         "src/mcp/index.js",
         "src/mcp/socket.js",
         "src/mcp/socket.d.ts",

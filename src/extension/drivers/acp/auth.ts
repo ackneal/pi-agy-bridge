@@ -11,7 +11,7 @@ export function createAcpAuthenticationBackend(options: AcpDiscoveryOptions): Ac
   return {
     async probe(signal) {
       try {
-        await withAcpDiscovery(options, signal, async (connection) => {
+        await withAcpDiscovery({ ...options, allowInteractiveAuthentication: false }, signal, async (connection) => {
           await newDiscoverySession(connection, options.cwd);
         });
         return true;
@@ -22,7 +22,7 @@ export function createAcpAuthenticationBackend(options: AcpDiscoveryOptions): Ac
       }
     },
     async login(interaction) {
-      await withAcpDiscovery(options, interaction.signal, async (connection, initialized) => {
+      await withAcpDiscovery({ ...options, allowInteractiveAuthentication: true }, interaction.signal, async (connection, initialized) => {
         const methods = initialized.authMethods ?? [];
         if (methods.length) {
           // Selection requires explicit consent, even when the server offers just one method.

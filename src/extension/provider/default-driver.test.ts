@@ -30,17 +30,21 @@ for (const failure of ["installation", "initialization", "session", "authenticat
       if (failure === "authentication") throw acp.RequestError.authRequired();
       throw new Error("synthetic session failure");
     });
+    const cliDetection = t.mock.method(CliDriver.prototype, "detectExecutable", () => process.execPath);
+    const cliDiscovery = t.mock.method(CliDriver.prototype, "discoverModels", async () => []);
     bridge.start();
 
-    await provider.refreshModels!({
-      allowNetwork: true, signal: new AbortController().signal,
-      publish: async (publication) => { publication.update?.(); return true; },
-    });
+    await assert.rejects(Promise.resolve(provider.auth.oauth!.login({
+      signal: new AbortController().signal, notify: () => {},
+      prompt: async () => { throw new Error("Unexpected authentication prompt"); },
+    })));
 
     assert.equal(bridge.driver.id, "acp");
     assert.equal(provider.auth!.oauth!.name, "Antigravity");
     assert.ok(provider.getModels().some((model) => model.id === "gemini-3.8-flash"));
     assert.equal(start.mock.callCount(), failure === "installation" ? 0 : 1);
+    assert.equal(cliDetection.mock.callCount(), 0);
+    assert.equal(cliDiscovery.mock.callCount(), 0);
   });
 }
 

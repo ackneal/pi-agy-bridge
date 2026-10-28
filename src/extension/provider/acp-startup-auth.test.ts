@@ -28,6 +28,7 @@ for (const driverId of ["cli", "acp"] as const) {
         const login = t.mock.method(driver.authentication, "login", async () => { throw new Error("must not log in"); });
         const sendMessage = t.mock.fn();
         const notify = t.mock.fn();
+        const setStatus = t.mock.fn();
         const pi = {
           on: (event: string, handler: unknown) => {
             if (event === "session_start") start = handler as typeof start;
@@ -40,7 +41,7 @@ for (const driverId of ["cli", "acp"] as const) {
         const completed = new Promise<void>((resolve) => { refreshed = resolve; });
         const refresh = t.mock.fn(async () => { refreshed(); });
         const hasUI = saved === "matching";
-        const context = { hasUI, ui: { notify }, sessionManager: { getSessionId: () => "fixture" }, modelRegistry: { refresh } } as unknown as ExtensionContext;
+        const context = { hasUI, ui: { notify, setStatus }, sessionManager: { getSessionId: () => "fixture" }, modelRegistry: { refresh } } as unknown as ExtensionContext;
         bridge.start();
         t.after(() => shutdown());
 
@@ -57,9 +58,10 @@ for (const driverId of ["cli", "acp"] as const) {
         } else if (outcome === "required" || saved === "other driver") assert.equal(record, undefined);
         else assert.deepEqual(record, original);
         assert.equal(sendMessage.mock.callCount(), outcome === "required" && !hasUI ? 1 : 0);
-        assert.equal(notify.mock.callCount(), outcome === "required" && hasUI ? 1 : 0);
+        assert.equal(notify.mock.callCount(), 0);
+        assert.equal(setStatus.mock.callCount(), outcome === "required" && hasUI ? 1 : 0);
         if (outcome === "required") {
-          const message = hasUI ? notify.mock.calls[0]!.arguments[0] : sendMessage.mock.calls[0]!.arguments[0].content;
+          const message = hasUI ? setStatus.mock.calls[0]!.arguments[1] : sendMessage.mock.calls[0]!.arguments[0].content;
           assert.match(message, /\/login.*Antigravity \[pi-agy-bridge\]/);
         }
 
@@ -68,7 +70,8 @@ for (const driverId of ["cli", "acp"] as const) {
         await new Promise<void>((resolve) => setImmediate(resolve));
         assert.equal(probe.mock.callCount(), 1);
         assert.equal(sendMessage.mock.callCount(), outcome === "required" && !hasUI ? 1 : 0);
-        assert.equal(notify.mock.callCount(), outcome === "required" && hasUI ? 1 : 0);
+        assert.equal(notify.mock.callCount(), 0);
+        if (outcome === "required" && hasUI) assert.deepEqual(setStatus.mock.calls.at(-1)?.arguments, ["agy-bridge", undefined]);
       });
     }
   }
