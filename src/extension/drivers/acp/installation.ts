@@ -8,21 +8,13 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { extractAcpArchive } from "./archive.ts";
 import { ACP_REQUIRED_EXECUTABLES, acpDistributionName, resolveAcpRelease, type AcpRelease } from "./release.ts";
 import { debugLog } from "../../shared/debug.ts";
-
-export interface AcpInstallProgress {
-  phase: "download" | "verify" | "extract" | "validate" | "complete" | "error" | "cancelled";
-  version: string;
-  platform: string;
-  message: string;
-  downloadedBytes?: number;
-  totalBytes?: number;
-}
+import type { DriverInstallationProgress } from "../types.ts";
 
 export interface AcpLaunch { executable: string; args: string[] }
 
 interface InstallationOptions {
   signal?: AbortSignal;
-  onProgress?: (progress: AcpInstallProgress) => void;
+  onProgress?: (progress: DriverInstallationProgress) => void;
   agentHome?: string;
   release?: AcpRelease;
   fetch?: typeof globalThis.fetch;
@@ -42,9 +34,9 @@ interface InstallationManifest {
 interface Job {
   controller: AbortController;
   promise: Promise<AcpLaunch>;
-  listeners: Set<(progress: AcpInstallProgress) => void>;
+  listeners: Set<(progress: DriverInstallationProgress) => void>;
   consumers: Set<symbol>;
-  last?: AcpInstallProgress;
+  last?: DriverInstallationProgress;
 }
 
 const MANIFEST = ".pi-agy-installation.json";
@@ -70,7 +62,7 @@ function matchesRelease(manifest: InstallationManifest, release: AcpRelease): bo
     manifest.sha256 === release.sha256 && Array.isArray(manifest.files) && manifest.files.length > 0;
 }
 
-function notify(listener: ((progress: AcpInstallProgress) => void) | undefined, progress: AcpInstallProgress): void {
+function notify(listener: ((progress: DriverInstallationProgress) => void) | undefined, progress: DriverInstallationProgress): void {
   try { listener?.(progress); }
   catch (error) { debugLog("acp-install", "Could not display installation progress:", error); }
 }
@@ -231,7 +223,7 @@ function downloadMessage(release: AcpRelease, bytes: number, total?: number): st
 }
 
 async function downloadArchive(filename: string, release: AcpRelease, fetcher: typeof fetch, signal: AbortSignal,
-  progress: (progress: AcpInstallProgress) => void): Promise<void> {
+  progress: (progress: DriverInstallationProgress) => void): Promise<void> {
   const idle = new AbortController();
   const reset = () => {
     clearTimeout(timer);
@@ -276,11 +268,11 @@ async function downloadArchive(filename: string, release: AcpRelease, fetcher: t
   } finally { clearTimeout(timer!); }
 }
 
-async function install(options: InstallationOptions, signal: AbortSignal, emit: (progress: AcpInstallProgress) => void): Promise<AcpLaunch> {
+async function install(options: InstallationOptions, signal: AbortSignal, emit: (progress: DriverInstallationProgress) => void): Promise<AcpLaunch> {
   const release = options.release ?? resolveAcpRelease();
   const agentHome = path.resolve(options.agentHome ?? getAgentDir());
   let staging: string | undefined;
-  const progress = (phase: AcpInstallProgress["phase"], message: string) => emit({ phase, message, version: release.version, platform: release.platform });
+  const progress = (phase: DriverInstallationProgress["phase"], message: string) => emit({ phase, message, version: release.version, platform: release.platform });
   try {
     signal.throwIfAborted();
     const root = await prepareInstallationRoot(agentHome);
@@ -344,7 +336,7 @@ export function ensureAcpInstallation(options: InstallationOptions = {}): Promis
   let job = jobs.get(key);
   if (!job) {
     const controller = new AbortController();
-    const listeners = new Set<(progress: AcpInstallProgress) => void>();
+    const listeners = new Set<(progress: DriverInstallationProgress) => void>();
     const consumers = new Set<symbol>();
     const created: Job = { controller, listeners, consumers, promise: Promise.resolve().then(() => install(options, controller.signal, (progress) => {
       created.last = progress;
@@ -358,7 +350,7 @@ export function ensureAcpInstallation(options: InstallationOptions = {}): Promis
   const consumer = Symbol();
   shared.consumers.add(consumer);
   const onProgress = options.onProgress;
-  const listener = onProgress ? (progress: AcpInstallProgress) => onProgress(progress) : undefined;
+  const listener = onProgress ? (progress: DriverInstallationProgress) => onProgress(progress) : undefined;
   if (listener) {
     shared.listeners.add(listener);
     if (shared.last) notify(listener, shared.last);

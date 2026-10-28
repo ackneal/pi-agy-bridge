@@ -7,7 +7,7 @@ import { test, type TestContext } from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { AcpDriver } from "./driver.ts";
 import { AcpConnection } from "./connection.ts";
-import type { AcpInstallProgress } from "./installation.ts";
+import type { DriverInstallationProgress } from "../types.ts";
 import { acpDistributionName, resolveAcpRelease } from "./release.ts";
 import { LiveSession } from "../../session/session.ts";
 import { RuntimeSessionSync } from "../../session/state.ts";
@@ -51,8 +51,8 @@ for (const entry of ["login", "prepare"] as const) {
     await isolate(t);
     const signal = new AbortController().signal;
     const failure = new Error("stop after resolver progress");
-    const event: AcpInstallProgress = { phase: "download", message: "Downloading fixture", version: "1.4.3", platform: "test" };
-    const progress: AcpInstallProgress[] = [];
+    const event: DriverInstallationProgress = { phase: "download", message: "Downloading fixture", version: "1.4.3", platform: "test" };
+    const progress: DriverInstallationProgress[] = [];
     const loginProgress: string[] = [];
     let resolutions = 0;
     const driver = new AcpDriver(async (options) => {

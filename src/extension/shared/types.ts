@@ -1,3 +1,10 @@
+export class AuthenticationRequiredError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Antigravity authentication required. Run /login to authenticate.", options);
+    this.name = "AuthenticationRequiredError";
+  }
+}
+
 /**
  * Thrown when agy version requirements are not met or runtime protocol compatibility checks fail
  * (such as unbridged native tools detected in init event).

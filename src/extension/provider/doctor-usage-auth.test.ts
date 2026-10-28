@@ -5,7 +5,8 @@ import test from "node:test";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CliDriver } from "../drivers/cli/driver.ts";
-import { AgyAuthenticationRequiredError, type AgyUsage } from "../runtime/usage.ts";
+import type { AgyUsage } from "../runtime/usage.ts";
+import { AuthenticationRequiredError } from "../shared/types.ts";
 import { Bridge } from "./provider.ts";
 
 useAuthHomeFixture();
@@ -29,7 +30,7 @@ for (const row of [
     t.mock.method(driver, "detectExecutable", () => undefined);
     const login = t.mock.method(driver.authentication, "login", async () => {});
     const usage = t.mock.method(driver, "usage", async () => {
-      if (row.outcome === "required") throw new AgyAuthenticationRequiredError();
+      if (row.outcome === "required") throw new AuthenticationRequiredError();
       if (row.outcome === "network failure") throw new Error("synthetic network failure");
       return quota;
     });

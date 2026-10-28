@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { AcpInstallProgress } from "../drivers/acp/installation.ts";
+import type { DriverInstallationProgress } from "../drivers/types.ts";
 import { ProgressStatus } from "./progress.ts";
 
 type ProgressUI = Pick<ExtensionContext["ui"], "setStatus" | "notify">;
@@ -9,7 +9,7 @@ export class AcpInstallationProgress {
   private readonly write: (message: string) => void;
   private readonly statusManager: ProgressStatus;
   private readonly statusId = Symbol();
-  private lastProgress: AcpInstallProgress | undefined;
+  private lastProgress: DriverInstallationProgress | undefined;
   private lastStderrAt = -Infinity;
 
   constructor(
@@ -22,7 +22,7 @@ export class AcpInstallationProgress {
     this.write = write;
   }
 
-  update(progress: AcpInstallProgress): void {
+  update(progress: DriverInstallationProgress): void {
     if (this.lastProgress === progress) return;
     const previousPhase = this.lastProgress?.phase;
     this.lastProgress = progress;

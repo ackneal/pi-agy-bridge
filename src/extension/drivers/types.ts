@@ -3,12 +3,21 @@ import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
-import type { AcpInstallProgress } from "./acp/installation.ts";
+
+export interface DriverInstallationProgress {
+  phase: "download" | "verify" | "extract" | "validate" | "complete" | "error" | "cancelled";
+  version: string;
+  platform: string;
+  message: string;
+  downloadedBytes?: number;
+  totalBytes?: number;
+}
 
 export interface DriverAuthentication {
   label: string;
-  /** Undefined means the check was skipped because safe noninteractive probing is unavailable. */
-  probe(signal: AbortSignal, onUsage: (usage: AgyUsage) => void): Promise<boolean | undefined>;
+  /** Checks existing authentication without prompting or opening a browser. */
+  probe(signal: AbortSignal, onUsage: (usage: AgyUsage) => void): Promise<boolean>;
+  /** Allows explicit authentication interaction and confirms authentication before returning. */
   login(interaction: ProviderAuthInteraction, onUsage: (usage: AgyUsage) => void): Promise<void>;
 }
 
@@ -36,12 +45,13 @@ export interface BridgeDriver {
   readonly authentication: DriverAuthentication;
   readonly initialModels: readonly AnyModel[];
   readonly pluginError?: DriverFailure | undefined;
-  onInstallationProgress?: ((progress: AcpInstallProgress) => void) | undefined;
+  onInstallationProgress?: ((progress: DriverInstallationProgress) => void) | undefined;
   validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void;
   /** Returns the runtime already owned by input.session, whether reused or newly installed. */
   prepareSession(input: PrepareDriverInput): Promise<{ proc: DriverSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }>;
   /** Undefined retains the cached/default catalog when safe discovery is unavailable. */
   discoverModels(signal: AbortSignal): Promise<AnyModel[] | undefined>;
+  /** Undefined means quota is unavailable; authentication must be checked via probe instead. */
   usage(signal: AbortSignal): Promise<AgyUsage | undefined>;
   detectExecutable(): string | undefined;
 }

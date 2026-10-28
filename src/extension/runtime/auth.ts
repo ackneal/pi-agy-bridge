@@ -2,7 +2,8 @@ import { stripVTControlCharacters } from "node:util";
 import type { ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import { resolveAgyExecutable } from "./version.ts";
 import { spawnAuthenticationPty, type AuthenticationPty } from "./auth-pty.ts";
-import { AgyAuthenticationRequiredError, fetchAgyUsage, parseAgyUsageOutput, type AgyUsage } from "./usage.ts";
+import { fetchAgyUsage, parseAgyUsageOutput, type AgyUsage } from "./usage.ts";
+import { AuthenticationRequiredError } from "../shared/types.ts";
 
 const args = ["--print", "/usage"];
 const invitation = "Authentication required. Please visit the URL to log in:";
@@ -168,7 +169,7 @@ export async function probeAgyAuthentication(
   try {
     usage = await fetchAgyUsage(agyPath, signal);
   } catch (error) {
-    if (error instanceof AgyAuthenticationRequiredError) return false;
+    if (error instanceof AuthenticationRequiredError) return false;
     throw error;
   }
 

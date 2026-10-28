@@ -5,7 +5,7 @@ import test from "node:test";
 import { readStoredCredential, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
-import { AgyAuthenticationRequiredError } from "../runtime/usage.ts";
+import { AuthenticationRequiredError } from "../shared/types.ts";
 import { createAgyBridgeCredential } from "./auth.ts";
 import { Bridge } from "./provider.ts";
 import { registerAuthHomeFixture } from "./auth-home-fixture.ts";
@@ -26,7 +26,7 @@ for (const driverId of ["cli", "acp"] as const) {
       });
       t.mock.method(driver, "usage", async () => {
         if (driverId === "acp") return undefined;
-        if (outcome === "unauthenticated") throw new AgyAuthenticationRequiredError();
+        if (outcome === "unauthenticated") throw new AuthenticationRequiredError();
         if (outcome === "unknown") throw new Error("fixture transport error");
         return { updatedAt: "2026-01-01T00:00:00Z", groups: [] };
       });

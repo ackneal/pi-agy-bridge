@@ -2,12 +2,12 @@ import { beforeEach } from "node:test";
 import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AcpInstallProgress } from "../drivers/acp/installation.ts";
+import type { DriverInstallationProgress } from "../drivers/types.ts";
 import { AcpInstallationProgress } from "./installation-progress.ts";
 
 useAuthHomeFixture();
 
-function event(phase: AcpInstallProgress["phase"], message: string = phase): AcpInstallProgress {
+function event(phase: DriverInstallationProgress["phase"], message: string = phase): DriverInstallationProgress {
   return { phase, message, version: "1.0", platform: "test" };
 }
 

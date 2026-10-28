@@ -18,7 +18,7 @@ import {
   PiContextAdapter,
 } from "../session/session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
-import { AgyAuthenticationRequiredError, type AgyUsage } from "../runtime/usage.ts";
+import type { AgyUsage } from "../runtime/usage.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
 import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
@@ -157,7 +157,6 @@ export class Bridge {
   private models: AnyModel[] = [];
   public driver: BridgeDriver;
   private discoveryError: DriverFailure | undefined;
-  private usageError: DriverFailure | undefined;
   private usageRefresh: Promise<AgyUsage | undefined> | undefined;
   private readonly authentication: AgyAuthentication;
   private startupAuthenticationStarted = false;
@@ -199,27 +198,9 @@ export class Bridge {
     if (signal.aborted) return undefined;
     if (this.usageRefresh) return this.usageRefresh;
 
-    const task = this.driver.usage(signal)
-      .then((usage) => {
-        if (signal.aborted) return undefined;
-        this.authentication.usage = usage;
-        this.usageError = undefined;
-        if (usage) {
-          this.authentication.status = "authenticated";
-          this.authentication.failure = undefined;
-        }
-        return usage;
-      })
+    const task = this.authentication.refreshUsage(signal, this.driver)
       .catch((error) => {
         if (!signal.aborted) {
-          this.authentication.usage = undefined;
-          const authenticationRequired = error instanceof AgyAuthenticationRequiredError;
-          this.authentication.status = authenticationRequired ? "unauthenticated" : "unknown";
-          if (authenticationRequired) this.authentication.failure = undefined;
-          this.usageError = authenticationRequired ? undefined : {
-            time: new Date().toISOString(),
-            message: error instanceof Error ? error.message : String(error),
-          };
           debugLog("usage", `${this.driver.label} usage check failed:`, error);
         }
         return undefined;
@@ -256,7 +237,6 @@ export class Bridge {
 
     this.usageRefresh = undefined;
     this.discoveryError = undefined;
-    this.usageError = undefined;
 
     this.registerProvider(models);
     debugLog("provider", `Switched bridge driver to: ${driver.label} (${driverId})`);
@@ -307,14 +287,6 @@ export class Bridge {
       const authPath = path.join(getAgentDir(), "auth.json");
       const original = readStoredCredential("agy", authPath);
       const driver = this.driver;
-      if (driver.id === "acp") {
-        try {
-          await this.authentication.detect(lifetime);
-        } catch (error) {
-          if (lifetime.aborted) return;
-          debugLog("auth", "ACP doctor authentication check failed:", error);
-        }
-      }
       if (lifetime.aborted) return;
       const usage = await this.refreshUsage(lifetime);
       if (lifetime.aborted) return;
@@ -330,7 +302,7 @@ export class Bridge {
       if (lifetime.aborted) return;
 
       let authStatus: DoctorOptions["authStatus"] = this.authentication.status;
-      if (authStatus === "unknown" && !this.authentication.failure && !this.usageError) {
+      if (authStatus === "unknown" && !this.authentication.failure && !this.authentication.usageError) {
         authStatus = isAgyBridgeEnabled(readStoredCredential("agy", authPath), driver.id)
           ? "saved"
           : "unauthenticated";
@@ -345,7 +317,7 @@ export class Bridge {
         authStatus,
         authError: this.authentication.failure,
         usage,
-        usageError: this.usageError,
+        usageError: this.authentication.usageError,
       });
       if (lifetime.aborted) return;
 

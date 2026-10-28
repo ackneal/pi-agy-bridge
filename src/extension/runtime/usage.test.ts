@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { AgyAuthenticationRequiredError, fetchAgyUsage, formatDoctorQuotaLines, parseAgyUsageOutput } from "./usage.ts";
+import { fetchAgyUsage, formatDoctorQuotaLines, parseAgyUsageOutput } from "./usage.ts";
+import { AuthenticationRequiredError } from "../shared/types.ts";
 
 const sampleJsonOutput = JSON.stringify({
   conversation_id: "",
@@ -168,10 +169,10 @@ test("fetchAgyUsage classifies subprocess failures and sanitizes diagnostics", a
       await assert.rejects(query, (error: unknown) => {
         assert.ok(error instanceof Error);
         if (row.name === "failed authentication stderr") {
-          assert.ok(error instanceof AgyAuthenticationRequiredError);
+          assert.ok(error instanceof AuthenticationRequiredError);
           return true;
         }
-        assert.ok(!(error instanceof AgyAuthenticationRequiredError));
+        assert.ok(!(error instanceof AuthenticationRequiredError));
         if ("stream" in row) {
           const cause = error.cause as NodeJS.ErrnoException & { stdout: string; stderr: string };
           assert.equal(cause.code, "ERR_CHILD_PROCESS_STDIO_MAXBUFFER");
@@ -205,7 +206,7 @@ setInterval(() => {}, 1000);
 `);
     await chmod(file, 0o755);
     const start = Date.now();
-    await assert.rejects(fetchAgyUsage(file, AbortSignal.timeout(2500)), AgyAuthenticationRequiredError);
+    await assert.rejects(fetchAgyUsage(file, AbortSignal.timeout(2500)), AuthenticationRequiredError);
     assert.ok(Date.now() - start < 3000);
     const pid = Number(await readFile(pidFile, "utf8"));
     assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });

@@ -1,13 +1,13 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { AgyUsage } from "../../runtime/usage.ts";
-import type { BridgeDriver, DriverAuthentication, PrepareDriverInput } from "../types.ts";
+import type { BridgeDriver, DriverAuthentication, DriverInstallationProgress, PrepareDriverInput } from "../types.ts";
 import { defaultModelCatalog } from "../../discovery/model-metadata.ts";
 import { prepareDriverCwd } from "../cwd.ts";
 import { createAcpAuthenticationBackend } from "./auth.ts";
 import { discoverAcpModels } from "./discovery.ts";
 import { detectAcpExecutable, resolveAcpConnectionOptions, resolveAcpEffort } from "./options.ts";
 import { prepareAcpRuntime } from "./prepare.ts";
-import { ensureAcpInstallation, findAcpInstallation, type AcpInstallProgress } from "./installation.ts";
+import { ensureAcpInstallation, findAcpInstallation } from "./installation.ts";
 
 export class AcpDriver implements BridgeDriver {
   readonly id = "acp";
@@ -15,7 +15,7 @@ export class AcpDriver implements BridgeDriver {
   readonly sessionVersion = "acp:v1";
   readonly initialModels = defaultModelCatalog();
   readonly authentication: DriverAuthentication;
-  onInstallationProgress: ((progress: AcpInstallProgress) => void) | undefined;
+  onInstallationProgress: ((progress: DriverInstallationProgress) => void) | undefined;
   private readonly resolveInstallation: typeof ensureAcpInstallation;
 
   constructor(resolveInstallation: typeof ensureAcpInstallation = ensureAcpInstallation) {
@@ -34,7 +34,7 @@ export class AcpDriver implements BridgeDriver {
     };
   }
 
-  private async connectionOptions(signal?: AbortSignal, onProgress?: (progress: AcpInstallProgress) => void) {
+  private async connectionOptions(signal?: AbortSignal, onProgress?: (progress: DriverInstallationProgress) => void) {
     signal?.throwIfAborted();
     if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("Antigravity ACP requires macOS or Linux; native Windows is not supported");
     const override = process.env.AGY_ACP_BIN?.trim();

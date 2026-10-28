@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ensureAcpInstallation, type AcpInstallProgress } from "./installation.ts";
+import { ensureAcpInstallation } from "./installation.ts";
+import type { DriverInstallationProgress } from "../types.ts";
 import { acpDistributionName, resolveAcpRelease } from "./release.ts";
 import { writeZipFixture } from "./archive-fixture.ts";
 
@@ -23,7 +24,7 @@ for (const scenario of ["interrupted body", "stalled headers", "cancelled downlo
     let entered!: () => void;
     const started = new Promise<void>((resolve) => { entered = resolve; });
     const controller = new AbortController();
-    const events: AcpInstallProgress[] = [];
+    const events: DriverInstallationProgress[] = [];
     const fetcher: typeof fetch = async (_url, options) => {
       assert.equal(options?.redirect, "error");
       entered();

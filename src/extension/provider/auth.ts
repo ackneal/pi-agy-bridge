@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ApiKeyAuth, Credential, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import type { AgyUsage } from "../runtime/usage.ts";
-import type { DriverAuthentication, DriverFailure, DriverId } from "../drivers/types.ts";
+import type { BridgeDriver, DriverAuthentication, DriverFailure, DriverId } from "../drivers/types.ts";
+import { AuthenticationRequiredError } from "../shared/types.ts";
 
 const year = 365 * 24 * 60 * 60 * 1000;
 const prefix = "agy-bridge:";
@@ -36,6 +37,7 @@ export class AgyAuthentication {
   public status: "authenticated" | "unauthenticated" | "unknown" = "unknown";
   public failure: DriverFailure | undefined;
   public usage: AgyUsage | undefined;
+  public usageError: DriverFailure | undefined;
   public readonly method: ApiKeyAuth;
   public readonly oauth: OAuthAuth;
   private detection: Promise<OAuthCredential | undefined> | undefined;
@@ -112,6 +114,7 @@ export class AgyAuthentication {
           if (generation !== this.generation) throw new Error("Antigravity CLI authentication was replaced by a newer attempt");
           this.status = "authenticated";
           this.failure = undefined;
+          this.usageError = undefined;
           if (capturedUsage) {
             this.usage = capturedUsage;
           }
@@ -134,6 +137,7 @@ export class AgyAuthentication {
     this.driver = driver;
     this.status = "unknown";
     this.usage = undefined;
+    this.usageError = undefined;
     this.failure = undefined;
     this.detection = undefined;
   }
@@ -158,6 +162,46 @@ export class AgyAuthentication {
     });
   }
 
+  public async refreshUsage(signal: AbortSignal, driver: Pick<BridgeDriver, "usage">): Promise<AgyUsage | undefined> {
+    signal.throwIfAborted();
+    this.lifecycle.signal.throwIfAborted();
+    if (this.loggingIn) throw new Error("Antigravity authentication is already in progress");
+    const generation = this.generation;
+    const current = () => {
+      signal.throwIfAborted();
+      this.lifecycle.signal.throwIfAborted();
+      if (generation !== this.generation || this.loggingIn) throw new Error("Antigravity status check was replaced by a newer attempt");
+    };
+
+    let usage: AgyUsage | undefined;
+    try {
+      usage = await driver.usage(signal);
+      current();
+      this.usage = usage;
+      this.usageError = undefined;
+    } catch (error) {
+      current();
+      this.usage = undefined;
+      const required = error instanceof AuthenticationRequiredError;
+      this.status = required ? "unauthenticated" : "unknown";
+      if (required) this.failure = undefined;
+      this.usageError = required ? undefined : {
+        time: new Date().toISOString(),
+        message: error instanceof Error ? error.message : "Could not check Antigravity usage",
+      };
+      throw error;
+    }
+
+    if (usage) {
+      this.status = "authenticated";
+      this.failure = undefined;
+    } else {
+      // Drivers without quota support still need a fresh authentication check.
+      await this.detect(signal);
+    }
+    return this.usage;
+  }
+
   private async detectOnce(): Promise<OAuthCredential | undefined> {
     const generation = this.generation;
     const signal = AbortSignal.any([this.lifecycle.signal, this.detectionCancellation.signal]);
@@ -171,8 +215,6 @@ export class AgyAuthentication {
       );
       signal.throwIfAborted();
       if (generation !== this.generation || this.loggingIn) throw new Error("Antigravity CLI status check was replaced by a newer attempt");
-      if (authenticated === undefined) return undefined;
-
       this.status = authenticated ? "authenticated" : "unauthenticated";
       this.failure = undefined;
       if (authenticated && capturedUsage) {

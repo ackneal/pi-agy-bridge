@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { writeZipFixture, type ZipFixtureEntry } from "./archive-fixture.ts";
-import { ensureAcpInstallation, type AcpInstallProgress } from "./installation.ts";
+import { ensureAcpInstallation } from "./installation.ts";
+import type { DriverInstallationProgress } from "../types.ts";
 import { acpDistributionName, resolveAcpRelease, type AcpRelease } from "./release.ts";
 
 const contents: ZipFixtureEntry[] = [
@@ -62,7 +63,7 @@ async function launchFixture(home: string, release: AcpRelease, archivePath: str
 for (const scenario of ["installation", "cache reuse", "missing metadata", "broken metadata", "modified file", "missing companion", "lost permission", "partial published directory", "empty published directory", "partial staging"] as const) {
   test(`ACP installation: ${scenario}`, async (t) => {
     const f = await fixture(t);
-    const events: AcpInstallProgress[] = [];
+    const events: DriverInstallationProgress[] = [];
     const initial = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher, onProgress: (event) => events.push(event) });
     const finalDirectory = path.join(f.root, acpDistributionName(f.release));
     const inode = (await fs.stat(finalDirectory)).ino;
@@ -125,7 +126,7 @@ for (const scenario of ["checksum mismatch", "invalid ZIP", "missing required fi
       await fs.mkdir(path.dirname(f.root), { recursive: true });
       await fs.symlink(elsewhere, f.root);
     }
-    const events: AcpInstallProgress[] = [];
+    const events: DriverInstallationProgress[] = [];
     await assert.rejects(ensureAcpInstallation({ agentHome: f.home, release, fetch: fetcher, onProgress: (event) => events.push(event) }), expected);
     assert.equal(events.at(-1)?.phase, "error");
     if (scenario === "checksum mismatch") assert.ok(!events.some((event) => event.phase === "extract"));
@@ -171,8 +172,8 @@ test("same-process ACP consumers share progress and cancellation does not cancel
   t.after(resume);
   let downloads = 0;
   const fetcher: typeof fetch = async () => { downloads++; entered(); await gate; return new Response(f.bytes); };
-  const a: AcpInstallProgress[] = [];
-  const b: AcpInstallProgress[] = [];
+  const a: DriverInstallationProgress[] = [];
+  const b: DriverInstallationProgress[] = [];
   const first = ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: fetcher, signal: cancelled.signal, onProgress: (event) => a.push(event) });
   const rejection = assert.rejects(first, /cancel this consumer/);
   await started;
