@@ -1,3 +1,5 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
@@ -9,6 +11,8 @@ import { ModelRuntime, type ExtensionAPI } from "@earendil-works/pi-coding-agent
 import type { ModelsPublication, Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
+
+useAuthHomeFixture();
 
 for (const scenario of [
   { name: "cache-only restore", allowNetwork: false, accept: true, fail: false, aborted: false, expected: "claude-sonnet-4-6", publishes: 0 },

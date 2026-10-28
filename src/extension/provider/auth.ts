@@ -1,17 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { ApiKeyAuth, Credential, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import type { AgyUsage } from "../runtime/usage.ts";
-import type { DriverAuthentication, DriverFailure } from "../drivers/types.ts";
+import type { DriverAuthentication, DriverFailure, DriverId } from "../drivers/types.ts";
 
 const year = 365 * 24 * 60 * 60 * 1000;
 const prefix = "agy-bridge:";
 
-export function createAgyBridgeCredential(loginEpoch: string = randomUUID()): OAuthCredential {
+export function createAgyBridgeCredential(loginEpoch: string = randomUUID(), driver?: DriverId): OAuthCredential {
   if (!loginEpoch.trim()) throw new Error("Antigravity CLI authentication session is no longer valid");
-  return { type: "oauth", access: "", refresh: "", expires: Date.now() + year, agyBridge: true, loginEpoch };
+  return { type: "oauth", access: "", refresh: "", expires: Date.now() + year, agyBridge: true, loginEpoch, ...(driver ? { driver } : {}) };
 }
 
-export function isAgyBridgeEnabled(credential: Credential | undefined): boolean {
+export function isAgyBridgeEnabled(credential: Credential | undefined, driver?: DriverId): boolean {
+  if (driver && credential?.type === "oauth" && credential.driver !== undefined && credential.driver !== driver) return false;
   if (credential?.type === "api_key") return credential.env?.AGY_BRIDGE_ENABLED === "1";
   return credential?.type === "oauth" && credential.agyBridge === true
     && typeof credential.loginEpoch === "string" && credential.loginEpoch.trim().length > 0
@@ -43,20 +44,22 @@ export class AgyAuthentication {
   private loggingIn = false;
 
   private backend: DriverAuthentication;
+  private driver: DriverId | undefined;
 
-  constructor(backend: DriverAuthentication, beforeLogin: () => Promise<void>) {
+  constructor(backend: DriverAuthentication, beforeLogin: () => Promise<void>, driver?: DriverId) {
     this.backend = backend;
+    this.driver = driver;
     const self = this;
     this.method = {
-      get name() { return self.backend.label; },
+      name: "Antigravity",
       check: async ({ credential, signal }) => {
         signal.throwIfAborted();
-        return isAgyBridgeEnabled(credential)
+        return isAgyBridgeEnabled(credential, this.driver)
           ? { type: "api_key", source: self.backend.label }
           : undefined;
       },
       resolve: async ({ credential, signal }) => {
-        if (!isAgyBridgeEnabled(credential) || self.loggingIn) return undefined;
+        if (!isAgyBridgeEnabled(credential, this.driver) || self.loggingIn) return undefined;
         signal.throwIfAborted();
         self.lifecycle.signal.throwIfAborted();
 
@@ -69,18 +72,18 @@ export class AgyAuthentication {
       },
     };
     this.oauth = {
-      get name() { return self.backend.label; },
+      name: "Antigravity",
       isSubscription: true,
       refresh: async (credential, signal) => {
         signal.throwIfAborted();
         this.lifecycle.signal.throwIfAborted();
-        if (!isAgyBridgeEnabled(credential)) throw new Error("Invalid Antigravity CLI bridge credentials");
+        if (!isAgyBridgeEnabled(credential, this.driver)) throw new Error("Invalid Antigravity CLI bridge credentials");
         return { ...credential, expires: Date.now() + year };
       },
       toAuth: async (credential) => {
         this.lifecycle.signal.throwIfAborted();
         if (this.loggingIn) throw new Error("Antigravity CLI authentication is already in progress");
-        if (!isAgyBridgeEnabled(credential)) throw new Error("Invalid Antigravity CLI bridge credentials");
+        if (!isAgyBridgeEnabled(credential, this.driver)) throw new Error("Invalid Antigravity CLI bridge credentials");
         return { apiKey: prefix + encodeURIComponent(credential.loginEpoch as string) };
       },
       login: async (interaction) => {
@@ -110,7 +113,7 @@ export class AgyAuthentication {
           if (capturedUsage) {
             this.usage = capturedUsage;
           }
-          return createAgyBridgeCredential();
+          return createAgyBridgeCredential(undefined, this.driver);
         } catch (error) {
           if (generation === this.generation) this.recordFailure(error);
           throw error;
@@ -121,11 +124,12 @@ export class AgyAuthentication {
     };
   }
 
-  public setBackend(backend: DriverAuthentication): void {
+  public setBackend(backend: DriverAuthentication, driver?: DriverId): void {
     ++this.generation;
     this.detectionCancellation.abort(new Error("Antigravity authentication backend changed"));
     this.detectionCancellation = new AbortController();
     this.backend = backend;
+    this.driver = driver;
     this.status = "unknown";
     this.usage = undefined;
     this.failure = undefined;
@@ -170,7 +174,7 @@ export class AgyAuthentication {
       if (authenticated && capturedUsage) {
         this.usage = capturedUsage;
       }
-      return authenticated ? createAgyBridgeCredential() : undefined;
+      return authenticated ? createAgyBridgeCredential(undefined, this.driver) : undefined;
     } catch (error) {
       if (generation === this.generation) this.recordFailure(error);
       throw error;

@@ -1,8 +1,12 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { Bridge } from "./provider.ts";
+
+useAuthHomeFixture();
 
 test("ACP installation shares doctor status and restores diagnostics after installation", async (t) => {
   type Handler = (args: string, ctx: ExtensionCommandContext) => Promise<void>;

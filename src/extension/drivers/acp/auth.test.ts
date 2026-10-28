@@ -1,14 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import * as acp from "@agentclientprotocol/sdk";
 import { createAcpAuthenticationBackend } from "./auth.ts";
+import { AcpConnection } from "./connection.ts";
 
 for (const row of [
-  { mode: "catalog", login: false, error: undefined },
-  { mode: "required", login: false, error: /Authentication required/ },
-  { mode: "login", login: false, error: /Authentication required/ },
+  { mode: "catalog", login: false, result: true },
+  { mode: "advertised-auth", login: false, result: true },
+  { mode: "required", login: false, result: false },
+  { mode: "login", login: false, result: false },
   { mode: "login", login: true, error: undefined },
   { mode: "required", login: true, error: /could not be confirmed/ },
+  { mode: "failure", login: false, error: /synthetic failure/ },
   { mode: "hang", login: false, error: /timeout/ },
 ]) {
   test(`ACP auth ${row.mode} login=${row.login}`, async () => {
@@ -19,6 +23,20 @@ for (const row of [
       return "synthetic-auth";
     } }) : backend.probe(signal);
     if (row.error) await assert.rejects(operation, row.error);
-    else await operation;
+    else if (row.login) await operation;
+    else assert.equal(await operation, row.result);
   });
 }
+
+test("ACP probe cancellation takes precedence over an authentication-required response", async (t) => {
+  const controller = new AbortController();
+  const cancelled = new Error("cancel auth check");
+  t.mock.method(AcpConnection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
+  t.mock.method(AcpConnection.prototype, "request", async () => {
+    controller.abort(cancelled);
+    throw acp.RequestError.authRequired();
+  });
+  const backend = createAcpAuthenticationBackend({ executable: process.execPath, cwd: process.cwd() });
+
+  await assert.rejects(backend.probe(controller.signal), (error) => error === cancelled);
+});

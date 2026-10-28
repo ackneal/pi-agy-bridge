@@ -3,16 +3,23 @@ import type { ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import { newDiscoverySession, withAcpDiscovery, type AcpDiscoveryOptions } from "./discovery.ts";
 
 export interface AcpAuthenticationBackend {
-  probe(signal: AbortSignal): Promise<void>;
+  probe(signal: AbortSignal): Promise<boolean>;
   login(interaction: ProviderAuthInteraction): Promise<void>;
 }
 
 export function createAcpAuthenticationBackend(options: AcpDiscoveryOptions): AcpAuthenticationBackend {
   return {
     async probe(signal) {
-      await withAcpDiscovery(options, signal, async (connection) => {
-        await newDiscoverySession(connection, options.cwd);
-      });
+      try {
+        await withAcpDiscovery(options, signal, async (connection) => {
+          await newDiscoverySession(connection, options.cwd);
+        });
+        return true;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (error instanceof acp.RequestError && error.code === -32000) return false;
+        throw error;
+      }
     },
     async login(interaction) {
       await withAcpDiscovery(options, interaction.signal, async (connection, initialized) => {

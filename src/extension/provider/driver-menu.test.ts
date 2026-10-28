@@ -1,9 +1,14 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
+import { AgyAuthentication } from "./auth.ts";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { Bridge } from "./provider.ts";
+
+useAuthHomeFixture();
 
 type Scenario = {
   name: string;
@@ -47,6 +52,7 @@ for (const scenario of scenarios) {
       if (scenario.outcome === "doctorFailure") throw new Error("synthetic diagnostics failure");
       return undefined;
     });
+    t.mock.method(AgyAuthentication.prototype, "detect", async () => undefined);
     const bridge = scenario.current === "cli" ? new Bridge(pi, new CliDriver()) : new Bridge(pi);
     t.after(() => bridge.liveSessions.disposeAll());
     const acpUsage = t.mock.method(AcpDriver.prototype, "usage", async () => undefined);
@@ -60,7 +66,7 @@ for (const scenario of scenarios) {
       bridge.driver = target === "cli" ? new CliDriver() : new AcpDriver();
     });
     const select = t.mock.fn(async () => scenario.selected);
-    const modelRegistry = {} as ExtensionCommandContext["modelRegistry"];
+    const modelRegistry = { refresh: async () => {} } as unknown as ExtensionCommandContext["modelRegistry"];
     const setStatus = t.mock.fn();
     const ctx = {
       hasUI: scenario.hasUI !== false, ui: { select, setStatus }, modelRegistry,

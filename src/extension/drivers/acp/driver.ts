@@ -24,8 +24,7 @@ export class AcpDriver implements BridgeDriver {
       label: this.label,
       probe: async (signal) => {
         const options = await this.connectionOptions(signal);
-        await createAcpAuthenticationBackend(options).probe(signal);
-        return true;
+        return createAcpAuthenticationBackend(options).probe(signal);
       },
       login: async (interaction) => {
         const options = await this.connectionOptions(interaction.signal,

@@ -15,9 +15,9 @@ import { Bridge } from "./provider.ts";
 for (const row of [
   { name: "automatically enables an existing Antigravity CLI login", stored: "missing", authenticated: true, enabled: true },
   { name: "leaves an unauthenticated Antigravity CLI unconfigured", stored: "missing", authenticated: false, enabled: false },
-  { name: "uses existing OAuth without probing", stored: "oauth", authenticated: false, enabled: true },
-  { name: "renews expired OAuth locally without probing", stored: "expired", authenticated: false, enabled: true },
-  { name: "upgrades the legacy setup marker without probing", stored: "legacy", authenticated: false, enabled: true },
+  { name: "detects existing OAuth login", stored: "oauth", authenticated: true, enabled: true },
+  { name: "detects expired OAuth login", stored: "expired", authenticated: true, enabled: true },
+  { name: "detects login with the legacy setup marker", stored: "legacy", authenticated: true, enabled: true },
 ] as const) {
   test(`startup subscription: ${row.name}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-auto-subscription-"));
@@ -36,7 +36,12 @@ for (const row of [
     }
     const runtime = await ModelRuntime.create({ authPath, modelsPath: null, refreshOnCreate: false });
     const registry = new ModelRegistry(runtime);
-    const detect = t.mock.method(AgyAuthentication.prototype, "detect", async () => row.authenticated ? marker : undefined);
+    const probe = t.mock.fn(async () => row.authenticated);
+    const detect = t.mock.method(AgyAuthentication.prototype, "detect", async function (this: AgyAuthentication, ...args: Parameters<AgyAuthentication["detect"]>) {
+      const authenticated = await probe();
+      this.status = authenticated ? "authenticated" : "unauthenticated";
+      return authenticated ? marker : undefined;
+    });
     const spawn = t.mock.method(cp, "spawn", () => { throw new Error("Unexpected authentication subprocess"); });
     syncBuiltinESMExports();
     let sessionStart: ((event: SessionStartEvent, ctx: ExtensionContext) => void | Promise<void>) | undefined;
@@ -84,7 +89,8 @@ for (const row of [
     assert.equal(sessionStart({ type: "session_start", reason: "startup" }, ctx), undefined);
     await refreshFinished;
 
-    assert.equal(detect.mock.callCount(), row.stored === "missing" ? 1 : 0);
+    assert.equal(detect.mock.callCount(), 1);
+    assert.equal(probe.mock.callCount(), 1);
     assert.equal(runtime.isUsingSubscription("agy"), row.enabled);
     assert.equal(registry.getAvailable().length, row.enabled ? 1 : 0);
     assert.deepEqual(await runtime.listCredentials(), row.enabled ? [{ providerId: "agy", type: "oauth" }] : []);
@@ -94,9 +100,10 @@ for (const row of [
       assert.equal(saved.type, "oauth");
       assert.equal(saved.access, "");
       assert.equal(saved.refresh, "");
-      assert.equal(saved.loginEpoch, "existing-epoch");
+      assert.equal(saved.loginEpoch, row.stored === "missing" ? saved.loginEpoch : "existing-epoch");
+      assert.ok(typeof saved.loginEpoch === "string" && saved.loginEpoch.length > 0);
       assert.ok(saved.expires > Date.now() + 300000);
-      assert.equal(getAgyBridgeAuthEnvironment(auth?.auth.apiKey)?.AGY_BRIDGE_LOGIN_EPOCH, "existing-epoch");
+      assert.equal(getAgyBridgeAuthEnvironment(auth?.auth.apiKey)?.AGY_BRIDGE_LOGIN_EPOCH, saved.loginEpoch);
     }
     assert.equal(spawn.mock.callCount(), 0);
 
@@ -106,7 +113,7 @@ for (const row of [
       await setImmediate();
     }
     assert.deepEqual(await runtime.listCredentials(), []);
-    assert.equal(detect.mock.callCount(), row.stored === "missing" ? 1 : 0,
+    assert.equal(detect.mock.callCount(), 1,
       "logout must not trigger automatic re-enablement in the current bridge instance");
 
     if (row.authenticated) {
@@ -117,6 +124,7 @@ for (const row of [
       sessionStart({ type: "session_start", reason: "startup" }, ctx);
       await restartedRefresh;
       assert.equal(detect.mock.callCount(), 2);
+      assert.equal(probe.mock.callCount(), 2);
       assert.equal(runtime.isUsingSubscription("agy"), true);
       assert.equal(registry.getAvailable().length, 1);
     }

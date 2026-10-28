@@ -1,3 +1,5 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
@@ -20,6 +22,8 @@ import { Bridge, streamAgyProvider } from "./provider.ts";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+useAuthHomeFixture();
 
 function assertRestorableHistory(checkpoint: AgyConversationCheckpoint | undefined, messages: readonly unknown[]): void {
   assert.ok(checkpoint);
@@ -223,7 +227,7 @@ test("registers the Antigravity CLI provider and session lifecycle without start
   assert.ok(commands.has("agy-bridge:doctor"));
   assert.ok(provider);
   assert.equal(provider.id, "agy");
-  assert.equal(provider.name, "Antigravity CLI [pi-agy-bridge]");
+  assert.equal(provider.name, "Antigravity [pi-agy-bridge]");
   assert.equal(provider.baseUrl, "agy");
   assert.ok(provider.auth.apiKey);
   assert.equal(provider.auth.apiKey.login, undefined);

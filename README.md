@@ -42,11 +42,11 @@ Start Pi after installation. ACP is selected by default. Only explicitly selecte
 
 ### 2. Sign In (If Needed)
 
-If the bridge is not yet configured in Pi, it checks for existing selected-backend authentication in the background at startup. With default ACP, this can start the first server download. Pi shows download progress and installation status in its footer, then clears the installation status when finished; normal installation progress does not add chat notifications. Errors still produce notifications. Wait for installation and authentication to finish before selecting a model.
+At startup, the selected driver checks authentication in the background, even when Pi already stores an `agy` bridge credential. CLI queries usage; ACP checks `session/new`. Successful checks save one bridge credential tagged with the current driver. An explicit authentication-required result removes the bridge credential and prompts you to run `/login`. Network failures and timeouts do not remove a credential for the current driver. Checks never open a login flow. With default ACP, checking can start the first server download. Pi shows installation progress in its footer and clears it when finished; normal installation progress does not add chat notifications. Installation errors still produce notifications. If authentication is required, run `/login`.
 
-To sign in through Pi, run `/login`, select the selected Antigravity backend labeled **[pi-agy-bridge]**, and follow the authorization prompts.
+To sign in through Pi, run `/login`, select **Antigravity [pi-agy-bridge]**, and follow the authorization prompts.
 
-Your credentials remain with the selected backend. Pi stores only a local setting that enables the bridge.
+Your backend tokens remain with the selected backend. Pi stores only a local bridge credential under `agy`, including the driver (`cli` or `acp`) it was checked for. Switching drivers replaces this record after successful verification; it does not keep two login states.
 
 > **Note:** `/logout` disables the bridge in Pi but does not sign you out of the selected backend. Restarting Pi may automatically enable the bridge again.
 
@@ -73,7 +73,7 @@ Both drivers use `${GEMINI_HOME:-~/.gemini}` as the base directory. Native sessi
 
 The bridge pins **Antigravity ACP Server 1.4.3**, the ACP Registry's stable entry. This is not an LTS designation. It supports macOS and Linux on x64 and ARM64. The [official Google integration documentation](https://antigravity.google/docs/ide/extensions/zed) points to the [ACP Registry manifest](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json), which supplies Google-hosted archive URLs, SHA-256 values, and launch settings.
 
-- Installation starts only when selected ACP needs to launch: authentication, model discovery, or a session. Startup authentication can trigger it. Package installation, driver status, and doctor do not download binaries.
+- Installation starts only when selected ACP needs to launch: authentication, model discovery, or a session. Startup authentication can trigger it. Package installation and driver status do not download binaries. ACP doctor also prepares the server when needed for its active authentication check.
 - Downloads show MiB and percentage when the server provides a total, followed by verification, extraction, and validation status. Archives are approximately 109–321 MiB; Linux needs about 1 GiB after extraction. Allow additional space for the temporary archive.
 - The archive SHA-256 must match the pin before extraction. The complete distribution, including `localharness_external`, retains its executable permissions. Linux launches preserve the required `--uid=` argument.
 - Installations live under `<Pi Agent Home>/pi-agy-bridge/acp/<archive filename without .zip>/`, for example `~/.pi/agent/pi-agy-bridge/acp/agy-acp-server-1.4.3-darwin-arm64/`. The archive filename already includes the version. Pi's `getAgentDir()` respects custom Agent Home configuration, including `PI_CODING_AGENT_DIR`; the usual default is `~/.pi/agent`.
@@ -135,7 +135,7 @@ If a runtime or tool failure makes the conversation unsafe to reuse, the next re
 
 ## Troubleshooting
 
-Run `/agy-bridge:doctor` in Pi for a shared report of the selected backend's version, Node, Pi MCP bridge entrypoint, models, and authentication. Pi's footer shows the latest active command's progress. When that command finishes, it restores any earlier pending operation's status or clears the status if none remain. Version checks use `--version`; ACP omits the version if no build label is reported. CLI also reports plugin status and queries quota on demand; a successful query confirms authentication. ACP displays `Quota remaining (unavailable)`.
+Run `/agy-bridge:doctor` in Pi for a shared report of the selected backend's version, Node, Pi MCP bridge entrypoint, models, and authentication. Pi's footer shows the latest active command's progress. When that command finishes, it restores any earlier pending operation's status or clears the status if none remain. Version checks use `--version`; ACP omits the version if no build label is reported. CLI also reports plugin status and queries quota on demand; a successful query confirms authentication. ACP actively checks authentication through `session/new` on every doctor invocation, sharing a check already in progress. An explicit authentication-required response reports `unauthenticated`; transport, timeout, and other check failures report `unknown` with diagnostic details. The check never calls `authenticate` or prompts for login. Doctor synchronizes the same driver-tagged bridge credential as startup. If authentication is required, its report includes `/login` instructions without a second notification. A successful session check does not guarantee that a later model request will succeed. ACP displays `Quota remaining (unavailable)`.
 
 - **ACP unavailable**: Read the installation error and check network access, free disk space, and cache directory permissions. For a custom `AGY_ACP_BIN`, check its path and executable permissions or unset it to use automatic installation. Failures never choose CLI; fix ACP or explicitly run `/agy-bridge:driver cli`.
 - **Unauthenticated models**: Default ACP model entries or cached models may appear before login; their presence does not confirm authentication, connectivity, or request success. Run `/login` for the selected backend.

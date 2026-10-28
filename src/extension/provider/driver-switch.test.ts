@@ -1,3 +1,5 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
@@ -12,6 +14,8 @@ import { ModelRuntime, type ExtensionAPI, type ExtensionCommandContext, type Ext
 import type { Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
+
+useAuthHomeFixture();
 
 for (const result of ["success", "installation failure"] as const) {
   test(`switch to uninstalled ACP attempts preparation: ${result}`, async (t) => {
@@ -115,9 +119,9 @@ for (const scenario of [
     else fail(new Error("old discovery failed"));
     await settled;
 
-    assert.equal(refreshes, 1);
+    assert.equal(refreshes, 2);
     assert.equal(registrations.length, 2);
-    assert.equal(registrations.at(-1)!.name, `${bridge.driver.label} [pi-agy-bridge]`);
+    assert.equal(registrations.at(-1)!.name, "Antigravity [pi-agy-bridge]");
     assert.equal(registrations.at(-1)!.getModels()[0]?.id, "gemini-3.8-flash");
     assert.equal(stalePublications, 0);
   });
@@ -140,7 +144,7 @@ for (const from of ["cli", "acp"] as const) {
 
     assert.equal(bridge.driver.id, target);
     assert.equal(provider.getModels()[0]?.id, "gemini-3.8-flash");
-    assert.equal(provider.auth!.oauth!.name, bridge.driver.label);
+    assert.equal(provider.auth!.oauth!.name, "Antigravity");
   });
 }
 

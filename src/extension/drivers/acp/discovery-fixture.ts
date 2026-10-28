@@ -5,9 +5,10 @@ let authenticated = false;
 const connection = acp.agent()
   .onRequest(acp.methods.agent.initialize, ({ params }) => {
     if (params.clientCapabilities?.fs?.readTextFile || params.clientCapabilities?.fs?.writeTextFile || params.clientCapabilities?.terminal) throw new Error("unsafe capabilities");
-    return { protocolVersion: acp.PROTOCOL_VERSION, authMethods: mode === "login" ? [{ id: "synthetic-auth", name: "Synthetic" }] : [] };
+    return { protocolVersion: acp.PROTOCOL_VERSION, authMethods: mode === "login" || mode === "advertised-auth" ? [{ id: "synthetic-auth", name: "Synthetic" }] : [] };
   })
   .onRequest(acp.methods.agent.authenticate, ({ params }) => {
+    if (mode === "advertised-auth") throw new Error("Probe must not authenticate");
     if (params.methodId !== "synthetic-auth") throw new Error("wrong method");
     authenticated = true;
     return {};

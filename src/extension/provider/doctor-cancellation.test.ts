@@ -1,3 +1,5 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -7,6 +9,8 @@ import { promisify } from "node:util";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
+
+useAuthHomeFixture();
 
 // version.ts captures the promisified function at import time; keep its dispatcher reusable.
 let execute: (args: readonly string[], signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;

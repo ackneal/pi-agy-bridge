@@ -1,3 +1,5 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
@@ -9,6 +11,8 @@ import type { Provider } from "@earendil-works/pi-ai";
 import { AcpConnection } from "../drivers/acp/connection.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
+
+useAuthHomeFixture();
 
 for (const failure of ["installation", "initialization", "session", "authentication"] as const) {
   test(`default ACP never falls back to installed CLI after ${failure} failure`, async (t) => {
@@ -34,7 +38,7 @@ for (const failure of ["installation", "initialization", "session", "authenticat
     });
 
     assert.equal(bridge.driver.id, "acp");
-    assert.equal(provider.auth!.oauth!.name, "Antigravity ACP");
+    assert.equal(provider.auth!.oauth!.name, "Antigravity");
     assert.ok(provider.getModels().some((model) => model.id === "gemini-3.8-flash"));
     assert.equal(start.mock.callCount(), failure === "installation" ? 0 : 1);
   });
@@ -58,6 +62,6 @@ test("manual CLI selection applies to this bridge instance, not the next startup
 
   assert.equal(bridge.driver.id, "cli");
   assert.equal(reopened.driver.id, "acp");
-  assert.equal(providers[1]?.name, "Antigravity CLI [pi-agy-bridge]");
-  assert.equal(providers[2]?.name, "Antigravity ACP [pi-agy-bridge]");
+  assert.equal(providers[1]?.name, "Antigravity [pi-agy-bridge]");
+  assert.equal(providers[2]?.name, "Antigravity [pi-agy-bridge]");
 });

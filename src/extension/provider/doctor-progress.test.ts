@@ -1,9 +1,14 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { Bridge } from "./provider.ts";
+import { AgyAuthentication } from "./auth.ts";
+
+useAuthHomeFixture();
 
 test("doctor command progress and reporting", async (t) => {
   for (const row of [
@@ -35,6 +40,7 @@ test("doctor command progress and reporting", async (t) => {
         await pending;
         await shutdown();
       });
+      t.mock.method(AgyAuthentication.prototype, "detect", async () => undefined);
       const usage = t.mock.method(row.switch ? AcpDriver.prototype : bridge.driver, "usage", async (signal: AbortSignal) => {
         assert.equal(signal.aborted, false);
         entered();

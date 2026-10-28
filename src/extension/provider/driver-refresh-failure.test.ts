@@ -1,4 +1,7 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
+import { AgyAuthentication } from "./auth.ts";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
@@ -7,6 +10,8 @@ import { CliDriver } from "../drivers/cli/driver.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
 
+useAuthHomeFixture();
+
 for (const scenario of [
   { name: "refresh success", refreshFailure: false, discoveryFailure: false, doctorFailure: false },
   { name: "refresh rejection", refreshFailure: true, discoveryFailure: false, doctorFailure: false },
@@ -14,6 +19,7 @@ for (const scenario of [
   { name: "refresh rejection with doctor detection failure", refreshFailure: true, discoveryFailure: false, doctorFailure: true },
 ] as const) {
   test(`driver switch handles ${scenario.name}`, async (t) => {
+    t.mock.method(AgyAuthentication.prototype, "detect", async () => undefined);
     type Handler = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
     let command!: Handler;
     const providers: Provider[] = [];
@@ -45,7 +51,8 @@ for (const scenario of [
 
     await command("acp", { hasUI: true, ui: { setStatus }, modelRegistry: registry } as unknown as ExtensionCommandContext);
 
-    assert.equal(refresh.mock.callCount(), scenario.discoveryFailure ? 0 : 1);
+    assert.equal(refresh.mock.callCount(), scenario.discoveryFailure ? 0 : 2);
+    for (const call of refresh.mock.calls) assert.deepEqual(call.arguments, [{ providers: ["agy"], allowNetwork: false }]);
     assert.equal(providers.length, scenario.discoveryFailure ? 1 : 2);
     assert.equal(bridge.driver.id, scenario.discoveryFailure ? "cli" : "acp");
     if (!scenario.discoveryFailure) assert.equal(providers.at(-1)!.getModels()[0]?.id, "gemini-3.8-flash");

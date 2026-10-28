@@ -1,11 +1,13 @@
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
+import { AgyAuthentication } from "./auth.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import test, { afterEach, beforeEach } from "node:test";
+import test, { afterEach, beforeEach, mock } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
@@ -16,14 +18,18 @@ import { AcpSession } from "../drivers/acp/session.ts";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "../drivers/acp/instructions.ts";
 import { Bridge, streamAgyProvider } from "./provider.ts";
 
+useAuthHomeFixture();
+
 let home: string;
 let previousHome: string | undefined;
 beforeEach(async () => {
+  mock.method(AgyAuthentication.prototype, "detect", async () => undefined);
   home = await mkdtemp(path.join(tmpdir(), "agy-native-home-"));
   previousHome = process.env.GEMINI_HOME;
   process.env.GEMINI_HOME = home;
 });
 afterEach(async () => {
+  mock.restoreAll();
   if (previousHome === undefined) delete process.env.GEMINI_HOME;
   else process.env.GEMINI_HOME = previousHome;
   await rm(home, { recursive: true, force: true });
