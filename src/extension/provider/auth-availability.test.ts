@@ -125,9 +125,9 @@ test("request resolve rejects after bridge shutdown", async () => {
 for (const scenario of [
   { name: "legacy", credential: marker, enabled: true },
   { name: "OAuth", credential: createAgyBridgeCredential("availability"), enabled: true },
-  { name: "unmarked OAuth", credential: { ...createAgyBridgeCredential(), agyBridge: false }, enabled: false },
+  { name: "empty epoch OAuth", credential: { ...createAgyBridgeCredential(), loginEpoch: "" }, enabled: false },
 ]) {
-  test(`bridge availability marker: ${scenario.name}`, () => {
+  test(`bridge availability: ${scenario.name}`, () => {
     assert.equal(isAgyBridgeEnabled(scenario.credential), scenario.enabled);
   });
 }

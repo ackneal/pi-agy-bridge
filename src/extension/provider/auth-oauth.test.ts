@@ -12,7 +12,7 @@ const noProbeBackend: DriverAuthentication = {
 };
 
 for (const epoch of ["test epoch", "a/b:%", "123"]) {
-  test(`local OAuth renewal and marker: ${epoch}`, async (t) => {
+  test(`local OAuth renewal and validation: ${epoch}`, async (t) => {
     const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("Unexpected subprocess"); });
     syncBuiltinESMExports();
     t.after(() => {
@@ -48,13 +48,13 @@ for (const epoch of ["test epoch", "a/b:%", "123"]) {
 }
 
 for (const marker of [undefined, "secret", "agy-bridge:", "agy-bridge:%", "agy-bridge:%20"]) {
-  test(`reject invalid marker ${marker}`, () => {
+  test(`reject invalid bridge API key ${marker}`, () => {
     assert.equal(getAgyBridgeAuthEnvironment(marker), undefined);
   });
 }
 
-for (const patch of [{ agyBridge: false }, { loginEpoch: "" }, { access: "secret" }, { refresh: "secret" }]) {
-  test(`reject invalid credential ${JSON.stringify(patch)}`, async (t) => {
+for (const patch of [{ loginEpoch: "" }, { access: "secret" }, { refresh: "secret" }]) {
+  test(`reject invalid OAuth credential ${JSON.stringify(patch)}`, async (t) => {
     const auth = new AgyAuthentication(noProbeBackend, async () => {});
     t.after(() => auth.close());
     const credential = { ...createAgyBridgeCredential(), ...patch };

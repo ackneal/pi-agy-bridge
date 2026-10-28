@@ -8,7 +8,7 @@ const prefix = "agy-bridge:";
 
 export function createAgyBridgeCredential(loginEpoch: string = randomUUID(), driver?: DriverId): OAuthCredential {
   if (!loginEpoch.trim()) throw new Error("Antigravity CLI authentication session is no longer valid");
-  return { type: "oauth", access: "", refresh: "", expires: Date.now() + year, agyBridge: true, loginEpoch, ...(driver ? { driver } : {}) };
+  return { type: "oauth", access: "", refresh: "", expires: Date.now() + year, loginEpoch, ...(driver ? { driver } : {}) };
 }
 
 export function isAgyBridgeEnabled(credential: Credential | undefined, driver?: DriverId): boolean {
@@ -16,8 +16,7 @@ export function isAgyBridgeEnabled(credential: Credential | undefined, driver?: 
   if (credential?.type === "api_key") {
     return credential.env?.AGY_BRIDGE_ENABLED === "1" || getAgyBridgeAuthEnvironment(credential.key) !== undefined;
   }
-  return credential?.type === "oauth" && credential.agyBridge === true
-    && typeof credential.loginEpoch === "string" && credential.loginEpoch.trim().length > 0
+  return credential?.type === "oauth" && typeof credential.loginEpoch === "string" && credential.loginEpoch.trim().length > 0
     && credential.access === "" && credential.refresh === "";
 }
 

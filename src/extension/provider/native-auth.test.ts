@@ -186,7 +186,6 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     assert.ok(credential.type === "oauth");
     assert.equal(credential.access, "");
     assert.equal(credential.refresh, "");
-    assert.equal(credential.agyBridge, true);
     assert.match(String(credential.loginEpoch), /^[0-9a-f-]{36}$/);
     assert.equal(runtime.isUsingSubscription("agy"), true);
     assert.equal((await runtime.getAvailable("agy")).length, 1);

@@ -96,7 +96,6 @@ test("successful logins return unique epochs and resolve forwards only nonempty 
     finish(index);
     const credential = await login;
     assert.ok(credential.type === "oauth");
-    assert.equal(credential.agyBridge, true);
     const epoch = credential.loginEpoch as string;
     assert.match(epoch!, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     epochs.push(epoch!);
@@ -161,7 +160,7 @@ for (const outcome of ["authenticated", "unauthenticated", "abort", "close", "ma
 
     const result = await settled;
     if (outcome === "authenticated") {
-      assert.ok("value" in result && result.value?.agyBridge === true);
+      assert.ok("value" in result && result.value?.type === "oauth");
       assert.equal(auth.status, "authenticated");
     } else if (outcome === "unauthenticated") {
       assert.deepEqual(result, { value: undefined });
@@ -173,7 +172,7 @@ for (const outcome of ["authenticated", "unauthenticated", "abort", "close", "ma
     }
     const sharedResult = await concurrentSettled;
     if (outcome === "abort") {
-      assert.ok("value" in sharedResult && sharedResult.value?.agyBridge);
+      assert.ok("value" in sharedResult && sharedResult.value?.type === "oauth");
       assert.equal(auth.status, "authenticated");
       assert.equal(auth.failure, undefined);
     } else assert.deepEqual(sharedResult, result);
@@ -185,7 +184,7 @@ for (const outcome of ["authenticated", "unauthenticated", "abort", "close", "ma
       const index = outcome === "manual" ? 2 : 1;
       assert.equal(children.length, index + 1);
       finish(index);
-      assert.ok((await retry)?.agyBridge);
+      assert.ok((await retry)?.type === "oauth");
     }
   });
 }
@@ -211,7 +210,7 @@ test("slow detection leaves credential checks and resolution spawn-free", async 
   }
 
   finish(0);
-  assert.ok((await detection)?.agyBridge);
+  assert.ok((await detection)?.type === "oauth");
 });
 
 for (const output of ["", "Remaining 100%\n"]) {
@@ -247,7 +246,7 @@ for (const caller of ["first", "second", "pre-aborted"] as const) {
     assert.equal(auth.status, "unknown");
     assert.equal(auth.failure, undefined);
     finish(0);
-    assert.ok((await (caller === "first" ? second : first))?.agyBridge);
+    assert.ok((await (caller === "first" ? second : first))?.type === "oauth");
     assert.equal(auth.status, "authenticated");
   });
 }

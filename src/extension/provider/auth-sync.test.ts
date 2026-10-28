@@ -33,7 +33,6 @@ for (const driver of ["cli", "acp"] as const) {
           assert.equal(result?.type, "oauth");
           if (result?.type !== "oauth") return;
           assert.equal(result.driver, driver);
-          assert.equal(result.agyBridge, true);
           assert.equal(result.access, "");
           assert.equal(result.refresh, "");
           assert.ok(result.loginEpoch);
