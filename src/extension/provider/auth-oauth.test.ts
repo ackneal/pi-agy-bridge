@@ -26,8 +26,8 @@ for (const epoch of ["test epoch", "a/b:%", "123"]) {
     assert.deepEqual(refreshed, { ...credential, expires: refreshed.expires });
     assert.ok(refreshed.expires > Date.now());
     assert.equal(isAgyBridgeEnabled(refreshed), true);
-    assert.deepEqual(await auth.oauth.toAuth(refreshed), { apiKey: `agy-bridge:${encodeURIComponent(epoch)}` });
-    const derivedKey = (await auth.oauth.toAuth(refreshed)).apiKey!;
+    const derivedKey = `agy-bridge:${encodeURIComponent(epoch)}`;
+    assert.deepEqual(await auth.oauth.toAuth(refreshed), { apiKey: derivedKey });
     assert.deepEqual(getAgyBridgeAuthEnvironment(derivedKey), {
       AGY_BRIDGE_ENABLED: "1", AGY_BRIDGE_LOGIN_EPOCH: epoch,
     });

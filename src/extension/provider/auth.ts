@@ -62,8 +62,8 @@ export class AgyAuthentication {
         signal.throwIfAborted();
         self.lifecycle.signal.throwIfAborted();
 
-        const keyEnv = getAgyBridgeAuthEnvironment(credential?.key);
-        const epoch = credential?.env?.AGY_BRIDGE_LOGIN_EPOCH ?? keyEnv?.AGY_BRIDGE_LOGIN_EPOCH;
+        const epoch = credential?.env?.AGY_BRIDGE_LOGIN_EPOCH ??
+          getAgyBridgeAuthEnvironment(credential?.key)?.AGY_BRIDGE_LOGIN_EPOCH;
         return {
           auth: {},
           env: { AGY_BRIDGE_ENABLED: "1", ...(typeof epoch === "string" && epoch.length > 0 ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },

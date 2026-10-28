@@ -28,9 +28,6 @@ test("RuntimeSessionSync follows Pi's projected compaction context", async (t) =
       const preCompactionMessages = convertToLlm(manager.buildSessionContext().messages);
       if (scenario.compact) manager.appendCompaction("Earlier conversation summarized", kept, 100);
       const context = manager.buildSessionContext();
-      assert.equal(context.messages.some((message) => message.role === "user" && message.content === "old question"), !scenario.compact);
-      assert.ok(convertToLlm(context.messages).some((message) =>
-        message.role === "assistant" && message.responseId === "historical-agy-session"));
       const pi = new PiContextAdapter();
       const id = pi.bind(manager);
       const store = new RuntimeSessionStore(pi);
@@ -40,7 +37,12 @@ test("RuntimeSessionSync follows Pi's projected compaction context", async (t) =
       if (!scenario.resumed) sync.record(session, preCompactionMessages);
       const checkpoint = scenario.resumed ? await store.set(id, { sessionId: "historical-agy-session" }, preCompactionMessages, undefined, "cli:v1") : undefined;
       const input: RuntimeSessionSyncInput = { syncKey: "key", conversationId: "historical-agy-session", messages: convertToLlm(context.messages), ...(checkpoint ? { checkpoint } : {}) };
+
       const decision = sync.decide(session, input);
+
+      assert.equal(context.messages.some((message) => message.role === "user" && message.content === "old question"), !scenario.compact);
+      assert.ok(convertToLlm(context.messages).some((message) =>
+        message.role === "assistant" && message.responseId === "historical-agy-session"));
       assert.equal(decision.action, scenario.expected);
     });
   }

@@ -1,5 +1,4 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   AnyModel,
@@ -36,10 +35,10 @@ export function streamAgyProvider(
 ): AssistantMessageEventStream {
   debugArtifact("provider-context", { model: model.id, sessionId: options?.sessionId, context });
   const contextTools = context.tools ?? [];
+  const piSessionId = options?.sessionId;
   // Summary routing IDs are not Pi session identities. Keep these requests
   // isolated from the conversation and its executable tools.
-  const piSessionId = options?.sessionId;
-  const standalone = !piSessionId || (options?.cacheRetention === "none" &&
+  const standalone = Boolean(piSessionId && options?.cacheRetention === "none" &&
     !bridge.piContextAdapter.getSessionManager(piSessionId));
   const tools = standalone ? [] : bridge.getTools(context);
   debugLog("mcp", "Pi provider context keys:", Object.keys(context));
@@ -58,6 +57,11 @@ export function streamAgyProvider(
     return stream;
   }
 
+  if (!piSessionId) {
+    adapter.handleTermination("error", `Pi did not provide a sessionId for the ${bridge.driver.label} runtime`);
+    return stream;
+  }
+
   try {
     bridge.driver.validateSelection(model, options);
   } catch (error) {
@@ -66,20 +70,19 @@ export function streamAgyProvider(
   }
 
   const liveSession = standalone
-    ? new LiveSession(piSessionId ?? randomUUID())
-    : bridge.liveSessions.getOrCreate(piSessionId!);
+    ? new LiveSession(piSessionId)
+    : bridge.liveSessions.getOrCreate(piSessionId);
   const preparationId = liveSession.beginPreparation();
   const turn = new Turn({
     session: liveSession,
     adapter,
     context,
     sync: bridge.runtimeSessionSync,
-    store: bridge.runtimeSessionStore,
+    store: standalone ? undefined : bridge.runtimeSessionStore,
     preparationId,
     signal: options?.signal,
     loginEpoch: options?.env?.AGY_BRIDGE_LOGIN_EPOCH,
     sessionVersion: bridge.driver.sessionVersion,
-    persistent: !standalone,
     onWarning: (name, args) => bridge.warnTool(name, args),
   });
 
@@ -87,7 +90,9 @@ export function streamAgyProvider(
     try {
       const runtime = await bridge.driver.prepareSession({
         model, context, tools, options, session: liveSession, preparationId,
-        store: bridge.runtimeSessionStore, sync: bridge.runtimeSessionSync,
+        // Standalone routing must not consult or invalidate conversation checkpoints.
+        store: standalone ? { get: async () => undefined, delete: async () => {} } : bridge.runtimeSessionStore,
+        sync: bridge.runtimeSessionSync,
       });
       const mcpServer = runtime.mcpServer;
       adapter.setModel(runtime.modelId);
