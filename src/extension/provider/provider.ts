@@ -13,6 +13,7 @@ import { PiRuntimeOutput } from "./output.ts";
 import { restoreStoredAgyModels } from "../discovery/models.ts";
 import { Turn } from "./turn.ts";
 import {
+  LiveSession,
   LiveSessionRegistry,
   PiContextAdapter,
 } from "../session/session.ts";
@@ -34,7 +35,12 @@ export function streamAgyProvider(
 ): AssistantMessageEventStream {
   debugArtifact("provider-context", { model: model.id, sessionId: options?.sessionId, context });
   const contextTools = context.tools ?? [];
-  const tools = bridge.getTools(context);
+  const piSessionId = options?.sessionId;
+  // Summary routing IDs are not Pi session identities. Keep these requests
+  // isolated from the conversation and its executable tools.
+  const standalone = Boolean(piSessionId && options?.cacheRetention === "none" &&
+    !bridge.piContextAdapter.getSessionManager(piSessionId));
+  const tools = standalone ? [] : bridge.getTools(context);
   debugLog("mcp", "Pi provider context keys:", Object.keys(context));
   debugLog("mcp", "Pi provider context tools:", contextTools.map((tool) => tool.name));
   debugLog("mcp", "Pi bridge tools:", tools.map((tool) => tool.name));
@@ -51,7 +57,6 @@ export function streamAgyProvider(
     return stream;
   }
 
-  const piSessionId = options?.sessionId;
   if (!piSessionId) {
     adapter.handleTermination("error", `Pi did not provide a sessionId for the ${bridge.driver.label} runtime`);
     return stream;
@@ -64,14 +69,16 @@ export function streamAgyProvider(
     return stream;
   }
 
-  const liveSession = bridge.liveSessions.getOrCreate(piSessionId);
+  const liveSession = standalone
+    ? new LiveSession(piSessionId)
+    : bridge.liveSessions.getOrCreate(piSessionId);
   const preparationId = liveSession.beginPreparation();
   const turn = new Turn({
     session: liveSession,
     adapter,
     context,
     sync: bridge.runtimeSessionSync,
-    store: bridge.runtimeSessionStore,
+    store: standalone ? undefined : bridge.runtimeSessionStore,
     preparationId,
     signal: options?.signal,
     loginEpoch: options?.env?.AGY_BRIDGE_LOGIN_EPOCH,
@@ -83,7 +90,9 @@ export function streamAgyProvider(
     try {
       const runtime = await bridge.driver.prepareSession({
         model, context, tools, options, session: liveSession, preparationId,
-        store: bridge.runtimeSessionStore, sync: bridge.runtimeSessionSync,
+        // Standalone routing must not consult or invalidate conversation checkpoints.
+        store: standalone ? { get: async () => undefined, delete: async () => {} } : bridge.runtimeSessionStore,
+        sync: bridge.runtimeSessionSync,
       });
       const mcpServer = runtime.mcpServer;
       adapter.setModel(runtime.modelId);
@@ -121,6 +130,14 @@ export function streamAgyProvider(
       await turn.send({ model, context, options, reconstructContext: runtime.reconstructContext, syncedMessageCount });
     } catch (error) {
       turn.fail(error);
+    } finally {
+      if (standalone) {
+        try {
+          await stream.result();
+        } finally {
+          await liveSession.dispose();
+        }
+      }
     }
   })().catch((error) => {
     debugLog("session", `${bridge.driver.label} turn cleanup failed:`, error);

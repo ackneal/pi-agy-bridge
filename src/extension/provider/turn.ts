@@ -12,7 +12,7 @@ interface TurnOptions {
   adapter: PiRuntimeOutput;
   context: Context;
   sync: RuntimeSessionSync;
-  store: RuntimeSessionStore;
+  store: RuntimeSessionStore | undefined;
   preparationId: symbol;
   signal: AbortSignal | undefined;
   loginEpoch: string | undefined;
@@ -182,7 +182,7 @@ export class Turn {
 
   private async persist(messages: readonly unknown[]): Promise<void> {
     const { session, store, loginEpoch } = this.options;
-    if (!session.conversationId) return;
+    if (!store || !session.conversationId) return;
 
     await store.set(session.piSessionId, {
       sessionId: session.conversationId,
@@ -212,7 +212,7 @@ export class Turn {
 
     const mcpServer = this.runtime?.mcpServer ?? session.activeMcpServer;
     mcpServer?.setToolCallHandler(null);
-    if (reference === "invalidate") {
+    if (reference === "invalidate" && store) {
       // The tombstone is written synchronously before asynchronous resource cleanup.
       void store.delete(session.piSessionId).catch((error) => {
         debugLog("session", "Could not invalidate failed runtime reference:", error);
