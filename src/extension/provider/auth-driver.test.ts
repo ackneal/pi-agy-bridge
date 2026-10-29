@@ -7,10 +7,10 @@ for (const driver of ["cli", "acp"] as const) {
   for (const recorded of [undefined, "cli", "acp"] as const) {
     test(`${driver} credential resolution with ${recorded ?? "legacy"} marker`, async () => {
       const auth = new AgyAuthentication({ label: "Fixture", probe: async () => true, login: async () => {} }, async () => {}, driver);
-      const credential = createAgyBridgeCredential("fixture", recorded);
+      const credential = { ...createAgyBridgeCredential(), ...(recorded ? { driver: recorded } : {}) };
       const allowed = recorded === undefined || recorded === driver;
       assert.equal(isAgyBridgeEnabled(credential, driver), allowed);
-      if (allowed) assert.deepEqual(await auth.oauth.toAuth(credential), { apiKey: "agy-bridge:fixture" });
+      if (allowed) assert.deepEqual(await auth.oauth.toAuth(credential), { apiKey: "agy-bridge:enabled" });
       else await assert.rejects(auth.oauth.toAuth(credential), /Invalid/);
       auth.close();
     });
@@ -27,7 +27,7 @@ for (const driver of ["cli", "acp"] as const) {
       auth.setBackend(backend, next);
       const second = await auth.oauth.login(interaction);
       assert.equal(second.driver, next);
-      assert.notEqual(first.loginEpoch, second.loginEpoch);
+      assert.equal(first.driver, driver);
       await assert.rejects(auth.oauth.toAuth(first), /Invalid/);
     } finally {
       auth.close();

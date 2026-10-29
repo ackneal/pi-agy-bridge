@@ -21,7 +21,7 @@ const noRequests = {
   streamSimple: () => { throw new Error("network forbidden"); },
 };
 
-const existing = createAgyBridgeCredential("existing");
+const existing = createAgyBridgeCredential();
 const legacy: Credential = { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1", AGY_BRIDGE_LOGIN_EPOCH: "legacy-epoch" } };
 const other: Credential = { type: "api_key", key: "other" };
 
@@ -31,9 +31,7 @@ for (const scenario of [
   { name: "error propagates without saving", probes: 1, error: true },
   { name: "existing marker skips detection unchanged", initial: existing, probes: 0 },
   { name: "other credential is untouched", initial: other, probes: 0 },
-  { name: "legacy upgrades preserving epoch", initial: legacy, probes: 0, saved: true },
-  { name: "legacy without epoch generates one", initial: { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1" } } satisfies Credential, probes: 0, saved: true, generated: true },
-  { name: "legacy empty epoch generates one", initial: { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1", AGY_BRIDGE_LOGIN_EPOCH: "" } } satisfies Credential, probes: 0, saved: true, generated: true },
+  { name: "legacy marker is ignored", initial: legacy, probes: 0 },
   { name: "changed credential wins", probes: 1, changed: true },
   { name: "abort prevents persistence", probes: 1, abort: true },
   { name: "shutdown prevents persistence", probes: 1, close: true },
@@ -61,7 +59,7 @@ for (const scenario of [
     if (scenario.initial) await store(scenario.initial);
     await registry.refresh({ providers: ["agy"], allowNetwork: false });
     if (!scenario.initial) assert.equal(registry.getAvailable().length, 0);
-    const detected = createAgyBridgeCredential("detected");
+    const detected = createAgyBridgeCredential();
     const probe = t.mock.method(authentication, "detect", async () => {
       if (scenario.changed) await store(other);
       if (scenario.abort) controller.abort(new Error("cancelled"));
@@ -78,12 +76,14 @@ for (const scenario of [
     const stored = readStoredCredential("agy", authPath);
     if (scenario.saved) {
       assert.equal(stored?.type, "oauth");
-      if (scenario.generated) assert.match(String(stored?.loginEpoch), /^[0-9a-f-]{36}$/);
-      else assert.equal(stored?.loginEpoch, scenario.initial ? "legacy-epoch" : "detected");
+      assert.equal(stored?.loginEpoch, undefined);
       await registry.refresh({ providers: ["agy"], allowNetwork: false });
       assert.equal(registry.getAvailable().length, 1);
       assert.equal(registry.isUsingOAuth(models[0]!), true);
       assert.equal((await runtime.checkAuth("agy"))?.type, "oauth");
+    } else if (scenario.name === "legacy marker is ignored") {
+      assert.equal(stored?.type, "oauth");
+      assert.equal(stored?.loginEpoch, undefined);
     } else {
       assert.deepEqual(stored, scenario.changed ? other : scenario.initial);
     }
@@ -105,7 +105,7 @@ for (const row of [
     await writeFile(authPath, JSON.stringify(row.initial ? { agy: row.initial } : {}));
     const authentication = new AgyAuthentication(noProbeBackend, async () => { throw new Error("login forbidden"); });
     t.after(() => authentication.close());
-    t.mock.method(authentication, "detect", async () => createAgyBridgeCredential("detected"));
+    t.mock.method(authentication, "detect", async () => createAgyBridgeCredential());
     const create = ModelRuntime.create.bind(ModelRuntime);
     t.mock.method(ModelRuntime, "create", (options: Parameters<typeof ModelRuntime.create>[0]) => create({ ...options, credentials }));
     const modify = credentials.modify.bind(credentials);
@@ -130,6 +130,6 @@ for (const row of [
     const stored = readStoredCredential("agy", authPath);
     assert.equal(stored?.type, "oauth");
     assert.ok(stored?.type === "oauth");
-    assert.equal(stored.loginEpoch, row.initial ? "legacy-epoch" : "detected");
+    assert.equal(stored.loginEpoch, undefined);
   });
 }

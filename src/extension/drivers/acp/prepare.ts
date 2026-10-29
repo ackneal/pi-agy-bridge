@@ -33,7 +33,7 @@ export async function prepareAcpRuntime(
     await liveSession.dispose({ preparationId });
     check();
   }
-  const checkpoint = await dependencies.store.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH, dependencies.sessionVersion);
+  const checkpoint = await dependencies.store.get(liveSession.piSessionId, dependencies.sessionVersion);
   check();
   const latest = [...context.messages].reverse().find((message) => message.role === "assistant");
   const decision = dependencies.sync.decide(liveSession, {

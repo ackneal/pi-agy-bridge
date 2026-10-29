@@ -1,9 +1,8 @@
-import { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { readStoredCredential, type ExtensionAPI, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, readStoredCredential, type ExtensionAPI, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { createAgyBridgeCredential } from "./auth.ts";
@@ -16,7 +15,7 @@ for (const driverId of ["cli", "acp"] as const) {
       test(`${driverId} startup ${outcome} with ${saved} credential`, async (t) => {
         const directory = await registerAuthHomeFixture(t);
         const authPath = path.join(directory, "auth.json");
-        const original = saved === "absent" ? undefined : createAgyBridgeCredential("fixture", saved === "matching" ? driverId : driverId === "cli" ? "acp" : "cli");
+        const original = saved === "absent" ? undefined : { ...createAgyBridgeCredential(), driver: saved === "matching" ? driverId : driverId === "cli" ? "acp" : "cli" };
         if (original) await writeFile(authPath, JSON.stringify({ agy: original }));
         let start!: (event: SessionStartEvent, context: ExtensionContext) => void;
         let shutdown!: () => Promise<void>;
@@ -45,6 +44,8 @@ for (const driverId of ["cli", "acp"] as const) {
         bridge.start();
         t.after(() => shutdown());
 
+        const piLogin = t.mock.method(ModelRuntime.prototype, "login");
+        const piLogout = t.mock.method(ModelRuntime.prototype, "logout");
         assert.equal(start({ type: "session_start", reason: "startup" }, context), undefined);
         await completed;
 
@@ -55,7 +56,7 @@ for (const driverId of ["cli", "acp"] as const) {
         if (outcome === "success") {
           assert.equal(record?.type, "oauth");
           if (record?.type === "oauth") assert.equal(record.driver, driverId);
-        } else if (outcome === "required" || saved === "other driver") assert.equal(record, undefined);
+        } else if (outcome === "required") assert.equal(record, undefined);
         else assert.deepEqual(record, original);
         assert.equal(sendMessage.mock.callCount(), outcome === "required" && !hasUI ? 1 : 0);
         assert.equal(notify.mock.callCount(), 0);
@@ -69,6 +70,8 @@ for (const driverId of ["cli", "acp"] as const) {
         start({ type: "session_start", reason: "reload" }, context);
         await new Promise<void>((resolve) => setImmediate(resolve));
         assert.equal(probe.mock.callCount(), 1);
+        assert.equal(piLogin.mock.callCount(), outcome === "success" && saved !== "matching" ? 1 : 0);
+        assert.equal(piLogout.mock.callCount(), outcome === "required" && saved !== "absent" ? 1 : 0);
         assert.equal(sendMessage.mock.callCount(), outcome === "required" && !hasUI ? 1 : 0);
         assert.equal(notify.mock.callCount(), 0);
         if (outcome === "required" && hasUI) assert.deepEqual(setStatus.mock.calls.at(-1)?.arguments, ["agy-bridge", undefined]);

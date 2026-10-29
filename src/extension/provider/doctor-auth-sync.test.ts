@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { readStoredCredential, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, readStoredCredential, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AuthenticationRequiredError } from "../shared/types.ts";
@@ -15,7 +15,7 @@ for (const driverId of ["cli", "acp"] as const) {
     test(`${driverId} doctor synchronizes ${outcome} without a second notification`, async (t) => {
       const directory = await registerAuthHomeFixture(t);
       const authPath = path.join(directory, "auth.json");
-      const original = createAgyBridgeCredential("doctor-fixture", driverId);
+      const original = { ...createAgyBridgeCredential(), driver: driverId };
       await writeFile(authPath, JSON.stringify({ agy: original }));
       const driver = driverId === "cli" ? new CliDriver() : new AcpDriver();
       t.mock.method(driver, "detectExecutable", () => undefined);
@@ -43,11 +43,17 @@ for (const driverId of ["cli", "acp"] as const) {
       bridge.start();
       t.after(() => shutdown());
 
-      await doctor("", { hasUI: true, ui: { notify, setStatus: () => {} }, modelRegistry: { refresh } } as unknown as ExtensionContext);
+      const piLogin = t.mock.method(ModelRuntime.prototype, "login");
+      const piLogout = t.mock.method(ModelRuntime.prototype, "logout");
+      const context = { hasUI: true, ui: { notify, setStatus: () => {} }, modelRegistry: { refresh } } as unknown as ExtensionContext;
+      await doctor("", context);
+      await doctor("", context);
 
+      assert.equal(piLogin.mock.callCount(), 0);
+      assert.equal(piLogout.mock.callCount(), outcome === "unauthenticated" ? 1 : 0);
       assert.equal(login.mock.callCount(), 0);
       assert.equal(notify.mock.callCount(), 0);
-      assert.equal(sendMessage.mock.callCount(), 1);
+      assert.equal(sendMessage.mock.callCount(), 2);
       assert.match(sendMessage.mock.calls[0]!.arguments[0].content, new RegExp(`Auth: ${outcome}`));
       if (outcome === "unauthenticated") assert.match(sendMessage.mock.calls[0]!.arguments[0].content, /Run \/login and select Antigravity \[pi-agy-bridge\]/);
       assert.deepEqual(refresh.mock.calls[0]!.arguments, [{ providers: ["agy"], allowNetwork: false }]);
@@ -58,7 +64,7 @@ for (const driverId of ["cli", "acp"] as const) {
         assert.equal(record?.type, "oauth");
         if (record?.type === "oauth") {
           assert.equal(record.driver, driverId);
-          assert.equal(record.loginEpoch, original.loginEpoch);
+          assert.equal(record.loginEpoch, undefined);
         }
       }
     });

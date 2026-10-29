@@ -33,7 +33,7 @@ for (const row of [
     const turn = new Turn({
       session, adapter, context: { messages: [] }, sync: new RuntimeSessionSync(),
       store: new RuntimeSessionStore(new PiContextAdapter()), preparationId,
-      signal: undefined, loginEpoch: undefined, sessionVersion: "acp:v1", onWarning,
+      signal: undefined, sessionVersion: "acp:v1", onWarning,
     });
     turn.attach({ proc, mcpServer });
     if (row.handoff) adapter.handleBridgeToolCalls([{ type: "toolCall", id: "read", name: "read", arguments: {} }]);

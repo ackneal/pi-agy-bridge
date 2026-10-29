@@ -80,7 +80,7 @@ for (const row of [
       await store.set(id, {
         sessionId: original.conversationId!,
         ...(!row.legacy ? { compatibilityKey: first.proc.compatibilityKey! } : {}),
-      }, [], undefined, driver.sessionVersion);
+      }, [], driver.sessionVersion);
       await original.dispose();
       target = new LiveSession(id);
       sessions.push(target);

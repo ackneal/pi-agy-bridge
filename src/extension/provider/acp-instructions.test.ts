@@ -94,7 +94,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     assert.equal(runtime.options.systemPrompt, composeAcpSystemPrompt(context));
     assert.ok(runtime.options.systemPrompt?.includes("PRIVATE_SECTION"));
     assert.equal(runtime.compatibilityKey, fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt(context)])));
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.compatibilityKey, runtime.compatibilityKey);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, runtime.compatibilityKey);
     assert.ok(!JSON.stringify(prompts[0]).includes("PRIVATE_"));
     assert.ok(gateway.hasPendingCalls);
     const call = first.message.content.find((part) => part.type === "toolCall");
@@ -112,7 +112,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     const active = session.activeProcess;
     assert.ok(active instanceof AcpRuntimeSession);
     assert.equal(active.options.systemPrompt, composeAcpSystemPrompt(next));
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.compatibilityKey, fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt(next)])));
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt(next)])));
     if (changed) {
       assert.notEqual(active, runtime);
       assert.equal(resolve.mock.callCount(), 0);

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { ApiKeyAuth, Credential, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import type { AgyUsage } from "../runtime/usage.ts";
 import type { BridgeDriver, DriverAuthentication, DriverFailure, DriverId } from "../drivers/types.ts";
@@ -6,10 +5,10 @@ import { AuthenticationRequiredError } from "../shared/types.ts";
 
 const year = 365 * 24 * 60 * 60 * 1000;
 const prefix = "agy-bridge:";
+const syntheticKey = "enabled";
 
-export function createAgyBridgeCredential(loginEpoch: string = randomUUID(), driver?: DriverId): OAuthCredential {
-  if (!loginEpoch.trim()) throw new Error("Antigravity CLI authentication session is no longer valid");
-  return { type: "oauth", access: "", refresh: "", expires: Date.now() + year, loginEpoch, ...(driver ? { driver } : {}) };
+export function createAgyBridgeCredential(driver?: DriverId): OAuthCredential {
+  return { type: "oauth", access: "", refresh: "", expires: Date.now() + year, ...(driver ? { driver } : {}) };
 }
 
 export function isAgyBridgeEnabled(credential: Credential | undefined, driver?: DriverId): boolean {
@@ -17,16 +16,14 @@ export function isAgyBridgeEnabled(credential: Credential | undefined, driver?: 
   if (credential?.type === "api_key") {
     return credential.env?.AGY_BRIDGE_ENABLED === "1" || getAgyBridgeAuthEnvironment(credential.key) !== undefined;
   }
-  return credential?.type === "oauth" && typeof credential.loginEpoch === "string" && credential.loginEpoch.trim().length > 0
-    && credential.access === "" && credential.refresh === "";
+  return credential?.type === "oauth" && credential.access === "" && credential.refresh === "";
 }
 
 export function getAgyBridgeAuthEnvironment(apiKey?: string): Record<string, string> | undefined {
   if (!apiKey?.startsWith(prefix)) return undefined;
   try {
-    const epoch = decodeURIComponent(apiKey.slice(prefix.length));
-    if (!epoch.trim()) return undefined;
-    return { AGY_BRIDGE_ENABLED: "1", AGY_BRIDGE_LOGIN_EPOCH: epoch };
+    if (!decodeURIComponent(apiKey.slice(prefix.length)).trim()) return undefined;
+    return { AGY_BRIDGE_ENABLED: "1" };
   } catch {
     return undefined;
   }
@@ -66,11 +63,9 @@ export class AgyAuthentication {
         signal.throwIfAborted();
         self.lifecycle.signal.throwIfAborted();
 
-        const epoch = credential?.env?.AGY_BRIDGE_LOGIN_EPOCH ??
-          getAgyBridgeAuthEnvironment(credential?.key)?.AGY_BRIDGE_LOGIN_EPOCH;
         return {
           auth: {},
-          env: { AGY_BRIDGE_ENABLED: "1", ...(typeof epoch === "string" && epoch.length > 0 ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },
+          env: { AGY_BRIDGE_ENABLED: "1" },
           source: self.backend.label,
         };
       },
@@ -88,7 +83,7 @@ export class AgyAuthentication {
         this.lifecycle.signal.throwIfAborted();
         if (this.loggingIn) throw new Error("Antigravity CLI authentication is already in progress");
         if (!isAgyBridgeEnabled(credential, this.driver)) throw new Error("Invalid Antigravity CLI bridge credentials");
-        return { apiKey: prefix + encodeURIComponent(credential.loginEpoch as string) };
+        return { apiKey: prefix + encodeURIComponent(syntheticKey) };
       },
       login: async (interaction) => {
         if (this.loggingIn) throw new Error("Antigravity CLI authentication is already in progress");
@@ -118,7 +113,7 @@ export class AgyAuthentication {
           if (capturedUsage) {
             this.usage = capturedUsage;
           }
-          return createAgyBridgeCredential(undefined, this.driver);
+          return createAgyBridgeCredential(this.driver);
         } catch (error) {
           if (generation === this.generation) this.recordFailure(error);
           throw error;
@@ -220,7 +215,7 @@ export class AgyAuthentication {
       if (authenticated && capturedUsage) {
         this.usage = capturedUsage;
       }
-      return authenticated ? createAgyBridgeCredential(undefined, this.driver) : undefined;
+      return authenticated ? createAgyBridgeCredential(this.driver) : undefined;
     } catch (error) {
       if (generation === this.generation) this.recordFailure(error);
       throw error;

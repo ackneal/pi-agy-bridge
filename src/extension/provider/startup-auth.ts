@@ -11,9 +11,8 @@ export async function autoConfigureAgyAuthentication(
   const original = readStoredCredential("agy", authPath);
   if (original?.type === "oauth" || (original && !isAgyBridgeEnabled(original))) return;
 
-  const legacyEpoch = original?.type === "api_key" ? original.env?.AGY_BRIDGE_LOGIN_EPOCH : undefined;
   const marker = original?.type === "api_key"
-    ? createAgyBridgeCredential(legacyEpoch?.trim() ? legacyEpoch : undefined)
+    ? createAgyBridgeCredential()
     : await authentication.detect(signal);
   signal.throwIfAborted();
   if (!marker) return;

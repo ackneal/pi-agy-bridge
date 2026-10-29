@@ -106,11 +106,12 @@ describe("formatContextPrompt provider semantics", () => {
 });
 
 for (const scenario of [
-  { name: "legacy enabled", marker: "1", apiKey: undefined, enabled: true, epoch: undefined },
-  { name: "missing credential", marker: undefined, apiKey: undefined, enabled: false, epoch: undefined },
-  { name: "disabled marker", marker: "0", apiKey: undefined, enabled: false, epoch: undefined },
-  { name: "OAuth setup marker", marker: undefined, apiKey: "agy-bridge:test-epoch", enabled: true, epoch: "test-epoch" },
-  { name: "invalid OAuth marker", marker: undefined, apiKey: "agy-bridge:", enabled: false, epoch: undefined },
+  { name: "legacy enabled", marker: "1", apiKey: undefined, enabled: true },
+  { name: "missing credential", marker: undefined, apiKey: undefined, enabled: false },
+  { name: "disabled marker", marker: "0", apiKey: undefined, enabled: false },
+  { name: "historical OAuth setup marker", marker: undefined, apiKey: "agy-bridge:test-epoch", enabled: true },
+  { name: "OAuth setup marker", marker: undefined, apiKey: "agy-bridge:enabled", enabled: true },
+  { name: "invalid OAuth marker", marker: undefined, apiKey: "agy-bridge:", enabled: false },
 ]) {
   it(`stream gate with unknown auth status: ${scenario.name}`, async (t) => {
     let provider: Provider | undefined;
@@ -141,7 +142,7 @@ for (const scenario of [
     }
     assert.equal(lookup.mock.callCount(), scenario.enabled ? 2 : 0);
     if (scenario.enabled) {
-      for (const call of lookup.mock.calls) assert.equal(call.arguments[1], scenario.epoch);
+      for (const call of lookup.mock.calls) assert.deepEqual(call.arguments, ["gate-test", bridge.driver.sessionVersion]);
     }
   });
 }

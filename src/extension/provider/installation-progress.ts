@@ -18,24 +18,24 @@ export class AcpInstallationProgress {
     statusManager = new ProgressStatus(),
   ) {
     this.getUI = getUI;
-    this.statusManager = statusManager;
     this.write = write;
+    this.statusManager = statusManager;
   }
 
   update(progress: DriverInstallationProgress): void {
-    if (this.lastProgress === progress) return;
+    if (progress.phase === "validate" || this.lastProgress === progress) return;
     const previousPhase = this.lastProgress?.phase;
     this.lastProgress = progress;
     const ui = this.getUI();
 
     if (progress.phase === "complete" || progress.phase === "error" || progress.phase === "cancelled") {
-      this.status(ui, undefined);
+      this.statusManager.set(this.statusId, ui, undefined);
       if (progress.phase === "error") this.notify(ui, progress.message);
-      else if (!ui) this.write(progress.message);
+      else if (!ui && (previousPhase === "download" || previousPhase === "verify" || previousPhase === "extract")) this.write(progress.message);
       return;
     }
 
-    const displayed = this.status(ui, progress.message);
+    const displayed = this.statusManager.set(this.statusId, ui, progress.message);
     const now = Date.now();
     if (!displayed && (progress.phase !== previousPhase || now - this.lastStderrAt >= 2000)) {
       this.write(progress.message);
@@ -46,17 +46,13 @@ export class AcpInstallationProgress {
   clear(): void {
     this.lastProgress = undefined;
     this.lastStderrAt = -Infinity;
-    this.status(this.getUI(), undefined);
-  }
-
-  private status(ui: ProgressUI | undefined, message: string | undefined): boolean {
-    return this.statusManager.set(this.statusId, ui, message);
+    this.statusManager.set(this.statusId, this.getUI(), undefined);
   }
 
   private notify(ui: ProgressUI | undefined, message: string): void {
     if (ui) {
       try { ui.notify(message, "error"); return; }
-      catch { /* A broken UI must not stop the installation or hide its error. */ }
+      catch { /* A broken UI must not hide an actionable error. */ }
     }
     this.write(message);
   }

@@ -89,7 +89,7 @@ for (const row of [
     assert.deepEqual(notify.mock.calls[0]!.arguments, [
       `Antigravity ACP: unverified tool activity — ${row.tool} ${JSON.stringify(row.args)}`, "warning",
     ]);
-    const checkpoint = await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion);
+    const checkpoint = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
     assert.equal(checkpoint?.sessionId, session.activeProcess.session.id);
   });
 }
@@ -162,8 +162,8 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
     assert.equal(runtime.session.id, first.message.responseId);
     assert.equal(session.driverId, "acp");
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, runtime.session.id);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, "cli:v1"), undefined);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, runtime.session.id);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, "cli:v1"), undefined);
 
     if (scenario === "cancel" || scenario === "failure") {
       if (scenario === "cancel") controller.abort();
@@ -177,7 +177,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(session.activeProcess, null);
       assert.equal(session.activeMcpServer, null);
-      assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
+      assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
       assert.equal(close.mock.callCount(), 1);
       assert.equal(resolve.mock.callCount(), 0);
@@ -199,7 +199,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
         assert.equal(second.reason, "error");
         assert.match(second.error.errorMessage!, scenario === "unknown" ? /Unknown tool result ID: unknown-call/ : scenario === "duplicate" ? /Duplicate tool result ID:/ : /Missing tool result ID:/);
         assert.equal(session.activeProcess, null);
-        assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
+        assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
         assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
         assert.equal(close.mock.callCount(), 1);
       }
@@ -224,7 +224,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
   await bridge.runtimeSessionStore.set(sessionId, {
     sessionId: "stale-session-id",
     compatibilityKey: fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt({ messages: [] })])),
-  }, [], undefined, bridge.driver.sessionVersion);
+  }, [], bridge.driver.sessionVersion);
   t.after(async () => {
     await bridge.liveSessions.disposeAll();
     t.mock.restoreAll();
@@ -252,7 +252,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
   assert.equal(prepareAttempts, 2);
   assert.equal(session.driverId, "acp");
   assert.equal(session.conversationId, "synthetic-session");
-  assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, "synthetic-session");
+  assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, "synthetic-session");
   assert.equal(events.at(-1)?.type, "done");
 });
 

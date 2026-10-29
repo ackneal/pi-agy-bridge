@@ -186,7 +186,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     assert.ok(credential.type === "oauth");
     assert.equal(credential.access, "");
     assert.equal(credential.refresh, "");
-    assert.match(String(credential.loginEpoch), /^[0-9a-f-]{36}$/);
+    assert.equal("loginEpoch" in credential, false);
     assert.equal(runtime.isUsingSubscription("agy"), true);
     assert.equal((await runtime.getAvailable("agy")).length, 1);
     assert.deepEqual(JSON.parse(await readFile(path.join(directory, "auth.json"), "utf8")), { agy: credential });
@@ -204,7 +204,7 @@ for (const scenario of ["native logout and relogin", "native URL and code login"
     const relogin = await runtime.login("agy", "oauth", interaction);
     await runtime.refresh({ providers: ["agy"], allowNetwork: true });
     assert.ok(relogin.type === "oauth");
-    assert.notEqual(relogin.loginEpoch, credential.loginEpoch);
+    assert.equal("loginEpoch" in relogin, false);
     assert.equal((await runtime.getAvailable("agy")).length, 1);
     authenticated = false;
     const countBeforeExpiredRequest = processCount;

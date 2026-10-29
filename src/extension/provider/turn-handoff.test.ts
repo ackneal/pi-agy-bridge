@@ -64,7 +64,7 @@ test("delayed submission failure terminates the next turn reusing the same runti
     adapters.push(adapter);
     const turn = new Turn({
       session, adapter, context: { messages }, sync, store, preparationId,
-      signal: undefined, loginEpoch: undefined, sessionVersion: "cli:v1",
+      signal: undefined, sessionVersion: "cli:v1",
     });
     turn.attach({ proc, mcpServer });
     const submitted = turn.send({ model, context: { messages }, options: undefined,
@@ -96,5 +96,5 @@ test("delayed submission failure terminates the next turn reusing the same runti
   assert.equal(dispose.mock.callCount(), 1);
   await dispose.mock.calls[0]!.result;
   assert.equal(abort.mock.callCount(), 1);
-  assert.equal(await store.get(id, undefined, "cli:v1"), undefined);
+  assert.equal(await store.get(id, "cli:v1"), undefined);
 });

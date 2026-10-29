@@ -90,32 +90,25 @@ test("pending login blocks concurrent login and resolution with an old marker", 
   assert.equal((await login).type, "oauth");
 });
 
-test("successful logins return unique epochs and resolve forwards only nonempty epochs without spawning", async (t) => {
+test("login credentials and resolved environment do not depend on historical epochs", async (t) => {
   const { auth, children, finish } = setup(t);
   const signal = new AbortController().signal;
-  const epochs: string[] = [];
-  for (let index = 0; index < 2; index++) {
-    const login = auth.oauth.login({ signal, notify: () => {}, prompt: async () => "" });
-    await Promise.resolve();
-    finish(index);
-    const credential = await login;
-    assert.ok(credential.type === "oauth");
-    const epoch = credential.loginEpoch as string;
-    assert.match(epoch!, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    epochs.push(epoch!);
-  }
-  assert.notEqual(epochs[0], epochs[1]);
-  for (const epoch of [undefined, "", epochs[0]]) {
-    const env = { AGY_BRIDGE_ENABLED: "1", ...(epoch === undefined ? {} : { AGY_BRIDGE_LOGIN_EPOCH: epoch }) };
-    const credential = { type: "api_key" as const, env };
-    const context = { ctx: defaultProviderAuthContext(), signal, credential };
+  const login = auth.oauth.login({ signal, notify: () => {}, prompt: async () => "" });
+  await Promise.resolve();
+  finish(0);
+  assert.equal((await login).type, "oauth");
+
+  for (const env of [
+    { AGY_BRIDGE_ENABLED: "1" },
+    { AGY_BRIDGE_ENABLED: "1", AGY_BRIDGE_LOGIN_EPOCH: "legacy-epoch" },
+  ]) {
+    const context = { ctx: defaultProviderAuthContext(), signal, credential: { type: "api_key" as const, env } };
     assert.deepEqual(await auth.method.check!(context), { type: "api_key", source: "Antigravity CLI" });
     assert.deepEqual(await auth.method.resolve(context), {
-      auth: {}, source: "Antigravity CLI",
-      env: { AGY_BRIDGE_ENABLED: "1", ...(epoch ? { AGY_BRIDGE_LOGIN_EPOCH: epoch } : {}) },
+      auth: {}, source: "Antigravity CLI", env: { AGY_BRIDGE_ENABLED: "1" },
     });
-    assert.equal(children.length, 2);
   }
+  assert.equal(children.length, 1);
 });
 
 test("pending failed login never returns a success credential", async (t) => {

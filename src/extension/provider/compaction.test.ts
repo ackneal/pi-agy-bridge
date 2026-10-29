@@ -7,7 +7,6 @@ import { compact, generateSummaryWithUsage, ModelRuntime, SessionManager, type E
 import { normalizeContext, type Model, type Provider } from "@earendil-works/pi-ai";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import type { BridgeDriver, DriverId, DriverSession, RuntimeEvent } from "../drivers/types.ts";
-import { createAgyBridgeCredential } from "./auth.ts";
 import { Bridge, streamAgyProvider } from "./provider.ts";
 
 const model = {
@@ -34,7 +33,7 @@ for (const id of ["cli", "acp"] as DriverId[]) {
         async prepareSession(input) {
           prepared++;
           assert.deepEqual(input.tools, []);
-          assert.equal(await input.store.get(input.session.piSessionId, undefined, "test:v1"), undefined);
+          assert.equal(await input.store.get(input.session.piSessionId, "test:v1"), undefined);
           await input.store.delete(input.session.piSessionId);
           assert.equal(input.options?.cacheRetention, "none");
           assert.equal(input.context.messages[0]?.role, "system");
@@ -74,7 +73,7 @@ for (const id of ["cli", "acp"] as DriverId[]) {
       });
       const manager = SessionManager.inMemory();
       const normalId = bridge.piContextAdapter.bind(manager);
-      await bridge.runtimeSessionStore.set(normalId, { sessionId: "normal-conversation" }, [], undefined, "test:v1");
+      await bridge.runtimeSessionStore.set(normalId, { sessionId: "normal-conversation" }, [], "test:v1");
       const normalBranch = manager.getBranch();
       const persist = t.mock.method(bridge.runtimeSessionStore, "set", async () => { assert.fail("standalone request must not persist a checkpoint"); });
       const lookup = t.mock.method(bridge.runtimeSessionStore, "get", async () => { assert.fail("standalone preparation must not read a checkpoint"); });
@@ -122,19 +121,15 @@ for (const id of ["cli", "acp"] as DriverId[]) {
   }
 }
 
-for (const stored of ["oauth", "legacy"] as const) {
-  test(`ModelRuntime pre-resolved compaction auth succeeds for ${stored} credential`, async (t) => {
+test("ModelRuntime pre-resolved compaction auth succeeds for enabled credentials", async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-compaction-auth-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const authPath = path.join(directory, "auth.json");
     await writeFile(authPath, JSON.stringify({
-      agy: stored === "oauth"
-        ? createAgyBridgeCredential("compaction-epoch")
-        : { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1", AGY_BRIDGE_LOGIN_EPOCH: "compaction-epoch" } },
+      agy: { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1" } },
     }));
     const runtime = await ModelRuntime.create({ modelsPath: null, authPath, refreshOnCreate: false });
     let handler: ((event: RuntimeEvent) => void) | undefined;
-    let seenEpoch: string | undefined;
     const driver: BridgeDriver = {
       id: "acp", label: "acp", sessionVersion: "test:v1",
       initialModels: [model],
@@ -143,7 +138,6 @@ for (const stored of ["oauth", "legacy"] as const) {
       discoverModels: async () => [model],
       usage: async () => undefined,
       async prepareSession(input) {
-        seenEpoch = input.options?.env?.AGY_BRIDGE_LOGIN_EPOCH;
         const ipc = new BridgeIPC([], input.session.id, input.session.resources);
         const proc: DriverSession = {
           driver: "acp", isRunning: true,
@@ -181,6 +175,4 @@ for (const stored of ["oauth", "legacy"] as const) {
       (selected, context, options) => runtime.streamSimple(selected, context, options), resolvedAuth.env);
 
     assert.match(result.summary, /Compacted through ModelRuntime/);
-    assert.equal(seenEpoch, "compaction-epoch");
   });
-}

@@ -17,7 +17,7 @@ for (const row of [
   { name: "leaves an unauthenticated Antigravity CLI unconfigured", stored: "missing", authenticated: false, enabled: false },
   { name: "detects existing OAuth login", stored: "oauth", authenticated: true, enabled: true },
   { name: "detects expired OAuth login", stored: "expired", authenticated: true, enabled: true },
-  { name: "detects login with the legacy setup marker", stored: "legacy", authenticated: true, enabled: true },
+  { name: "synchronizes the legacy setup marker", stored: "legacy", authenticated: true, enabled: true },
 ] as const) {
   test(`startup subscription: ${row.name}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-auto-subscription-"));
@@ -28,7 +28,7 @@ for (const row of [
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     });
     const authPath = path.join(directory, "auth.json");
-    const marker = createAgyBridgeCredential("existing-epoch");
+    const marker = createAgyBridgeCredential();
     if (row.stored !== "missing") {
       await writeFile(authPath, JSON.stringify({ agy: row.stored === "legacy" ? {
         type: "api_key", env: { AGY_BRIDGE_ENABLED: "1", AGY_BRIDGE_LOGIN_EPOCH: "existing-epoch" },
@@ -91,19 +91,19 @@ for (const row of [
 
     assert.equal(detect.mock.callCount(), 1);
     assert.equal(probe.mock.callCount(), 1);
-    assert.equal(runtime.isUsingSubscription("agy"), row.enabled);
-    assert.equal(registry.getAvailable().length, row.enabled ? 1 : 0);
-    assert.deepEqual(await runtime.listCredentials(), row.enabled ? [{ providerId: "agy", type: "oauth" }] : []);
+    const enabled = row.enabled;
+    assert.equal(runtime.isUsingSubscription("agy"), enabled);
+    assert.equal(registry.getAvailable().length, enabled ? 1 : 0);
+    assert.deepEqual(await runtime.listCredentials(), enabled ? [{ providerId: "agy", type: "oauth" }] : []);
     if (row.enabled) {
       const auth = await runtime.getAuth("agy");
       const saved = JSON.parse(await readFile(authPath, "utf8")).agy;
       assert.equal(saved.type, "oauth");
       assert.equal(saved.access, "");
       assert.equal(saved.refresh, "");
-      assert.equal(saved.loginEpoch, row.stored === "missing" ? saved.loginEpoch : "existing-epoch");
-      assert.ok(typeof saved.loginEpoch === "string" && saved.loginEpoch.length > 0);
+      assert.equal(saved.loginEpoch, undefined);
       assert.ok(saved.expires > Date.now() + 300000);
-      assert.equal(getAgyBridgeAuthEnvironment(auth?.auth.apiKey)?.AGY_BRIDGE_LOGIN_EPOCH, saved.loginEpoch);
+      assert.deepEqual(getAgyBridgeAuthEnvironment(auth?.auth.apiKey), { AGY_BRIDGE_ENABLED: "1" });
     }
     assert.equal(spawn.mock.callCount(), 0);
 

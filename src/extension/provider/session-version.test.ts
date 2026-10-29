@@ -51,10 +51,10 @@ test("turn persists its captured session version rather than a later driver sele
   const events = await collecting;
 
   assert.equal(events.at(-1)?.type, "done");
-  const saved = await bridge.runtimeSessionStore.get(sessionId, undefined, version);
+  const saved = await bridge.runtimeSessionStore.get(sessionId, version);
   assert.equal(saved?.sessionId, "remote-A");
   assert.equal(saved?.version, version);
   assert.equal(saved?.compatibilityKey, proc.compatibilityKey);
   assert.equal(saved?.messageCount, 2);
-  assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
+  assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
 });

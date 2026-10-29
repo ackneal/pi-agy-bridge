@@ -38,7 +38,7 @@ describe("RuntimeSessionStore", () => {
           { role: "user", content: "question" },
           { role: "assistant", responseId: "agy-conversation", content: "answer" },
         ];
-        const written = await store.set(sessionId, { sessionId: "agy-conversation", ...metadata }, history, undefined, "cli:v1");
+        const written = await store.set(sessionId, { sessionId: "agy-conversation", ...metadata }, history, "cli:v1");
         const expectedPending = typeof metadata.hasPendingToolCalls === "boolean" ? { hasPendingToolCalls: metadata.hasPendingToolCalls } : {};
         assert.deepEqual(written, {
           sessionId: "agy-conversation",
@@ -65,7 +65,7 @@ describe("RuntimeSessionStore", () => {
         const reopened = SessionManager.open(sessionFile);
         const reopenedContext = new PiContextAdapter();
         reopenedContext.bind(reopened);
-        const restored = await new RuntimeSessionStore(reopenedContext).get(sessionId, undefined, "cli:v1");
+        const restored = await new RuntimeSessionStore(reopenedContext).get(sessionId, "cli:v1");
 
         assert.deepEqual(restored, written);
       } finally {
@@ -88,9 +88,9 @@ describe("RuntimeSessionStore", () => {
       const context = new PiContextAdapter();
       const id = context.bind(manager);
       const store = new RuntimeSessionStore(context);
-      await store.set(id, { sessionId: "older" }, [], undefined, "cli:v1");
+      await store.set(id, { sessionId: "older" }, [], "cli:v1");
       manager.appendCustomEntry("pi-agy-bridge.runtime-session", data);
-      assert.equal(await store.get(id, undefined, "cli:v1"), undefined);
+      assert.equal(await store.get(id, "cli:v1"), undefined);
     });
   }
 
@@ -99,36 +99,33 @@ describe("RuntimeSessionStore", () => {
     { version: "acp:v1" },
     { sessionId: "   " },
     { hasPendingToolCalls: "pending" },
-    { loginEpoch: "different-login" },
   ]) {
     it(`rejects incompatible latest state above a valid older entry: ${JSON.stringify(change)}`, async () => {
       const manager = SessionManager.inMemory("/workspace");
       const context = new PiContextAdapter();
       const id = context.bind(manager);
       const store = new RuntimeSessionStore(context);
-      const valid = await store.set(id, { sessionId: "older" }, [], undefined, "cli:v1");
+      const valid = await store.set(id, { sessionId: "older" }, [], "cli:v1");
       manager.appendCustomEntry("pi-agy-bridge.runtime-session", { ...valid, ...change });
 
-      assert.equal(await store.get(id, undefined, "cli:v1"), undefined);
+      assert.equal(await store.get(id, "cli:v1"), undefined);
     });
   }
 
   for (const driver of ["cli:v1", "acp:v1", "unknown:opaque"] as const) {
-    it(`roundtrips opaque ${driver} references with epoch and tombstone isolation`, async () => {
+    it(`roundtrips opaque ${driver} references with tombstone isolation`, async () => {
       const manager = SessionManager.inMemory("/workspace");
       const context = new PiContextAdapter();
       const sessionId = context.bind(manager);
       const store = new RuntimeSessionStore(context);
       const checkpoint = await store.set(sessionId, {
         sessionId: 'opaque:/not/a/path?{"native":true}', hasPendingToolCalls: true,
-      }, [{ role: "user", content: "hello" }], "epoch", driver);
+      }, [{ role: "user", content: "hello" }], driver);
 
-      assert.deepEqual(await store.get(sessionId, "epoch", driver), checkpoint);
-      assert.equal(await store.get(sessionId, "other", driver), undefined);
-      assert.equal(await store.get(sessionId, undefined, driver), undefined);
-      assert.equal(await store.get(sessionId, "epoch", driver === "cli:v1" ? "acp:v1" : "cli:v1"), undefined);
+      assert.deepEqual(await store.get(sessionId, driver), checkpoint);
+      assert.equal(await store.get(sessionId, driver === "cli:v1" ? "acp:v1" : "cli:v1"), undefined);
       await store.delete(sessionId);
-      assert.equal(await store.get(sessionId, "epoch", driver), undefined);
+      assert.equal(await store.get(sessionId, driver), undefined);
     });
   }
 
@@ -139,18 +136,18 @@ describe("RuntimeSessionStore", () => {
     const store = new RuntimeSessionStore(context);
     manager.appendMessage({ role: "user", content: "branch point", timestamp: Date.now() });
     const branchPoint = manager.getLeafId();
-    await store.set(sessionId, { sessionId: "agy-conversation" }, [], undefined, "cli:v1");
+    await store.set(sessionId, { sessionId: "agy-conversation" }, [], "cli:v1");
     manager.branch(branchPoint!);
-    assert.equal(await store.get(sessionId, undefined, "cli:v1"), undefined);
+    assert.equal(await store.get(sessionId, "cli:v1"), undefined);
 
-    await store.set(sessionId, { sessionId: "agy-conversation" }, [], undefined, "cli:v1");
+    await store.set(sessionId, { sessionId: "agy-conversation" }, [], "cli:v1");
     await store.delete(sessionId);
-    assert.equal(await store.get(sessionId, undefined, "cli:v1"), undefined);
+    assert.equal(await store.get(sessionId, "cli:v1"), undefined);
   });
 
   it("rejects writes when the exact Pi session is not attached", async () => {
     const store = new RuntimeSessionStore(new PiContextAdapter());
-    await assert.rejects(store.set("missing-session", { sessionId: "agy-conversation" }, [], undefined, "cli:v1"), /not attached to the bridge/);
+    await assert.rejects(store.set("missing-session", { sessionId: "agy-conversation" }, [], "cli:v1"), /not attached to the bridge/);
     await assert.rejects(store.delete("missing-session"), /not attached to the bridge/);
   });
 });
@@ -179,7 +176,7 @@ test("metadata changes preserve live pending tool results and versioned persiste
   const manager = SessionManager.inMemory("/workspace");
   const context = new PiContextAdapter();
   const sessionId = context.bind(manager);
-  const ref = await new RuntimeSessionStore(context).set(sessionId, { sessionId: "agy-conversation" }, [user, assistant], undefined, "cli:v1");
+  const ref = await new RuntimeSessionStore(context).set(sessionId, { sessionId: "agy-conversation" }, [user, assistant], "cli:v1");
   const restoredSync = new RuntimeSessionSync();
   assert.deepEqual(restoredSync.decide(new LiveSession(sessionId), {
     syncKey: "sync-key", messages: [user, replay, toolResult], checkpoint: ref,
@@ -247,8 +244,8 @@ describe("RuntimeSessionSync", () => {
         sessionId: "agy-conversation",
         ...(row.hasPendingToolCalls !== undefined ? { hasPendingToolCalls: row.hasPendingToolCalls } : {}),
       };
-      const written = await store.set(sessionId, ref, row.messages, undefined, "cli:v1");
-      const checkpoint = await store.get(sessionId, undefined, "cli:v1");
+      const written = await store.set(sessionId, ref, row.messages, "cli:v1");
+      const checkpoint = await store.get(sessionId, "cli:v1");
       assert.deepEqual(checkpoint, written);
 
       const sync = new RuntimeSessionSync();
@@ -277,8 +274,8 @@ describe("RuntimeSessionSync", () => {
       const store = new RuntimeSessionStore(context);
       const replay = pendingHistory.map((message) => ({ ...message, timestamp: 123, usage: { input: 10 }, thinkingLevel: "high" }));
 
-      const written = await store.set(sessionId, { sessionId: "agy-conversation", ...metadata }, replay, undefined, "cli:v1");
-      const restored = await store.get(sessionId, undefined, "cli:v1");
+      const written = await store.set(sessionId, { sessionId: "agy-conversation", ...metadata }, replay, "cli:v1");
+      const restored = await store.get(sessionId, "cli:v1");
 
       assert.equal(restored?.fingerprint, "73ff574ccd10772c91f4a26307ecd687a77db8250e24c170c386f5236448ad00");
       assert.equal(written.fingerprint, restored?.fingerprint);
@@ -339,7 +336,7 @@ describe("RuntimeSessionSync", () => {
       const manager = SessionManager.inMemory("/workspace");
       const context = new PiContextAdapter();
       const id = context.bind(manager);
-      const checkpoint = await new RuntimeSessionStore(context).set(id, { sessionId: "agy-conversation" }, input.messages, undefined, "cli:v1");
+      const checkpoint = await new RuntimeSessionStore(context).set(id, { sessionId: "agy-conversation" }, input.messages, "cli:v1");
       const sync = new RuntimeSessionSync();
       const live = row.live ? createSession(true) : new LiveSession(id);
       if (row.live) sync.record(live, input.messages);
@@ -400,7 +397,7 @@ describe("RuntimeSessionSync", () => {
     const manager = SessionManager.inMemory("/workspace");
     const context = new PiContextAdapter();
     const sessionId = context.bind(manager);
-    const checkpoint = await new RuntimeSessionStore(context).set(sessionId, { sessionId: "agy-conversation" }, history, undefined, "cli:v1");
+    const checkpoint = await new RuntimeSessionStore(context).set(sessionId, { sessionId: "agy-conversation" }, history, "cli:v1");
     const cases = [
       { name: "pending user", pending: true, appended: [toolResult, user], action: "continue" },
       { name: "pending system", pending: true, appended: [toolResult, system], action: "continue" },
@@ -458,7 +455,7 @@ describe("RuntimeSessionSync", () => {
     const manager = SessionManager.inMemory("/workspace");
     const context = new PiContextAdapter();
     const id = context.bind(manager);
-    const checkpoint = await new RuntimeSessionStore(context).set(id, { sessionId: "agy-conversation" }, history, undefined, "cli:v1");
+    const checkpoint = await new RuntimeSessionStore(context).set(id, { sessionId: "agy-conversation" }, history, "cli:v1");
     const cases = [
       { name: "shortened live history", isRunning: true, current: history },
       { name: "rewritten live result", isRunning: true, current: [...history, { ...result, content: "rewritten" }] },
@@ -482,7 +479,7 @@ describe("RuntimeSessionSync", () => {
     const context = new PiContextAdapter();
     const id = context.bind(manager);
     const history = [input.messages[0]!, { role: "assistant", content: "branch answer" }];
-    const checkpoint = await new RuntimeSessionStore(context).set(id, { sessionId: "branch-conversation" }, history, undefined, "cli:v1");
+    const checkpoint = await new RuntimeSessionStore(context).set(id, { sessionId: "branch-conversation" }, history, "cli:v1");
     const cases = [
       { name: "shorter live conversation", running: true, pending: false },
       { name: "dead pending previous conversation", running: false, pending: true },
@@ -508,7 +505,7 @@ describe("RuntimeSessionSync", () => {
     const context = new PiContextAdapter();
     const sessionId = context.bind(manager);
     const store = new RuntimeSessionStore(context);
-    const checkpoint = await store.set(sessionId, { sessionId: "agy-conversation" }, history, undefined, "cli:v1");
+    const checkpoint = await store.set(sessionId, { sessionId: "agy-conversation" }, history, "cli:v1");
 
     const cases = [
       { name: "model change without checkpoint", key: "other", action: "resume" },
@@ -551,7 +548,7 @@ for (const row of [
     const manager = SessionManager.inMemory("/workspace");
     const context = new PiContextAdapter();
     const id = context.bind(manager);
-    const checkpoint = await new RuntimeSessionStore(context).set(id, { sessionId: "opaque" }, [], undefined, "arbitrary-version");
+    const checkpoint = await new RuntimeSessionStore(context).set(id, { sessionId: "opaque" }, [], "arbitrary-version");
     const decision = new RuntimeSessionSync().decide(new LiveSession(id), {
       syncKey: "sync-key", messages: [], checkpoint: { ...checkpoint, messageCount: row.count },
     });

@@ -280,8 +280,7 @@ async function createRuntimeFixture(t: TestContext) {
   const manager = SessionManager.inMemory("/workspace");
   const sessionId = runtimeBridge.piContextAdapter.bind(manager);
   const session = runtimeBridge.liveSessions.getOrCreate(sessionId);
-  const epoch = "test-login";
-  await runtimeBridge.runtimeSessionStore.set(sessionId, { sessionId: "conversation-1", compatibilityKey: createHash("sha256").update(prepareDriverCwd("cli")).digest("hex") }, [], epoch, runtimeBridge.driver.sessionVersion);
+  await runtimeBridge.runtimeSessionStore.set(sessionId, { sessionId: "conversation-1", compatibilityKey: createHash("sha256").update(prepareDriverCwd("cli")).digest("hex") }, [], runtimeBridge.driver.sessionVersion);
 
   t.mock.method(BridgeIPC.prototype, "start", async () => {});
   t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");
@@ -326,7 +325,7 @@ async function createRuntimeFixture(t: TestContext) {
     } as Model<any>;
 
     const message = await streamAgyProvider(model, context, {
-      sessionId, env: { AGY_BRIDGE_LOGIN_EPOCH: epoch }, ...(signal ? { signal } : {}), ...options,
+      sessionId, ...(signal ? { signal } : {}), ...options,
     }, runtimeBridge).result();
 
     manager.appendMessage(message);
@@ -341,7 +340,7 @@ async function createRuntimeFixture(t: TestContext) {
     return { bridge: runtimeBridge, session: runtimeBridge.liveSessions.getOrCreate(sessionId) };
   };
 
-  return { bridge: runtimeBridge, manager, session, sessionId, epoch, processes, listeners, capturedListeners, close, abort, start, send, runTurn, restartBridge };
+  return { bridge: runtimeBridge, manager, session, sessionId, processes, listeners, capturedListeners, close, abort, start, send, runTurn, restartBridge };
 }
 
 const quotaError = "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h27m34s.";
@@ -363,13 +362,13 @@ const recoveryCases = [
 for (const row of recoveryCases) {
   const { failure } = row;
   test(`provider retains conversation after ${failure.name}: ${row.name}`, async (t) => {
-    const { bridge, manager, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+    const { bridge, manager, session, sessionId, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
     const failed = await runTurn("quota-model", "original request", failure.events);
 
     assert.equal(failed.stopReason, "error");
     assert.equal(failed.errorMessage, failure.error);
     assert.deepEqual(failed.content, failure.text ? [{ type: "text", text: failure.text }] : []);
-    const failedRef = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+    const failedRef = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
     assert.equal(failedRef?.sessionId, "conversation-1");
     assert.equal(failedRef?.messageCount, 2);
     assertRestorableHistory(failedRef, manager.buildSessionContext().messages);
@@ -394,7 +393,7 @@ for (const row of recoveryCases) {
     assert.equal(processes.length, row.processes);
     assert.equal(recoveredProcess.options.model, row.model);
     assert.equal(recoveredProcess.options.conversationId, "conversation-1");
-    const recoveredRef = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+    const recoveredRef = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
     assert.equal(recoveredRef?.sessionId, "conversation-1");
     assertRestorableHistory(recoveredRef, manager.buildSessionContext().messages);
     assert.equal(send.mock.callCount(), 2, "only the explicit retry adds input");
@@ -422,12 +421,12 @@ for (const row of recoveryCases) {
 
 for (const failure of [modelErrors[0]!, modelErrors[1]!]) {
   test(`provider cold restart resumes saved conversation after ${failure.name}`, async (t) => {
-    const { manager, sessionId, epoch, processes, send, runTurn, restartBridge } = await createRuntimeFixture(t);
+    const { manager, sessionId, processes, send, runTurn, restartBridge } = await createRuntimeFixture(t);
     const failed = await runTurn("quota-model", "original request", failure.events);
     assert.equal(failed.stopReason, "error");
     const { bridge, session } = await restartBridge();
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), undefined);
-    const saved = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+    const saved = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
     assert.equal(saved?.sessionId, "conversation-1");
     assertRestorableHistory(saved, manager.buildSessionContext().messages);
 
@@ -438,7 +437,7 @@ for (const failure of [modelErrors[0]!, modelErrors[1]!]) {
     assert.equal(session.activeProcess, processes[1]);
     assert.equal(processes[1]!.options.conversationId, "conversation-1");
     assert.equal(send.mock.calls.at(-1)!.arguments[0].message.content, "new request");
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion))?.sessionId, "conversation-1");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, "conversation-1");
   });
 }
 
@@ -449,10 +448,10 @@ const laterFailureCases: Array<{ name: string; response: AgyEvent[] | Error; sou
 
 for (const row of laterFailureCases) {
   test(`provider reports and cleans up a genuine later failure: ${row.name}`, async (t) => {
-    const { bridge, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+    const { bridge, session, sessionId, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
     await runTurn("test-model", "successful request", [{ event: "result", status: "success" }]);
     const syncedCount = bridge.runtimeSessionSync.getSyncedMessageCount(session);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion))?.sessionId, "conversation-1");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, "conversation-1");
 
     const failed = await runTurn("test-model", "failed request", row.response, row.source);
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -460,7 +459,7 @@ for (const row of laterFailureCases) {
     assert.equal(failed.stopReason, "error");
     assert.equal(failed.errorMessage, "genuine failure");
     assert.deepEqual(failed.content, row.text ? [{ type: "text", text: row.text }] : []);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
     assert.equal(session.activeProcess, null);
     assert.equal(session.activeMcpServer, null);
     assert.equal(listeners.size, 0);
@@ -485,7 +484,7 @@ for (const row of laterFailureCases) {
 
 for (const source of ["agy", "runtime"] as const) {
   test(`late old ${source} callback cannot affect the replacement turn`, async (t) => {
-    const { bridge, session, sessionId, epoch, processes, listeners, capturedListeners, send, runTurn } = await createRuntimeFixture(t);
+    const { bridge, session, sessionId, processes, listeners, capturedListeners, send, runTurn } = await createRuntimeFixture(t);
     const setModel = t.mock.method(PiRuntimeOutput.prototype, "setModel");
     let oldSending!: () => void;
     let newSending!: () => void;
@@ -526,7 +525,7 @@ for (const source of ["agy", "runtime"] as const) {
     assert.equal(session.activeProcess, replacement);
     assert.equal(session.activeMcpServer, replacementMcp);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion))?.sessionId, "conversation-1");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, "conversation-1");
     replacementListener({ event: "step_update", delta: "replacement answer" }, "agy");
     replacementListener({ event: "result", status: "success" }, "agy");
     const completed = await nextTurn;
@@ -542,7 +541,7 @@ for (const cleanupRejects of [false, true]) {
     let releaseClose!: () => void;
     const closing = new Promise<void>((resolve) => { releaseClose = resolve; });
     t.after(() => releaseClose());
-    const { bridge, session, sessionId, epoch, processes, close, abort, runTurn } = await createRuntimeFixture(t);
+    const { bridge, session, sessionId, processes, close, abort, runTurn } = await createRuntimeFixture(t);
     let delayClose = true;
     close.mock.mockImplementation(async () => {
       if (!delayClose) return;
@@ -557,7 +556,7 @@ for (const cleanupRejects of [false, true]) {
 
     await runTurn("test-model", "failed request", new Error("stdin write failed"));
     assert.equal(session.activeProcess, null);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
     assert.equal(abort.mock.callCount(), 0, "old IPC cleanup is still pending");
     const recovery = runTurn("test-model", "retry request", [{ event: "result", status: "success" }]);
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -575,7 +574,7 @@ for (const cleanupRejects of [false, true]) {
     assert.equal(abort.mock.callCount(), 1);
     assert.equal(abort.mock.calls[0]!.this, processes[0]);
     assert.equal(session.activeProcess, replacement);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion))?.sessionId, "conversation-2");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, "conversation-2");
   });
 }
 
@@ -591,7 +590,7 @@ const pendingGapCases: Array<{ name: string; event?: AgyEvent; source?: AgyEvent
 
 for (const row of pendingGapCases) {
   test(row.continues ? "provider replaces the safety subscription when Pi returns results" : `provider invalidates the actual post-toolUse gap after ${row.name}`, { timeout: 5000 }, async (t) => {
-    const { bridge, manager, session, sessionId, epoch, processes, listeners, capturedListeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+    const { bridge, manager, session, sessionId, processes, listeners, capturedListeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
     const controller = new AbortController();
     const tools = [{ name: "test-tool", description: "test", parameters: { type: "object", properties: {} } }];
     const gateway = new CapabilityGateway(tools);
@@ -634,7 +633,7 @@ for (const row of pendingGapCases) {
     assert.equal(toolSettled, false, "Pi has not returned any results yet");
     const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
     assert.equal(checkpoint, 2);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion))?.messageCount, checkpoint);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.messageCount, checkpoint);
 
     if (row.continues) {
       const safetyListener = listeners.get(oldProcess);
@@ -663,7 +662,7 @@ for (const row of pendingGapCases) {
       assert.equal(close.mock.callCount(), 0);
       assert.equal(abort.mock.callCount(), 0, "the preceding toolUse signal no longer owns the runtime");
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 5);
-      assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion))?.messageCount, 5);
+      assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.messageCount, 5);
       return;
     }
 
@@ -673,7 +672,7 @@ for (const row of pendingGapCases) {
 
     assert.equal(session.activeProcess, null, "a completed toolUse stream still owns failure invalidation in the gap");
     assert.equal(session.activeMcpServer, null);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
     assert.equal(listeners.size, 0);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
     assert.equal(toolUse.stopReason, "toolUse", "the already completed assistant is not rewritten");
@@ -694,7 +693,7 @@ for (const row of pendingGapCases) {
     assert.ok(reconstructed.startsWith("# System prompt\n\n> Keep Pi history\n\n# Conversation history\n\n"));
     assert.match(reconstructed, /## Tool result: .*\n\n> late Pi result\n\n## User\n\n> retry request$/);
     assert.ok(reconstructed.indexOf("### Tool call:") < reconstructed.indexOf("## Tool result:"));
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion))?.sessionId, "conversation-2");
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, "conversation-2");
     assert.equal(listeners.size, 0);
   });
 }
@@ -702,7 +701,7 @@ for (const row of pendingGapCases) {
 for (const terminal of ["success", "quota"] as const) {
   for (const oldAborted of [false, true]) {
     test(`delayed ${terminal} send rejection cannot dispose replacement with old signal aborted=${oldAborted}`, { timeout: 5000 }, async (t) => {
-      const { bridge, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+      const { bridge, session, sessionId, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
       const oldController = new AbortController();
       const setModel = t.mock.method(PiRuntimeOutput.prototype, "setModel");
       let rejectOld!: (error: Error) => void;
@@ -738,7 +737,7 @@ for (const terminal of ["success", "quota"] as const) {
       assert.ok(replacement);
       assert.notEqual(replacement, processes[0]);
       const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
-      const reference = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+      const reference = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
       assert.equal(reference?.sessionId, "conversation-1");
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
@@ -752,7 +751,7 @@ for (const terminal of ["success", "quota"] as const) {
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
-      assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), reference);
+      assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), reference);
       const listener = listeners.get(replacement);
       assert.ok(listener, "stale catch must not unsubscribe the replacement");
       listener({ event: "step_update", delta: "replacement survives" }, "agy");
@@ -774,7 +773,7 @@ for (const { terminal, aborted } of [
   { terminal: "quota", aborted: true },
 ] as const) {
   test(`delayed send rejection invalidates owned native ${terminal} with signal aborted=${aborted}`, { timeout: 5000 }, async (t) => {
-    const { bridge, session, sessionId, epoch, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+    const { bridge, session, sessionId, processes, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
     const controller = new AbortController();
     let rejectSend!: (error: Error) => void;
     const pendingSend = new Promise<void>((_resolve, reject) => { rejectSend = reject; });
@@ -792,7 +791,7 @@ for (const { terminal, aborted } of [
     assert.equal(completed.stopReason, terminal === "quota" ? "error" : "stop");
     assert.equal(completed.errorMessage, terminal === "quota" ? quotaError : undefined);
     assert.equal(session.activeProcess, processes[0]);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion))?.messageCount, 2);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.messageCount, 2);
     const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
 
     if (aborted) controller.abort();
@@ -802,7 +801,7 @@ for (const { terminal, aborted } of [
 
     assert.equal(session.activeProcess, null);
     assert.equal(session.activeMcpServer, null);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), undefined);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
     assert.equal(listeners.size, 0);
     assert.equal(close.mock.callCount(), 1);
@@ -821,10 +820,10 @@ for (const { terminal, aborted } of [
 
 for (const phase of ["before execution", "during runtime startup", "after history lookup"] as const) {
   test(`nonpending abort ${phase} preserves the saved conversation reference`, { timeout: 5000 }, async (t) => {
-    const { bridge, session, sessionId, epoch, listeners, send, runTurn } = await createRuntimeFixture(t);
+    const { bridge, session, sessionId, listeners, send, runTurn } = await createRuntimeFixture(t);
     const controller = new AbortController();
     if (phase === "after history lookup") await runTurn("test-model", "seed request", [{ event: "result", status: "success" }]);
-    const reference = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+    const reference = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
     assert.equal(reference?.sessionId, "conversation-1");
     const start = t.mock.method(AgyRuntime.prototype, "start", async () => {
       controller.abort();
@@ -849,7 +848,7 @@ for (const phase of ["before execution", "during runtime startup", "after histor
     assert.equal(start.mock.callCount(), phase === "during runtime startup" ? 1 : 0);
     assert.equal(send.mock.callCount(), phase === "after history lookup" ? 1 : 0, "abort must not deliver another input");
     assert.equal(invalidate.mock.callCount(), 0);
-    assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), reference);
+    assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), reference);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), phase === "before execution" ? undefined : reference?.messageCount,
       "startup may restore the saved checkpoint but must not append the aborted turn");
     assert.equal(session.activeProcess, null);
@@ -864,7 +863,7 @@ test("transport failure during deferred payload invalidates before delayed close
   const payloadPending = new Promise<void>((resolve) => { resumePayload = resolve; });
   const closePending = new Promise<void>((resolve) => { releaseClose = resolve; });
   t.after(() => { resumePayload(); releaseClose(); });
-  const { bridge, session, sessionId, epoch, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
+  const { bridge, session, sessionId, listeners, close, abort, send, runTurn } = await createRuntimeFixture(t);
   let payloadEntered!: () => void;
   const payloadReady = new Promise<void>((resolve) => { payloadEntered = resolve; });
   close.mock.mockImplementation(async () => { await closePending; });
@@ -886,7 +885,7 @@ test("transport failure during deferred payload invalidates before delayed close
 
   assert.equal(failed.stopReason, "error");
   assert.equal(failed.errorMessage, "MCP disconnected during payload");
-  assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), undefined);
+  assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
   assert.equal(session.activeProcess, null);
   assert.equal(session.activeMcpServer, null);
   assert.equal(listeners.size, 0);
@@ -897,7 +896,7 @@ test("transport failure during deferred payload invalidates before delayed close
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(send.mock.callCount(), 0, "resuming onPayload cannot deliver into an invalidated runtime");
-  assert.equal(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), undefined);
+  assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
   releaseClose();
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(abort.mock.callCount(), 1);
@@ -908,9 +907,9 @@ for (const row of [
   { options: { reasoning: "max" }, error: "Unsupported Antigravity CLI reasoning effort: max. Supported values: low, medium, high." },
 ]) {
   test(`unsupported effort on healthy runtime preserves saved conversation and PTY bindings: ${JSON.stringify(row.options)}`, { timeout: 5000 }, async (t) => {
-    const { bridge, session, sessionId, epoch, listeners, close, abort, start, send, runTurn } = await createRuntimeFixture(t);
+    const { bridge, session, sessionId, listeners, close, abort, start, send, runTurn } = await createRuntimeFixture(t);
     await runTurn("test-model", "seed request", [{ event: "result", status: "success" }]);
-    const reference = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+    const reference = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
     const proc = session.activeProcess;
     const mcp = session.activeMcpServer;
     const handle = session.resources.terminals.bind("healthy-pi-pty");
@@ -934,7 +933,7 @@ for (const row of [
     assert.equal(send.mock.callCount(), 1);
     assert.equal(close.mock.callCount(), 0);
     assert.equal(abort.mock.callCount(), 0);
-    assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), reference);
+    assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), reference);
     assert.equal(session.activeProcess, proc);
     assert.equal(session.activeMcpServer, mcp);
     assert.equal(session.conversationId, reference?.sessionId);
@@ -951,7 +950,7 @@ for (const { source, payloadSource } of [
   { source: "agy", payloadSource: "runtime" },
 ] as const) {
   test(`callback ${source} controls identical quota result with payload source=${payloadSource}`, { timeout: 5000 }, async (t) => {
-    const { bridge, manager, session, sessionId, epoch, processes, listeners, close, abort, runTurn } = await createRuntimeFixture(t);
+    const { bridge, manager, session, sessionId, processes, listeners, close, abort, runTurn } = await createRuntimeFixture(t);
     const raw = { event: "result", status: "error", error: quotaError, source: payloadSource } as const;
 
     const failed = await runTurn("test-model", "quota request", [raw], source);
@@ -960,7 +959,7 @@ for (const { source, payloadSource } of [
     assert.equal(failed.stopReason, "error");
     assert.equal(failed.errorMessage, quotaError);
     assert.equal(listeners.size, 0);
-    const reference = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+    const reference = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
     if (source === "agy") {
       assert.equal(session.activeProcess, processes[0]);
       assert.ok(session.activeMcpServer);
@@ -983,7 +982,7 @@ for (const outcome of ["failure", "cancellation", "delayed success"] as const) {
     let releaseOld!: () => void;
     const oldStartup = new Promise<void>((resolve) => { releaseOld = resolve; });
     t.after(() => releaseOld());
-    const { bridge, session, sessionId, epoch, processes, listeners, close, abort, start, send, runTurn } = await createRuntimeFixture(t);
+    const { bridge, session, sessionId, processes, listeners, close, abort, start, send, runTurn } = await createRuntimeFixture(t);
     const setModel = t.mock.method(PiRuntimeOutput.prototype, "setModel");
     let oldStarting!: () => void;
     let newSending!: () => void;
@@ -1023,7 +1022,7 @@ for (const outcome of ["failure", "cancellation", "delayed success"] as const) {
     const replacementListener = listeners.get(replacement);
     assert.ok(replacementListener);
     const handle = session.resources.terminals.bind("replacement-pi-pty");
-    const reference = await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion);
+    const reference = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
     const checkpoint = bridge.runtimeSessionSync.getSyncedMessageCount(session);
 
     if (outcome === "cancellation") controller.abort();
@@ -1034,7 +1033,7 @@ for (const outcome of ["failure", "cancellation", "delayed success"] as const) {
     assert.equal(session.activeMcpServer, replacementMcp);
     assert.equal(listeners.get(replacement), replacementListener, "old catch must not unsubscribe the newer turn");
     assert.equal(invalidate.mock.callCount(), 0);
-    assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, epoch, bridge.driver.sessionVersion), reference);
+    assert.deepEqual(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), reference);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), checkpoint);
     assert.equal(session.resources.terminals.resolve(handle), "replacement-pi-pty");
     assert.ok(close.mock.calls.every((call) => call.this !== replacementMcp));
@@ -1060,7 +1059,7 @@ for (const row of [
   { name: "payload rewrite to whitespace", rewrite: " \n\t", valid: false },
 ]) {
   test(`provider explicitly continues ${row.name}`, async (t) => {
-    const { bridge, manager, session, sessionId, epoch, processes, listeners, send, runTurn } = await createRuntimeFixture(t);
+    const { bridge, manager, session, sessionId, processes, listeners, send, runTurn } = await createRuntimeFixture(t);
     const first = await runTurn("test-model", "original request", [
       { event: "step_update", delta: "Done" }, { event: "result", status: "success" },
     ]);
@@ -1075,7 +1074,7 @@ for (const row of [
     const continuation = "Continue from the current conversation state without repeating completed work.";
     const observed: unknown[] = [];
     const result = await streamAgyProvider(model, { systemPrompt: "Keep Pi history", tools: [], messages }, {
-      sessionId, env: { AGY_BRIDGE_LOGIN_EPOCH: epoch },
+      sessionId,
       onPayload: (payload) => {
         observed.push(payload);
         return row.rewrite === undefined ? undefined : { prompt: row.rewrite };

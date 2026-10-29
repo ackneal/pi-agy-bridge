@@ -15,7 +15,6 @@ interface TurnOptions {
   store: RuntimeSessionStore | undefined;
   preparationId: symbol;
   signal: AbortSignal | undefined;
-  loginEpoch: string | undefined;
   sessionVersion: string;
   onWarning?: (name: string, args: unknown) => void;
 }
@@ -181,14 +180,14 @@ export class Turn {
   }
 
   private async persist(messages: readonly unknown[]): Promise<void> {
-    const { session, store, loginEpoch } = this.options;
+    const { session, store } = this.options;
     if (!store || !session.conversationId) return;
 
     await store.set(session.piSessionId, {
       sessionId: session.conversationId,
       ...(this.runtime!.proc.compatibilityKey !== undefined ? { compatibilityKey: this.runtime!.proc.compatibilityKey } : {}),
       ...(this.runtime!.mcpServer.hasPendingCalls ? { hasPendingToolCalls: true } : {}),
-    }, messages, loginEpoch, this.options.sessionVersion);
+    }, messages, this.options.sessionVersion);
   }
 
   private failRuntime(error: Error): void {

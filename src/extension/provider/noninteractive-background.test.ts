@@ -24,7 +24,7 @@ for (const id of ["cli", "acp"] as const) {
         if (previous.bin === undefined) delete process.env.AGY_ACP_BIN; else process.env.AGY_ACP_BIN = previous.bin;
       });
       const authPath = path.join(home, "auth.json");
-      await writeFile(authPath, JSON.stringify(authenticated ? { agy: createAgyBridgeCredential("existing-epoch", id) } : {}));
+      await writeFile(authPath, JSON.stringify(authenticated ? { agy: { ...createAgyBridgeCredential(), driver: id } } : {}));
       let fixtureAuthenticated = authenticated;
       const executable = path.join(home, "agy");
       const writeCli = () => writeFile(executable, '#!/bin/sh\ncase "$1" in\n--version) echo 1.2.14;;\nmodels) printf "cached-model-high  Cached Model (High)\\n";;\n*) ' + (fixtureAuthenticated
@@ -76,7 +76,7 @@ for (const id of ["cli", "acp"] as const) {
       assert.equal(process.listenerCount("exit"), listeners);
       if (authenticated) {
         const stored = JSON.parse(await readFile(authPath, "utf8"));
-        assert.equal(stored.agy.loginEpoch, "existing-epoch");
+        assert.equal(stored.agy.loginEpoch, undefined);
       } else {
         assert.equal(JSON.parse(await readFile(authPath, "utf8")).agy, undefined);
         assert.match(messages.at(-1)!, /Run \/login/);

@@ -84,7 +84,6 @@ export function streamAgyProvider(
     store: standalone ? undefined : bridge.runtimeSessionStore,
     preparationId,
     signal: options?.signal,
-    loginEpoch: options?.env?.AGY_BRIDGE_LOGIN_EPOCH,
     sessionVersion: bridge.driver.sessionVersion,
     onWarning: (name, args) => bridge.warnTool(name, args),
   });
