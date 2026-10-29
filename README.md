@@ -17,7 +17,7 @@ The bridge invokes the selected installed backend and uses its authentication fl
 ## Requirements
 
 - **Pi Coding Agent**: Use a Node.js version supported by Pi. Development checks currently use `@earendil-works/pi-coding-agent` 1.0.2.
-- **Default ACP backend**: The bridge automatically downloads and verifies the pinned Antigravity ACP server (1.4.3) on first use. No separate ACP installation is required.
+- **Default ACP backend**: The bridge automatically downloads and verifies the pinned Antigravity ACP server (1.4.4) on first use. No separate ACP installation is required.
 - **Optional CLI backend**: Explicitly select CLI, installed at `~/.local/bin/agy` or available in your `PATH`. Last tested with `agy` 1.3.3.
 - **Supported platforms**: macOS or Linux with Unix domain socket support. Native Windows is not supported.
 - **Backend authentication**: Valid authentication for the selected backend is required to make model requests.
@@ -73,12 +73,12 @@ Both drivers use `${GEMINI_HOME:-~/.gemini}` as the base directory. Native sessi
 
 ## Automatic ACP Installation
 
-The bridge pins **Antigravity ACP Server 1.4.3**, the ACP Registry's stable entry. This is not an LTS designation. It supports macOS and Linux on x64 and ARM64. The [official Google integration documentation](https://antigravity.google/docs/ide/extensions/zed) points to the [ACP Registry manifest](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json), which supplies Google-hosted archive URLs, SHA-256 values, and launch settings.
+The bridge pins **Antigravity ACP Server 1.4.4**. This is not an LTS designation. It supports macOS and Linux on x64 and ARM64; native Windows is not enabled. The complete official snapshot at [`src/extension/drivers/acp/registry.json`](src/extension/drivers/acp/registry.json) is the sole release source. Runtime preparation reads this packaged snapshot, not the remote registry.
 
 - Installation starts when selected ACP needs to launch for an authentication check, model discovery, explicit `/login`, or a conversation request. Startup and doctor can trigger installation; package installation and driver status do not. Pi shows installation progress in its footer; normal progress does not add chat notifications. Installation errors still produce notifications.
 - Downloads show MiB and percentage when the server provides a total, followed by verification, extraction, and validation status. Archives are approximately 109–321 MiB; Linux needs about 1 GiB after extraction. Allow additional space for the temporary archive.
 - The archive SHA-256 must match the pin before extraction. The complete distribution, including `localharness_external`, retains its executable permissions. Linux launches preserve the required `--uid=` argument.
-- Installations live under `<Pi Agent Home>/pi-agy-bridge/acp/<archive filename without .zip>/`, for example `~/.pi/agent/pi-agy-bridge/acp/agy-acp-server-1.4.3-darwin-arm64/`. The archive filename already includes the version. Pi's `getAgentDir()` respects custom Agent Home configuration, including `PI_CODING_AGENT_DIR`; the usual default is `~/.pi/agent`.
+- Installations live under `<Pi Agent Home>/pi-agy-bridge/acp/<archive filename without .zip>/`, for example `~/.pi/agent/pi-agy-bridge/acp/agy-acp-server-1.4.4-darwin-arm64/`. The archive filename already includes the version. Pi's `getAgentDir()` respects custom Agent Home configuration, including `PI_CODING_AGENT_DIR`; the usual default is `~/.pi/agent`.
 - A verified local installation needs no installation network access. Files are hashed on first use in each Pi process; unchanged file identities and metadata permit fast later reuse. Continuing an existing ACP process does not recheck or repair the installation; new process preparation still validates the managed installation. ACP authentication and model requests can still require network access.
 - New installations publish only after complete validation. A retry ignores abandoned staging and repairs damaged installations. Concurrent installs reuse a valid published directory; damaged files are repaired atomically from verified staging, with metadata written last. Interrupted repairs must pass validation before use. A valid directory is never replaced or removed.
 - Requests within one process share installation work. Separate Pi processes can download concurrently and use unique transient staging directories under the ACP root; publication is atomic. Crash-abandoned staging is not automatically deleted.
@@ -87,13 +87,13 @@ The bridge pins **Antigravity ACP Server 1.4.3**, the ACP Registry's stable entr
 
 ### Custom Executable
 
-Set `AGY_ACP_BIN` to an executable path to bypass managed installation and checksum verification. This explicitly trusts that executable and its companion distribution. The background browser interceptor is verified against the pinned Google server; a custom server must honor Python's `BROWSER` override to provide the same protection. An invalid override is an error; unset it to restore automatic installation. Existing manual installs in `~/.local/opt/agy-acp` or `~/.local/bin/agy_acp_server` now require this override instead of implicit discovery.
+Set `AGY_ACP_BIN` to an executable path to bypass managed installation and checksum verification. This explicitly trusts that executable and its companion distribution. The background browser interceptor depends on the server honoring Python's `BROWSER` override; a custom server must honor it to provide the same protection. An invalid override is an error; unset it to restore automatic installation. Existing manual installs in `~/.local/opt/agy-acp` or `~/.local/bin/agy_acp_server` now require this override instead of implicit discovery.
 
 ### Version Pins and Upgrades
 
-`src/extension/drivers/acp/release.ts` pins the full server version, each platform's Google URL, archive SHA-256, and launch settings. The ZIP library is pinned to `yauzl` **3.4.0** (`@types/yauzl` **3.4.0**); `bun.lock` records dependency resolution. No Google binaries are bundled in npm or Git.
+The complete official snapshot in `src/extension/drivers/acp/registry.json` is the sole release source; its upstream source is fixed to [this registry commit](https://github.com/agentclientprotocol/registry/blob/252a92965a33dcbb7704b72bfe9fe387d36f39c2/antigravity-acp/agent.json). `release.ts` only converts the Node architecture key as needed and validates/converts snapshot data. There is no runtime remote fetch. Native Windows is not enabled. The ZIP library is pinned to `yauzl` **3.4.0** (`@types/yauzl` **3.4.0**); `bun.lock` records dependency resolution. No Google binaries are bundled in npm or Git.
 
-Updates require a reviewed PR that verifies archive checksums, required files, permissions, and arguments before changing the pins. There is no runtime `latest` lookup, automatic patch upgrade, downgrade, or CLI fallback. A changed pin uses the archive-name directory corresponding to the new archive and leaves existing processes untouched. If Google removes a pinned archive, an existing verified local installation still works; new installs must update the bridge or use an explicit custom executable.
+Updates require a reviewed PR that replaces the snapshot from a fixed upstream commit, updates its source link, and verifies archive checksums, required files, permissions, and launch arguments. There is no runtime `latest` lookup, automatic patch upgrade, downgrade, or CLI fallback. A changed pin uses the archive-name directory corresponding to the new archive and leaves existing processes untouched. If Google removes a pinned archive, an existing verified local installation still works; new installs must update the bridge or use an explicit custom executable.
 
 ## How It Works
 

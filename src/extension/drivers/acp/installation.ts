@@ -6,7 +6,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { extractAcpArchive } from "./archive.ts";
-import { ACP_REQUIRED_EXECUTABLES, acpDistributionName, resolveAcpRelease, type AcpRelease } from "./release.ts";
+import { acpDistributionName, resolveAcpRelease, type AcpRelease } from "./release.ts";
 import { debugLog } from "../../shared/debug.ts";
 import type { DriverInstallationProgress } from "../types.ts";
 
@@ -126,7 +126,7 @@ async function validateInstallation(directory: string, release: AcpRelease, sign
       if (file.type === "file" && recorded.type === "file" &&
         (file.size !== recorded.size || await hashFile(path.join(directory, file.path), signal) !== recorded.sha256)) return false;
     }
-    for (const required of ACP_REQUIRED_EXECUTABLES) {
+    for (const required of [release.executable, "localharness_external"]) {
       const file = expected.get(required);
       if (file?.type !== "file" || !(file.mode & 0o111)) return false;
       await fsp.access(path.join(directory, required), fs.constants.X_OK);
@@ -327,7 +327,7 @@ async function install(options: InstallationOptions, signal: AbortSignal, emit: 
     signal.throwIfAborted();
     progress("validate", `Checking ACP ${release.version} files and executable permissions`);
     const { files } = await inventory(distribution, signal, true);
-    for (const required of ACP_REQUIRED_EXECUTABLES) {
+    for (const required of [release.executable, "localharness_external"]) {
       const entry = files.find((file) => file.path === required);
       if (entry?.type !== "file" || !(entry.mode & 0o111)) throw new Error(`ACP distribution is missing required executable ${required}; nothing was installed`);
       await fsp.access(path.join(distribution, required), fs.constants.X_OK);

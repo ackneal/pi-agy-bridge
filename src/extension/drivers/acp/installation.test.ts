@@ -125,6 +125,28 @@ for (const scenario of ["installation", "cache reuse", "missing metadata", "brok
   });
 }
 
+for (const scenario of ["install", "repair", "missing launcher"] as const) {
+  test(`ACP registry-selected launcher: ${scenario}`, async (t) => {
+    const entries = scenario === "missing launcher" ? contents : contents.map((entry) =>
+      entry.name === "agy_acp_server.par" ? { ...entry, name: "registry-launcher" } : entry);
+    const f = await fixture(t, entries);
+    const release = { ...f.release, executable: "registry-launcher" };
+
+    if (scenario === "missing launcher") {
+      await assert.rejects(ensureAcpInstallation({ agentHome: f.home, release, fetch: f.fetcher }), /missing required executable registry-launcher/);
+      return;
+    }
+    const initial = await ensureAcpInstallation({ agentHome: f.home, release, fetch: f.fetcher });
+    if (scenario === "repair") await fs.writeFile(initial.executable, "damaged launcher");
+    const launch = await ensureAcpInstallation({ agentHome: f.home, release, fetch: f.fetcher });
+
+    assert.equal(path.basename(launch.executable), release.executable);
+    assert.equal(await fs.readFile(launch.executable, "utf8"), contents[0]!.data);
+    assert.deepEqual(launch.args, release.args);
+    assert.equal(f.downloads(), scenario === "repair" ? 2 : 1);
+  });
+}
+
 for (const scenario of ["damaged executable", "missing nested file", "damaged nested file"] as const) {
   test(`ACP read-only archive repair: ${scenario}`, async (t) => {
     const f = await fixture(t, readOnlyDirectoryContents);

@@ -1,7 +1,5 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
-
-export const ACP_RELEASE_VERSION = "1.4.3";
-export const ACP_REQUIRED_EXECUTABLES = ["agy_acp_server.par", "localharness_external"] as const;
 
 export interface AcpRelease {
   version: string;
@@ -12,12 +10,10 @@ export interface AcpRelease {
   args: readonly string[];
 }
 
-// Google’s Zed documentation points to antigravity-acp/agent.json as the official ACP registry entry.
-const RELEASES: Record<string, { os: "macos" | "linux"; arch: "arm64" | "x86_64"; sha256: string }> = {
-  "darwin-arm64": { os: "macos", arch: "arm64", sha256: "c57db0a9b8b712daa9c3c17cdb990a61842ea569f279e8bd79d7aa85a303b20b" },
-  "darwin-x64": { os: "macos", arch: "x86_64", sha256: "9392dbbdad7f0663dbfb5a0bf641297b0cf80d2ee9cd2d49a616bbbc7378731d" },
-  "linux-arm64": { os: "linux", arch: "arm64", sha256: "05c153443b0b1175151c760eeddea538950bc9843e317d54786a1f03670182bc" },
-  "linux-x64": { os: "linux", arch: "x86_64", sha256: "0634ce5306ba92c932945455e7a83fda78e2d99c33fa8aa6ee0566206a382714" },
+const registry = JSON.parse(readFileSync(new URL("./registry.json", import.meta.url), "utf8")) as {
+  id: string;
+  version: string;
+  distribution: { binary: Record<string, { archive: string; cmd: string; sha256: string; args?: string[] }> };
 };
 
 export function acpDistributionName(release: Pick<AcpRelease, "url">): string {
@@ -36,15 +32,32 @@ export function resolveAcpRelease(platform: NodeJS.Platform = process.platform, 
   if (arch !== "x64" && arch !== "arm64") {
     throw new Error(`Unsupported ACP architecture '${arch}' on ${platform}; supported architectures are x64 and arm64. Set AGY_ACP_BIN to provide a binary for this architecture.`);
   }
-  const key = `${platform}-${arch}`;
-  const release = RELEASES[key]!;
-  const binaryArch = release.arch;
+
+  const entry = registry?.distribution?.binary?.[`${platform}-${arch === "arm64" ? "aarch64" : "x86_64"}`];
+  if (registry?.id !== "antigravity-acp" || typeof registry.version !== "string" || !/^\d+\.\d+\.\d+$/.test(registry.version) ||
+    !entry || typeof entry.archive !== "string" || typeof entry.cmd !== "string" ||
+    typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256) ||
+    (entry.args !== undefined && (!Array.isArray(entry.args) || !entry.args.every((arg) => typeof arg === "string" && !arg.includes("\0"))))) {
+    throw new Error(`Invalid ACP registry snapshot for ${platform}-${arch}`);
+  }
+
+  const url = new URL(entry.archive);
+  if (url.protocol !== "https:" || url.hostname !== "dl.google.com" || url.port || url.username || url.password) {
+    throw new Error("ACP registry archive must use an official HTTPS Google download URL");
+  }
+  acpDistributionName({ url: entry.archive });
+  const executable = entry.cmd.replace(/^\.\//, "");
+  if (executable.includes("\\") || executable.includes("\0") ||
+    executable.split("/").some((part) => part === "" || part === "." || part === "..")) {
+    throw new Error(`Unsafe ACP registry command '${entry.cmd}'`);
+  }
+
   return {
-    version: ACP_RELEASE_VERSION,
-    platform: key,
-    url: `https://dl.google.com/agy-extensions/releases/${release.os}/agy-acp-server-${ACP_RELEASE_VERSION}-${platform}-${binaryArch}.zip`,
-    sha256: release.sha256,
-    executable: "agy_acp_server.par",
-    args: platform === "linux" ? ["--uid="] : [],
+    version: registry.version,
+    platform: `${platform}-${arch}`,
+    url: entry.archive,
+    sha256: entry.sha256,
+    executable,
+    args: [...(entry.args ?? [])],
   };
 }
