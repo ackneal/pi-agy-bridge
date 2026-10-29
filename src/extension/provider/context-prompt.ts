@@ -1,6 +1,6 @@
 import path from "node:path";
 import { debugLog, isDebugEnabled } from "../shared/debug.ts";
-import type { Context, Message } from "@earendil-works/pi-ai";
+import type { Context, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 
 // Character budgets apply only to reconstructed result bodies, never live delivery.
 export const RESULT_BODY_BUDGET = 24_000;
@@ -8,6 +8,11 @@ export const RESULT_BODY_CEILING = 8_000;
 export const OLD_CALL_ARGUMENT_LIMIT = 1_000;
 
 const OMITTED_BODY = "[Body omitted]";
+type ContextPart = string | ImageContent;
+
+function imageNotice(mimeType: string, nativeImages: boolean): string {
+  return nativeImages ? `[Image attached: ${mimeType}]` : `[Image omitted from reconstructed history: ${mimeType}; content unavailable]`;
+}
 
 function quote(text: string): string {
   return text.replace(/\r\n?|[\u0085\u2028\u2029]/g, "\n").split("\n").map((line) => `> ${line}`).join("\n");
@@ -33,43 +38,43 @@ function limit(text: string, size: number): string {
   return quote(text.slice(0, low) + marker);
 }
 
-function imageNotices(message: Extract<Message, { role: "toolResult" }>): string[] {
+function imageNotices(message: Extract<Message, { role: "toolResult" }>, nativeImages = false): string[] {
   return message.content.flatMap((block) => block.type === "image"
-    ? [`[Image omitted from reconstructed history: ${block.mimeType}; content unavailable]`] : []);
+    ? [imageNotice(block.mimeType, nativeImages)] : []);
 }
 
-function minimumResultBody(message: Extract<Message, { role: "toolResult" }>): number {
-  const notices = imageNotices(message);
+function minimumResultBody(message: Extract<Message, { role: "toolResult" }>, nativeImages: boolean): number {
+  const notices = imageNotices(message, nativeImages);
   if (!notices.length) return quote(OMITTED_BODY).length;
   const hasText = message.content.some((block) => block.type === "text" && block.text);
   return quote(notices.join("\n")).length + (hasText ? 1 + quote(OMITTED_BODY).length : 0);
 }
 
-function budgetResult(message: Extract<Message, { role: "toolResult" }>, size: number): string {
-  const full = text(message);
+function budgetResult(message: Extract<Message, { role: "toolResult" }>, size: number, nativeImages: boolean): string {
+  const full = text(message, nativeImages);
   if (full.length <= size) return full;
-  const notices = imageNotices(message);
-  if (!notices.length || minimumResultBody(message) > size) return limit(resultBody(message), size);
+  const notices = imageNotices(message, nativeImages);
+  if (!notices.length || minimumResultBody(message, nativeImages) > size) return limit(resultBody(message, nativeImages), size);
 
   const images = quote(notices.join("\n"));
   const body = message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
   return body ? `${limit(body, size - images.length - 1)}\n${images}` : images;
 }
 
-function resultBody(message: Extract<Message, { role: "toolResult" }>): string {
+function resultBody(message: Extract<Message, { role: "toolResult" }>, nativeImages: boolean): string {
   return message.content.flatMap((block) => {
     if (block.type === "text") return [block.text];
-    if (block.type === "image") return [`[Image omitted from reconstructed history: ${block.mimeType}; content unavailable]`];
+    if (block.type === "image") return [imageNotice(block.mimeType, nativeImages)];
     return [];
   }).join("\n");
 }
 
-function text(message: Message): string {
-  if (message.role === "toolResult") return quote(resultBody(message));
+function text(message: Message, nativeImages = false): string {
+  if (message.role === "toolResult") return quote(resultBody(message, nativeImages));
   if (typeof message.content === "string") return quote(message.content);
   return message.content.map((block) => {
     if (block.type === "text") return quote(block.text);
-    if (block.type === "image") return quote(`[Image omitted from reconstructed history: ${block.mimeType}; content unavailable]`);
+    if (block.type === "image") return quote(imageNotice(block.mimeType, nativeImages));
     if (block.type === "toolCall") {
       const args = JSON.stringify(block.arguments);
       return `### Tool call: ${metadata(block.name)} (id: ${metadata(block.id)}${block.namespace ? `, namespace: ${metadata(block.namespace)}` : ""})\n\n${quote(args)}`;
@@ -78,10 +83,10 @@ function text(message: Message): string {
   }).filter(Boolean).join("\n");
 }
 
-function render(message: Message, body = text(message)): string {
+function render(message: Message, body = text(message), nativeImages = false): string {
   if (message.role === "toolResult") {
     // If the body budget cannot fit an image notice, retain it as result metadata.
-    const missingImages = [...new Set(imageNotices(message).filter((notice) => !body.includes(quote(notice))))];
+    const missingImages = [...new Set(imageNotices(message, nativeImages).filter((notice) => !body.includes(quote(notice))))];
     const imageMetadata = missingImages.length ? `, ${missingImages.map(metadata).join(" ")}` : "";
     return `## Tool result: ${metadata(message.toolName)} (id: ${metadata(message.toolCallId)}, status: ${message.isError ? "error" : "success"}${!body && text(message) ? ", body omitted" : ""}${imageMetadata})\n\n${body}`;
   }
@@ -93,6 +98,34 @@ function render(message: Message, body = text(message)): string {
   const status = message.role === "assistant" ? ` (status: ${metadata(message.stopReason)})` : "";
   const error = message.role === "assistant" && message.errorMessage ? `\n\nError:\n\n${quote(message.errorMessage)}` : "";
   return `## ${message.role === "user" ? "User" : "Assistant"}${status}\n\n${body}${error}`;
+}
+
+function renderParts(message: Message, body: string, nativeImages: boolean): ContextPart[] {
+  if (!nativeImages || typeof message.content === "string" || !message.content.some((block) => block.type === "image")) {
+    return [render(message, body, nativeImages)];
+  }
+
+  // Keep native images between their surrounding text, not at the end of a message.
+  const parts: ContextPart[] = [render({ ...message, content: [] }, "", true).trimEnd()];
+  let remaining = body === text(message, true) ? Infinity : body.length;
+  let reservedImages = message.content.reduce((sum, block) => block.type === "image" ? sum + quote(imageNotice(block.mimeType, true)).length + 1 : sum, 0);
+  let omittedText = false;
+  for (const block of message.content) {
+    if (block.type === "text") {
+      const value = limit(block.text, Math.max(0, remaining - reservedImages));
+      if (value) parts.push(value);
+      else if (block.text) omittedText = true;
+      remaining -= value.length + 1;
+    }
+    if (block.type === "image") {
+      const notice = quote(imageNotice(block.mimeType, true));
+      reservedImages -= notice.length + 1;
+      remaining -= notice.length + 1;
+      parts.push(notice, block);
+    }
+  }
+  if (omittedText) parts[0] += "\n\n> [Some text omitted from reconstructed history]";
+  return parts;
 }
 
 function filterHistory(messages: readonly Message[]): Message[] {
@@ -153,8 +186,8 @@ function executionStatus(message: ToolResult): "SUCCESS" | "ERROR" | "ABORTED" {
   return operationAborted || message.toolName === "bash" && errorReason(message) === "Command aborted" ? "ABORTED" : "ERROR";
 }
 
-function completedHistory(messages: readonly Message[]): string[] {
-  const output: string[] = [];
+function completedHistory(messages: readonly Message[], nativeImages: boolean): ContextPart[] {
+  const output: ContextPart[] = [];
   let group: string | undefined;
   const consumed = new Set<Message>();
   const operation = (name: string, value: string, status: string, result?: ToolResult) => {
@@ -165,7 +198,10 @@ function completedHistory(messages: readonly Message[]): string[] {
     output.push(limit(value, OLD_CALL_ARGUMENT_LIMIT).replace(/^> /, "> - ") + (suffix ? quote(suffix).slice(2) : ""));
     if (result) {
       for (const block of result.content) {
-        if (block.type === "image") output.push(quote(`[Image omitted from reconstructed history: ${block.mimeType}; content unavailable]`));
+        if (block.type === "image") {
+          output.push(quote(imageNotice(block.mimeType, nativeImages)));
+          if (nativeImages) output.push(block);
+        }
       }
     }
     group = name;
@@ -181,7 +217,7 @@ function completedHistory(messages: readonly Message[]): string[] {
     }
     if (message.role !== "assistant") {
       breakGroup();
-      output.push(render(message));
+      output.push(...renderParts(message, text(message, nativeImages), nativeImages));
       continue;
     }
     const batch = message;
@@ -194,10 +230,10 @@ function completedHistory(messages: readonly Message[]): string[] {
       continue;
     }
     let end = index + 1;
-    while (end < messages.length && messages[end]!.role !== "assistant") end++;
-    const results = messages.slice(index + 1, end).filter((item): item is ToolResult => item.role === "toolResult");
+    while (end < messages.length && messages[end]!.role === "toolResult") end++;
+    const results = messages.slice(index + 1, end) as ToolResult[];
     let terminal = index;
-    while (terminal < messages.length && !endsRun(messages[terminal]!)) terminal++;
+    while (terminal < messages.length && messages[terminal]!.role !== "user" && messages[terminal]!.role !== "system" && !endsRun(messages[terminal]!)) terminal++;
     const aborted = terminal < messages.length && (messages[terminal] as Extract<Message, { role: "assistant" }>).stopReason === "aborted";
     for (const block of batch.content) {
       if (block.type === "text" && block.text.trim()) {
@@ -230,13 +266,13 @@ export function formatContextUpdate(messages: readonly Message[], purpose: "incr
   return [heading, ...messages.map((message) => render(message))].join("\n\n");
 }
 
-export function formatContextPrompt(context: Context, isReused: boolean, syncedMessageCount?: number): string {
+function contextParts(context: Context, isReused: boolean, syncedMessageCount: number | undefined, nativeImages: boolean): ContextPart[] {
   if (isReused) {
     const messages = context.messages.slice(syncedMessageCount ?? Math.max(0, context.messages.length - 1));
     const only = messages[0];
     if (messages.length === 1 && only?.role === "user" &&
-      (typeof only.content === "string" || only.content.every((block) => block.type === "text"))) return typeof only.content === "string" ? only.content : only.content.map((block) => block.type === "text" ? block.text : "").join("\n");
-    return formatContextUpdate(messages, "incremental_conversation");
+      (typeof only.content === "string" || only.content.every((block) => block.type === "text"))) return [typeof only.content === "string" ? only.content : only.content.map((block) => block.type === "text" ? block.text : "").join("\n")];
+    return messages.length ? ["# Conversation updates", ...messages.flatMap((message) => renderParts(message, text(message, nativeImages), nativeImages))] : [];
   }
 
   // Determine run boundaries before filtering empty assistant messages.
@@ -249,35 +285,35 @@ export function formatContextPrompt(context: Context, isReused: boolean, syncedM
   const currentMessages = filterHistory(context.messages.slice(start));
   const results = currentMessages.filter((message): message is ToolResult => message.role === "toolResult");
   const bodies = new Map<Message, string>();
-  const total = results.reduce((sum, message) => sum + text(message).length, 0);
+  const total = results.reduce((sum, message) => sum + text(message, nativeImages).length, 0);
   let remaining = RESULT_BODY_BUDGET;
   const prioritized = [...results].reverse().sort((a, b) => Number(b.isError) - Number(a.isError));
-  let reservedMinimum = prioritized.reduce((sum, message) => sum + minimumResultBody(message), 0);
+  let reservedMinimum = prioritized.reduce((sum, message) => sum + minimumResultBody(message, nativeImages), 0);
   for (const message of prioritized) {
-    const body = text(message);
-    reservedMinimum -= minimumResultBody(message);
+    const body = text(message, nativeImages);
+    reservedMinimum -= minimumResultBody(message, nativeImages);
     const reserved = Math.min(remaining, reservedMinimum);
     const size = total <= RESULT_BODY_BUDGET ? body.length : Math.min(remaining - reserved, RESULT_BODY_CEILING, body.length);
-    const rendered = budgetResult(message, size);
+    const rendered = budgetResult(message, size, nativeImages);
     bodies.set(message, rendered);
     remaining -= rendered.length;
   }
 
-  const prompt = [context.systemPrompt ? `# System prompt\n\n${quote(context.systemPrompt)}` : "",
+  const parts: ContextPart[] = [context.systemPrompt ? `# System prompt\n\n${quote(context.systemPrompt)}` : "",
     oldMessages.length + currentMessages.length > 1
       ? "# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations."
       : "",
-    ...completedHistory(oldMessages),
+    ...completedHistory(oldMessages, nativeImages),
     ...currentMessages.filter((message) => message.role !== "assistant" || message.content.length || message.errorMessage || endsRun(message))
-      .map((message) => render(message, bodies.get(message) ?? text(message)))].filter(Boolean).join("\n\n");
+      .flatMap((message) => renderParts(message, bodies.get(message) ?? text(message, nativeImages), nativeImages))].filter(Boolean);
 
   if (isDebugEnabled()) {
     // Baseline: original JSON message representation plus raw system prompt, in UTF-16 characters.
-    const changedResults = [...bodies].filter(([message, body]) => body !== text(message));
+    const changedResults = [...bodies].filter(([message, body]) => body !== text(message, nativeImages));
     const omittedResults = changedResults.filter(([, body]) => !body || body === quote(OMITTED_BODY) || body.startsWith(`${quote(OMITTED_BODY)}\n`));
     debugLog("context", "Rebuild representation characters", {
       inputChars: JSON.stringify(context.messages).length + (context.systemPrompt?.length ?? 0),
-      finalChars: prompt.length,
+      finalChars: parts.filter((part) => typeof part === "string").join("\n\n").length,
       omittedToolResults: context.messages.filter((message) => message.role === "toolResult").length - results.length + omittedResults.length,
       truncatedToolResults: changedResults.length - omittedResults.length,
       truncatedArguments: oldMessages.flatMap((message) => message.role === "assistant" ? message.content : []).filter((block) => {
@@ -288,5 +324,27 @@ export function formatContextPrompt(context: Context, isReused: boolean, syncedM
         (typeof message.content === "string" ? 0 : message.content.filter((block) => block.type === "image").length), 0),
     });
   }
-  return prompt;
+  return parts;
+}
+
+export function formatContextPrompt(context: Context, isReused: boolean, syncedMessageCount?: number): string {
+  return contextParts(context, isReused, syncedMessageCount, false).join("\n\n");
+}
+
+export function formatContextBlocks(context: Context, isReused: boolean, syncedMessageCount?: number): (TextContent | ImageContent)[] {
+  const blocks: (TextContent | ImageContent)[] = [];
+  let paragraphs: string[] = [];
+  const flush = () => {
+    if (paragraphs.length) blocks.push({ type: "text", text: paragraphs.join("\n\n") });
+    paragraphs = [];
+  };
+  for (const part of contextParts(context, isReused, syncedMessageCount, true)) {
+    if (typeof part === "string") paragraphs.push(part);
+    else {
+      flush();
+      blocks.push(part);
+    }
+  }
+  flush();
+  return blocks;
 }

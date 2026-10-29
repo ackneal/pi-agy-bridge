@@ -70,6 +70,35 @@ const cases: CompletedCase[] = [
       result("id-edit", "PRIVATE_DIFF", false, "edit"), result("id-write", "PRIVATE_WRITE", false, "write"), terminal()],
     check(prompt) { row(prompt, "edit.ts", "SUCCESS"); row(prompt, "write.ts", "SUCCESS"); assert.doesNotMatch(prompt, /PRIVATE_/); },
   },
+  ...(["user", "system"] as const).map((boundary): CompletedCase => {
+    const message: Message = boundary === "user"
+      ? { role: "user", content: "NEW_REQUEST", timestamp: 3 }
+      : { role: "system", content: "SYSTEM_BOUNDARY", timestamp: 3 };
+    const marker = boundary === "user" ? "NEW_REQUEST" : "SYSTEM_BOUNDARY";
+    return {
+      name: `${boundary} boundary keeps a later result unpaired`,
+      messages: [assistant([call("id-separated", "before-boundary")]), message, result("id-separated"), terminal()],
+      check(prompt) {
+        row(prompt, "before-boundary", "UNKNOWN");
+        ordered(prompt, ["before-boundary", marker, "Unpaired result — UNKNOWN"]);
+        assert.doesNotMatch(prompt, /SUCCESS/);
+      },
+    };
+  }),
+  ...(["user", "system"] as const).map((boundary): CompletedCase => {
+    const message: Message = boundary === "user"
+      ? { role: "user", content: "NEW_REQUEST", timestamp: 3 }
+      : { role: "system", content: "SYSTEM_BOUNDARY", timestamp: 3 };
+    return {
+      name: `aborted inference stops at ${boundary} boundary`,
+      messages: [assistant([call("id-abort", "first-request")]), message,
+        assistant([call("id-next", "second-request")]), terminal("aborted")],
+      check(prompt) {
+        row(prompt, "first-request", "UNKNOWN");
+        row(prompt, "second-request", "ABORTED");
+      },
+    };
+  }),
   {
     name: "a hidden assistant boundary cannot confirm an earlier call",
     messages: [assistant([call("id-hidden", "uncertain")]), assistant([{ type: "thinking", thinking: "PRIVATE_THINK" }]),

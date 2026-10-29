@@ -8,28 +8,14 @@ import { EventProcessor } from "./events.ts";
 import { AcpMcpPermissions } from "./permissions.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { fingerprintAcpSystemPrompt } from "./instructions.ts";
-import { serializeMessage } from "../../session/history.ts";
+import { formatContextBlocks, formatContextUpdate } from "../../provider/context-prompt.ts";
 import { expandHome } from "../../shared/paths.ts";
 import { AcpArtifactReader } from "./artifact-reader.ts";
 import { observeAcpImage } from "./image-observer.ts";
 
-/** Historical tools are data, never executable native notifications. */
-export function acpContext(messages: readonly Message[]): ContentBlock[] {
-  return messages.flatMap((message): ContentBlock[] => {
-    if (message.role === "system") return [];
-    const metadata: Record<string, unknown> = JSON.parse(serializeMessage(message));
-    delete metadata.content;
-    delete metadata.role;
-    const header = Object.keys(metadata).length > 0 ? `[${message.role}] ${JSON.stringify(metadata)}` : `[${message.role}]`;
-    const blocks: ContentBlock[] = [{ type: "text", text: header }];
-    if (typeof message.content === "string") blocks.push({ type: "text", text: message.content });
-    else for (const part of message.content) {
-      if (part.type === "image") blocks.push({ type: "image", data: part.data, mimeType: part.mimeType });
-      else if (part.type === "text") blocks.push({ type: "text", text: part.text });
-      else blocks.push({ type: "text", text: `Historical record (not a request to execute): ${JSON.stringify(part)}` });
-    }
-    return blocks;
-  });
+/** ACP delivers current system instructions separately, not as historical user content. */
+export function acpContext(messages: readonly Message[], isReused = false): ContentBlock[] {
+  return formatContextBlocks({ messages: messages.filter((message) => message.role !== "system") }, isReused, 0);
 }
 
 export class AcpRuntimeSession implements DriverSession {
@@ -110,16 +96,17 @@ export class AcpRuntimeSession implements DriverSession {
     return () => { this.listeners.delete(handler); };
   }
   formatContextUpdate(messages: readonly Message[]): string {
-    const content = acpContext(messages);
-    if (content.some((block) => block.type === "image")) throw new Error("ACP image context updates during an active tool call are unsupported");
-    return JSON.stringify(content);
+    if (messages.some((message) => Array.isArray(message.content) && message.content.some((block) => block.type === "image"))) {
+      throw new Error("ACP image context updates during an active tool call are unsupported");
+    }
+    return formatContextUpdate(messages.filter((message) => message.role !== "system"), "pending_tool_continuation");
   }
   async submit(input: DriverSubmission): Promise<void> {
     if (this.submitting || this.completion || this.session.hasActivePrompt) throw new Error("ACP prompt already active");
     if (!this.isRunning || this.failure) throw new Error("ACP session is not running");
     this.submitting = true;
     try {
-      const content = acpContext(input.context.messages.slice(input.reconstructContext ? 0 : input.syncedMessageCount));
+      const content = acpContext(input.context.messages.slice(input.reconstructContext ? 0 : input.syncedMessageCount), !input.reconstructContext);
       if (content.length === 0) content.push({ type: "text", text: "Continue from the current conversation state without repeating completed work." });
       let payload: unknown = { sessionId: this.session.id, prompt: content };
       if (input.options?.onPayload) {
