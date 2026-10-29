@@ -123,6 +123,10 @@ function renderParts(message: Message, body: string, nativeImages: boolean): Con
       remaining -= notice.length + 1;
       parts.push(notice, block);
     }
+    if (block.type === "toolCall") {
+      const args = JSON.stringify(block.arguments);
+      parts.push(`### Tool call: ${metadata(block.name)} (id: ${metadata(block.id)}${block.namespace ? `, namespace: ${metadata(block.namespace)}` : ""})\n\n${quote(args)}`);
+    }
   }
   if (omittedText) parts[0] += "\n\n> [Some text omitted from reconstructed history]";
   return parts;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AssistantMessage, Context, ImageContent, Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 import { formatContextBlocks, formatContextPrompt, RESULT_BODY_CEILING } from "./context-prompt.ts";
 
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -97,3 +97,24 @@ test("incremental native images remain associated with their message", () => {
   assert.ok(blocks[0]?.type === "text" && blocks[0].text.includes("# Conversation updates\n\n## User\n\n> new image"));
   assert.ok(blocks[2]?.type === "text" && blocks[2].text.includes("## User\n\n> later message"));
 });
+
+test("assistant message with mixed text, image, and toolCall preserves toolCall and order", () => {
+  const mixedAssistant = assistant([
+    { type: "text", text: "executing command with visual context" },
+    image as unknown as TextContent,
+    { type: "toolCall", id: "call_42", name: "bash", arguments: { command: "echo test" } },
+  ]);
+  const blocks = formatContextBlocks({ messages: [mixedAssistant] }, false);
+  assert.equal(blocks.length, 3);
+  assert.deepEqual(blocks[1], image);
+  const before = blocks[0];
+  const after = blocks[2];
+  assert.ok(before?.type === "text");
+  assert.ok(after?.type === "text");
+  assert.ok(before.text.includes("## Assistant (status: toolUse)"));
+  assert.ok(before.text.includes("> executing command with visual context"));
+  assert.ok(before.text.includes("[Image attached: image/png]"));
+  assert.ok(after.text.includes("### Tool call: bash (id: call_42)"));
+  assert.ok(after.text.includes("> {\"command\":\"echo test\"}"));
+});
+
