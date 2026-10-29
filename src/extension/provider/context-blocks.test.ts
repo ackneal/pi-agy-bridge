@@ -31,12 +31,25 @@ for (const row of [
 }
 
 for (const row of [
-  { name: "historical user", messages: [user([{ type: "text" as const, text: "image question" }, image]), assistant([{ type: "text" as const, text: "answer" }], "stop"), user("next")], before: "> image question", after: "## Assistant" },
-  { name: "completed tool result", messages: [call, result([{ type: "text" as const, text: "OLD_RESULT_BODY" }, image]), assistant([], "stop"), user("next")], before: "> - input", after: "## Assistant" },
+  { name: "historical user", messages: [user([{ type: "text" as const, text: "image question" }, image]), assistant([{ type: "text" as const, text: "answer" }], "stop"), user("next")], expected: ["> image question", "## Assistant (status: stop)"] },
+  { name: "completed tool result", messages: [call, result([{ type: "text" as const, text: "OLD_RESULT_BODY" }, image]), assistant([], "stop"), user("next")], expected: ["> - input", "## User"] },
+]) {
+  test(`completed history omits native images: ${row.name}`, () => {
+    const blocks = formatContextBlocks({ messages: row.messages }, false);
+    assert.ok(blocks.every((block) => block.type === "text"));
+    const text = blocks.map((block) => block.text).join("\n\n");
+    assert.ok(text.includes("[Image omitted from reconstructed history: image/png; content unavailable]"));
+    assert.ok(!text.includes("Image attached:"));
+    for (const marker of row.expected) assert.ok(text.includes(marker));
+    if (row.name === "completed tool result") assert.ok(!text.includes("OLD_RESULT_BODY"));
+  });
+}
+
+for (const row of [
   { name: "current tool result", messages: [call, result([{ type: "text" as const, text: "current result" }, image]), user("next")], before: "> current result", after: "## User" },
   { name: "truncated error result", messages: [call, result([{ type: "text" as const, text: "x".repeat(30_000) }, image], true), user("next")], before: "status: error", after: "## User" },
 ]) {
-  test(`native image stays with its source: ${row.name}`, () => {
+  test(`native image stays with its source in active run: ${row.name}`, () => {
     const blocks = formatContextBlocks({ messages: row.messages }, false);
     const index = blocks.findIndex((block) => block.type === "image");
     assert.ok(index > 0);
@@ -49,12 +62,10 @@ for (const row of [
     assert.ok(!before.text.includes("content unavailable"));
     assert.ok(after.text.includes(row.after));
     assert.ok(!after.text.includes("Image attached"));
-    if (row.name === "completed tool result") assert.ok(!before.text.includes("OLD_RESULT_BODY"));
     if (row.name === "truncated error result") {
       assert.ok(before.text.includes("[Truncated:"));
       assert.ok(before.text.length < RESULT_BODY_CEILING + 500);
     }
-    assert.ok(formatContextPrompt({ messages: row.messages }, false).includes("Image omitted from reconstructed history"));
   });
 }
 

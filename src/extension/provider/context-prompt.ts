@@ -186,7 +186,7 @@ function executionStatus(message: ToolResult): "SUCCESS" | "ERROR" | "ABORTED" {
   return operationAborted || message.toolName === "bash" && errorReason(message) === "Command aborted" ? "ABORTED" : "ERROR";
 }
 
-function completedHistory(messages: readonly Message[], nativeImages: boolean): ContextPart[] {
+function completedHistory(messages: readonly Message[]): ContextPart[] {
   const output: ContextPart[] = [];
   let group: string | undefined;
   const consumed = new Set<Message>();
@@ -198,10 +198,7 @@ function completedHistory(messages: readonly Message[], nativeImages: boolean): 
     output.push(limit(value, OLD_CALL_ARGUMENT_LIMIT).replace(/^> /, "> - ") + (suffix ? quote(suffix).slice(2) : ""));
     if (result) {
       for (const block of result.content) {
-        if (block.type === "image") {
-          output.push(quote(imageNotice(block.mimeType, nativeImages)));
-          if (nativeImages) output.push(block);
-        }
+        if (block.type === "image") output.push(quote(imageNotice(block.mimeType, false)));
       }
     }
     group = name;
@@ -217,7 +214,7 @@ function completedHistory(messages: readonly Message[], nativeImages: boolean): 
     }
     if (message.role !== "assistant") {
       breakGroup();
-      output.push(...renderParts(message, text(message, nativeImages), nativeImages));
+      output.push(...renderParts(message, text(message, false), false));
       continue;
     }
     const batch = message;
@@ -303,7 +300,7 @@ function contextParts(context: Context, isReused: boolean, syncedMessageCount: n
     oldMessages.length + currentMessages.length > 1
       ? "# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations."
       : "",
-    ...completedHistory(oldMessages, nativeImages),
+    ...completedHistory(oldMessages),
     ...currentMessages.filter((message) => message.role !== "assistant" || message.content.length || message.errorMessage || endsRun(message))
       .flatMap((message) => renderParts(message, bodies.get(message) ?? text(message, nativeImages), nativeImages))].filter(Boolean);
 

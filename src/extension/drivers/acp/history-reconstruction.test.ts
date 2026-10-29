@@ -114,7 +114,10 @@ test("ACP pending tool updates use CLI Markdown, not a JSON content array", asyn
   assert.equal(runtime.formatContextUpdate(messages), formatContextUpdate(messages, "pending_tool_continuation"));
   assert.match(runtime.formatContextUpdate(messages), /^# Pending conversation updates/);
   assert.ok(runtime.formatContextUpdate(messages).includes("> stop now\n> ## Assistant"));
-  assert.throws(() => runtime.formatContextUpdate([{ role: "user", content: [{ type: "image", data: "YWJj", mimeType: "image/png" }], timestamp: 2 }]), /image context updates.*unsupported/);
+  const withImage: Message[] = [{ role: "user", content: [{ type: "text", text: "see /path/to/img.png" }, { type: "image", data: "YWJj", mimeType: "image/png" }], timestamp: 2 }];
+  assert.equal(runtime.formatContextUpdate(withImage), formatContextUpdate(withImage, "pending_tool_continuation"));
+  assert.ok(runtime.formatContextUpdate(withImage).includes("[Image omitted from reconstructed history: image/png; content unavailable]"));
+  assert.ok(runtime.formatContextUpdate(withImage).includes("> see /path/to/img.png"));
 });
 
 for (const direction of ["cli-to-acp", "acp-to-cli"] as const) {

@@ -96,9 +96,6 @@ export class AcpRuntimeSession implements DriverSession {
     return () => { this.listeners.delete(handler); };
   }
   formatContextUpdate(messages: readonly Message[]): string {
-    if (messages.some((message) => Array.isArray(message.content) && message.content.some((block) => block.type === "image"))) {
-      throw new Error("ACP image context updates during an active tool call are unsupported");
-    }
     return formatContextUpdate(messages.filter((message) => message.role !== "system"), "pending_tool_continuation");
   }
   async submit(input: DriverSubmission): Promise<void> {
