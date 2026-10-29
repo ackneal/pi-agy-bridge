@@ -7,13 +7,18 @@ export class ProgressStatus {
 
   set(id: symbol, ui: ProgressUI | undefined, message: string | undefined): boolean {
     const previous = this.entries.get(id);
-    if (message === undefined) {
+    if (message === undefined || !ui) {
       if (!previous) return false;
       const current = [...this.entries].filter(([, entry]) => entry.ui === previous.ui).at(-1)?.[0] === id;
       this.entries.delete(id);
-      return current ? this.render(previous.ui) : true;
+      const restored = current ? this.render(previous.ui) : true;
+      return message === undefined && restored;
     }
-    if (!ui) return false;
+    if (previous && previous.ui !== ui) {
+      const current = [...this.entries].filter(([, entry]) => entry.ui === previous.ui).at(-1)?.[0] === id;
+      this.entries.delete(id);
+      if (current) this.render(previous.ui);
+    }
     this.entries.set(id, { ui, message });
     return this.render(ui);
   }

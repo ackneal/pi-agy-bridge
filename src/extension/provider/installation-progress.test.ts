@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { DriverInstallationProgress } from "../drivers/types.ts";
 import { AcpInstallationProgress } from "./installation-progress.ts";
+import { ProgressStatus } from "./progress.ts";
 
 useAuthHomeFixture();
 
@@ -26,10 +27,47 @@ test("ACP installation progress presents lifecycle transitions", () => {
     for (const phase of scenario.phases) presenter.update(event(phase));
     assert.deepEqual(notices, [], scenario.name);
     assert.deepEqual(statuses.map(([, message]) => message), [
-      ...scenario.phases.slice(0, -1), undefined,
+      ...scenario.phases.slice(0, -1).flatMap((phase, index) => index === 0 ? [phase] : [undefined, phase]), undefined,
     ], scenario.name);
     assert.deepEqual(stderr, [], "working UI does not also print progress to stderr");
   }
+});
+
+test("installation UI migration restores pending doctor progress on both UIs", () => {
+  const aMessages: Array<string | undefined> = [];
+  const bMessages: Array<string | undefined> = [];
+  const uiA = { setStatus: (_key: string, message: string | undefined) => aMessages.push(message), notify() {} };
+  const uiB = { setStatus: (_key: string, message: string | undefined) => bMessages.push(message), notify() {} };
+  let ui = uiA;
+  const progress = new ProgressStatus();
+  progress.show(uiA, "doctor A");
+  progress.show(uiB, "doctor B");
+  const presenter = new AcpInstallationProgress(() => ui, () => {}, progress);
+
+  presenter.update(event("download"));
+  ui = uiB;
+  presenter.update(event("verify"));
+  presenter.update(event("complete"));
+
+  assert.deepEqual(aMessages, ["doctor A", "download", "doctor A"]);
+  assert.deepEqual(bMessages, ["doctor B", "verify", "doctor B"]);
+});
+
+test("installation moving to headless restores the old UI and prints new progress", () => {
+  const messages: Array<string | undefined> = [];
+  const lines: string[] = [];
+  const ui = { setStatus: (_key: string, message: string | undefined) => messages.push(message), notify() {} };
+  let currentUI: typeof ui | undefined = ui;
+  const progress = new ProgressStatus();
+  progress.show(ui, "doctor");
+  const presenter = new AcpInstallationProgress(() => currentUI, (line) => lines.push(line), progress);
+
+  presenter.update(event("download"));
+  currentUI = undefined;
+  presenter.update(event("verify"));
+
+  assert.deepEqual(messages, ["doctor", "download", "doctor"]);
+  assert.deepEqual(lines, ["verify"]);
 });
 
 test("errors and cancellation clear status; duplicate events are suppressed", () => {
