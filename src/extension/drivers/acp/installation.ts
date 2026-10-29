@@ -195,25 +195,54 @@ async function publishDistribution(source: string, directory: string, manifest: 
   }
 
   // Same-pin repair replaces files atomically; never move or remove a directory another process may be using.
+  // Do not temporarily change directory permissions: another repair may restore them while we write,
+  // or a cancelled repair may leave modes that no longer match the published manifest.
   const directories = manifest.files.filter((entry) => entry.type === "directory");
   for (const entry of directories) {
     signal.throwIfAborted();
     const target = path.join(directory, entry.path);
-    try { await fsp.mkdir(target, { mode: entry.mode | 0o700 }); }
+    try { await fsp.mkdir(target, { mode: entry.mode }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-    if (!(await fsp.lstat(target)).isDirectory()) throw new Error(`Unsafe ACP installation directory: ${target}`);
-    await fsp.chmod(target, entry.mode | 0o700);
+    const stat = await fsp.lstat(target);
+    if (!stat.isDirectory()) throw new Error(`Unsafe ACP installation directory: ${target}`);
+    if ((stat.mode & 0o777) !== entry.mode) await fsp.chmod(target, entry.mode);
   }
   for (const entry of manifest.files) {
     signal.throwIfAborted();
-    if (entry.type === "file") await fsp.rename(path.join(source, entry.path), path.join(directory, entry.path));
+    if (entry.type !== "file") continue;
+    const target = path.join(directory, entry.path);
+    const stat = await fsp.lstat(target).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (stat?.isFile() && (stat.mode & 0o777) === entry.mode && stat.size === entry.size &&
+      await hashFile(target, signal) === entry.sha256) continue;
+
+    try { await fsp.rename(path.join(source, entry.path), target); }
+    catch (error) {
+      if (["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+        throw new Error(`Cannot repair ACP file ${entry.path}: read-only directory permissions prevent atomic replacement. Restore the file externally or use AGY_ACP_BIN; archive directory permissions were preserved`, { cause: error });
+      }
+      throw error;
+    }
   }
-  for (const entry of directories.reverse()) await fsp.chmod(path.join(directory, entry.path), entry.mode);
   signal.throwIfAborted();
   await fsp.rename(path.join(source, MANIFEST), path.join(directory, MANIFEST));
   if (!await validateInstallation(directory, release, signal, onValidate)) {
     throw new Error(`ACP installation still contains damaged or unexpected files: ${directory}. Check its contents and permissions before retrying`);
   }
+}
+
+async function removeStaging(directory: string): Promise<void> {
+  const stat = await fsp.lstat(directory);
+  if (stat.isDirectory()) {
+    // Only unpublished staging may be made writable; published archive modes stay intact.
+    if ((stat.mode & 0o700) !== 0o700) await fsp.chmod(directory, (stat.mode & 0o777) | 0o700);
+    for (const entry of await fsp.readdir(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) await removeStaging(path.join(directory, entry.name));
+    }
+  }
+  await fsp.rm(directory, { recursive: true, force: true });
 }
 
 function downloadMessage(release: AcpRelease, bytes: number, total?: number): string {
@@ -324,7 +353,7 @@ async function install(options: InstallationOptions, signal: AbortSignal, emit: 
     progress("error", message);
     throw new Error(message, { cause: error });
   } finally {
-    if (staging) await fsp.rm(staging, { recursive: true, force: true }).catch((error) => debugLog("acp-install", "Could not clean unpublished ACP staging:", error));
+    if (staging) await removeStaging(staging).catch((error) => debugLog("acp-install", "Could not clean unpublished ACP staging:", error));
   }
 }
 
