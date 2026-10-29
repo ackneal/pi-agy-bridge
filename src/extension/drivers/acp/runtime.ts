@@ -1,7 +1,7 @@
 import type { ContentBlock, SessionNotification } from "@agentclientprotocol/sdk";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import type { Message } from "@earendil-works/pi-ai";
+import type { Context, Message, TextContent } from "@earendil-works/pi-ai";
 import type { DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
 import { AcpSession, type AcpSessionOptions } from "./session.ts";
 import { EventProcessor } from "./events.ts";
@@ -18,6 +18,17 @@ export function acpContext(messages: readonly Message[], isReused = false): Cont
   return formatContextBlocks({ messages: messages.filter((message) => message.role !== "system") }, isReused, 0);
 }
 
+export function rawAcpContent(messages: readonly Message[]): ContentBlock[] {
+  return messages.filter((message) => message.role !== "system").flatMap((message): ContentBlock[] => {
+    if (typeof message.content === "string") return [{ type: "text", text: message.content }];
+    return message.content.flatMap((block): ContentBlock[] => {
+      if (block.type === "text") return [{ type: "text", text: block.text }];
+      if (block.type === "image") return [{ type: "image", data: block.data, mimeType: block.mimeType }];
+      return [];
+    });
+  });
+}
+
 export class AcpRuntimeSession implements DriverSession {
   readonly driver = "acp" as const;
   readonly session: AcpSession;
@@ -32,8 +43,14 @@ export class AcpRuntimeSession implements DriverSession {
   private userPrompt = "";
   private readonly reader: AcpArtifactReader;
   readonly options: Omit<AcpSessionOptions, "onUpdate" | "onRead">;
-  constructor(options: Omit<AcpSessionOptions, "onUpdate" | "onRead">, allowedToolNames: ReadonlySet<string> = new Set()) {
+  private readonly formatPrompt: (context: Context, reconstruct: boolean, synced: number) => ContentBlock[];
+  constructor(
+    options: Omit<AcpSessionOptions, "onUpdate" | "onRead">,
+    allowedToolNames: ReadonlySet<string> = new Set(),
+    formatPrompt?: (context: Context, reconstruct: boolean, synced: number) => ContentBlock[],
+  ) {
     this.options = options;
+    this.formatPrompt = formatPrompt ?? ((context, reconstruct, synced) => acpContext(context.messages.slice(reconstruct ? 0 : synced), !reconstruct));
     this.compatibilityKey = options.systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
     this.allowedToolNames = allowedToolNames;
     this.reader = new AcpArtifactReader({
@@ -103,7 +120,7 @@ export class AcpRuntimeSession implements DriverSession {
     if (!this.isRunning || this.failure) throw new Error("ACP session is not running");
     this.submitting = true;
     try {
-      const content = acpContext(input.context.messages.slice(input.reconstructContext ? 0 : input.syncedMessageCount), !input.reconstructContext);
+      const content = this.formatPrompt(input.context, input.reconstructContext, input.syncedMessageCount);
       if (content.length === 0) content.push({ type: "text", text: "Continue from the current conversation state without repeating completed work." });
       let payload: unknown = { sessionId: this.session.id, prompt: content };
       if (input.options?.onPayload) {

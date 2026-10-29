@@ -6,6 +6,8 @@ import { test } from "node:test";
 import { compact, generateSummaryWithUsage, ModelRuntime, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { normalizeContext, type Model, type Provider } from "@earendil-works/pi-ai";
 import { BridgeIPC } from "../bridge/ipc.ts";
+import { rawAcpContent } from "../drivers/acp/runtime.ts";
+import { rawCliPrompt } from "../drivers/cli/runtime.ts";
 import type { BridgeDriver, DriverId, DriverSession, RuntimeEvent } from "../drivers/types.ts";
 import { Bridge, streamAgyProvider } from "./provider.ts";
 
@@ -32,6 +34,7 @@ for (const id of ["cli", "acp"] as DriverId[]) {
         discoverModels: async () => [], usage: async () => undefined,
         async prepareSession(input) {
           prepared++;
+          assert.equal(input.standalone, true);
           assert.deepEqual(input.tools, []);
           assert.equal(await input.store.get(input.session.piSessionId, "test:v1"), undefined);
           await input.store.delete(input.session.piSessionId);
@@ -176,3 +179,23 @@ test("ModelRuntime pre-resolved compaction auth succeeds for enabled credentials
 
     assert.match(result.summary, /Compacted through ModelRuntime/);
   });
+
+test("standalone raw content bypasses markdown transcript wrapping", () => {
+  const context = {
+    systemPrompt: "Summarize directly",
+    messages: [
+      { role: "user" as const, content: "<conversation>detail</conversation>", timestamp: 1 },
+    ],
+  };
+
+  const acpBlocks = rawAcpContent(context.messages);
+  assert.deepEqual(acpBlocks, [{ type: "text", text: "<conversation>detail</conversation>" }]);
+  assert.ok(!acpBlocks.some((b) => b.type === "text" && (b.text.includes("## User") || b.text.startsWith("> ") || b.text.includes("\n> "))));
+
+  const cliPrompt = rawCliPrompt(context);
+  assert.equal(cliPrompt, "Summarize directly\n\n<conversation>detail</conversation>");
+  assert.ok(!cliPrompt.includes("# System prompt"));
+  assert.ok(!cliPrompt.includes("## User"));
+  assert.ok(!cliPrompt.startsWith("> ") && !cliPrompt.includes("\n> "));
+});
+

@@ -44,7 +44,7 @@ export class CliDriver implements BridgeDriver {
     };
     const selection = resolveModelAndEffort(input.model.id, input.options, input.model.thinkingLevelMap);
     const cwd = prepareDriverCwd(this.id);
-    return prepareCliRuntime(input.model, input.context, input.tools, input.options, cwd, dependencies, input.session, selection, input.preparationId);
+    return prepareCliRuntime(input.model, input.context, input.tools, input.options, cwd, dependencies, input.session, selection, input.preparationId, input.standalone ?? false);
   }
 
   discoverModels(signal: AbortSignal) {

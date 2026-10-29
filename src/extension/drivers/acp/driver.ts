@@ -71,7 +71,7 @@ export class AcpDriver implements BridgeDriver {
       resolve: () => this.connectionOptions(input.options?.signal),
     };
     const dependencies = { store: input.store, sync: input.sync, sessionVersion: this.sessionVersion };
-    return prepareAcpRuntime(input.model, input.context, input.tools, input.options, connection, dependencies, input.session, input.preparationId);
+    return prepareAcpRuntime(input.model, input.context, input.tools, input.options, connection, dependencies, input.session, input.preparationId, input.standalone ?? false);
   }
 
   async discoverModels(signal: AbortSignal) {

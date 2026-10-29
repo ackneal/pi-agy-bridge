@@ -3,7 +3,7 @@ import type { McpLaunchDescriptor } from "../../bridge/mcp-launch.ts";
 import { AcpConnection, type AcpConnectionOptions } from "./connection.ts";
 
 export interface AcpSessionOptions extends Omit<AcpConnectionOptions, "onUpdate" | "onPermission"> {
-  mcp: McpLaunchDescriptor;
+  mcp?: McpLaunchDescriptor;
   model: string;
   effort?: string;
   sessionId?: string;
@@ -78,7 +78,7 @@ export class AcpSession {
       }
       const params: acp.NewSessionRequest = {
         cwd: this.options.cwd,
-        mcpServers: [{ name: "pi-agy-bridge_pi", command: this.options.mcp.command, args: this.options.mcp.args, env: [] }],
+        mcpServers: this.options.mcp ? [{ name: "pi-agy-bridge_pi", command: this.options.mcp.command, args: this.options.mcp.args, env: [] }] : [],
         _meta: { antigravity: {
           enabledTools: [],
           ...(this.options.systemPrompt !== undefined ? { systemPrompt: { append: this.options.systemPrompt } } : {}),

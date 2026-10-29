@@ -1,4 +1,4 @@
-import type { Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt, normalizeContext, type Context, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
 import { BridgeIPC } from "../../bridge/ipc.ts";
 import { createMcpLaunchDescriptor } from "../../bridge/mcp-launch.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
@@ -6,7 +6,7 @@ import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/stat
 import type { AcpConnectionOptions } from "./connection.ts";
 import { resolveAcpEffort } from "./options.ts";
 import { debugLog } from "../../shared/debug.ts";
-import { AcpRuntimeSession } from "./runtime.ts";
+import { AcpRuntimeSession, rawAcpContent } from "./runtime.ts";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructions.ts";
 
 class AcpPreparationCleanupError extends AggregateError {}
@@ -16,6 +16,7 @@ export async function prepareAcpRuntime(
   connection: { cwd: string; resolve: () => Promise<AcpConnectionOptions> },
   dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide">; sessionVersion: string },
   liveSession: LiveSession, preparationId: symbol,
+  standalone = false,
 ): Promise<{ proc: AcpRuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
   const check = () => {
     options?.signal?.throwIfAborted();
@@ -23,7 +24,9 @@ export async function prepareAcpRuntime(
   };
   check();
   const requested = resolveAcpEffort(model, options);
-  const systemPrompt = composeAcpSystemPrompt(context);
+  const systemPrompt = standalone
+    ? (getCurrentSystemPrompt(normalizeContext(context).messages) || context.systemPrompt)
+    : composeAcpSystemPrompt(context);
   const compatibilityKey = fingerprintAcpSystemPrompt(JSON.stringify([connection.cwd, systemPrompt]));
   const syncKey = calculateSyncKey(systemPrompt, tools.map((tool) => JSON.stringify(tool)), model.id, requested, "acp");
   let resolvedConnection: AcpConnectionOptions | undefined;
@@ -62,17 +65,22 @@ export async function prepareAcpRuntime(
     };
     options?.signal?.addEventListener("abort", cancel, { once: true });
     try {
-      await bridge.start();
-      check();
+      if (!standalone) {
+        await bridge.start();
+        check();
+      }
       proc = new AcpRuntimeSession({
         ...resolvedConnection,
         cwd: connection.cwd,
-        mcp: createMcpLaunchDescriptor(bridge.bridgeUri),
+        ...(standalone ? {} : { mcp: createMcpLaunchDescriptor(bridge.bridgeUri) }),
         model: model.id,
         ...(requested ? { effort: requested } : {}),
-        systemPrompt,
+        ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         ...(conversationId ? { sessionId: conversationId } : {}),
-      }, new Set(tools.map((tool) => tool.name)));
+      }, new Set(tools.map((tool) => tool.name)),
+      standalone
+        ? (inputContext) => rawAcpContent(inputContext.messages)
+        : undefined);
       await proc.prepare(options?.signal);
       check();
       if (!proc.isRunning) throw new Error("ACP exited before input delivery");

@@ -95,6 +95,7 @@ export function streamAgyProvider(
         // Standalone routing must not consult or invalidate conversation checkpoints.
         store: standalone ? { get: async () => undefined, delete: async () => {} } : bridge.runtimeSessionStore,
         sync: bridge.runtimeSessionSync,
+        standalone,
       });
       const mcpServer = runtime.mcpServer;
       adapter.setModel(runtime.modelId);

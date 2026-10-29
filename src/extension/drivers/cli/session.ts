@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
-import { CliRuntimeSession } from "./runtime.ts";
+import { CliRuntimeSession, rawCliPrompt } from "./runtime.ts";
 import type { ConversationErrorState } from "./events.ts";
 import { BridgeIPC } from "../../bridge/ipc.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
@@ -70,6 +70,7 @@ export async function prepareCliRuntime(
   liveSession: LiveSession,
   selection: ReturnType<typeof resolveModelAndEffort>,
   preparationId: symbol,
+  standalone = false,
 ): Promise<{ proc: CliRuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
   const checkPreparation = () => {
     options?.signal?.throwIfAborted();
@@ -80,7 +81,7 @@ export async function prepareCliRuntime(
   checkPreparation();
 
   const { baseModel, effort } = selection;
-  const agentName = "pi-bridge";
+  const agentName = standalone ? "pi-standalone" : "pi-bridge";
   cwd = path.resolve(cwd);
   const compatibilityKey = createHash("sha256").update(cwd).digest("hex");
   const toolSyncValues = tools.map((tool) => JSON.stringify({
@@ -157,8 +158,10 @@ export async function prepareCliRuntime(
     options?.signal?.addEventListener("abort", abortStartup, { once: true });
     try {
       checkPreparation();
-      await mcpServer.start();
-      checkPreparation();
+      if (!standalone) {
+        await mcpServer.start();
+        checkPreparation();
+      }
       await dependencies.installPlugin(pluginDir);
       checkPreparation();
       const errorState = errorStateFor(liveSession, conversationId);
@@ -169,8 +172,9 @@ export async function prepareCliRuntime(
         model: baseModel,
         conversationId,
         effort,
-        environment: buildCliProcessEnvironment(mcpServer.bridgeUri),
-      }, new Set(tools.map((tool) => tool.name)), errorState, compatibilityKey);
+        environment: standalone ? {} : buildCliProcessEnvironment(mcpServer.bridgeUri),
+      }, new Set(tools.map((tool) => tool.name)), errorState, compatibilityKey,
+      standalone ? (inputContext) => rawCliPrompt(inputContext) : undefined);
       const initEvent = await proc.start();
       checkPreparation();
       debugLog("register", "Antigravity CLI init conversation id:", initEvent.conversation_id);

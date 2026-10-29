@@ -35,6 +35,7 @@ export interface PrepareDriverInput {
   store: Pick<RuntimeSessionStore, "get" | "delete">;
   sync: Pick<RuntimeSessionSync, "decide">;
   preparationId: symbol;
+  readonly standalone?: boolean;
 }
 
 export interface BridgeDriver {
