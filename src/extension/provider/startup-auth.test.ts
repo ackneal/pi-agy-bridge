@@ -1,15 +1,16 @@
+import { beforeEach } from "node:test";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { AgyAuthentication, createAgyBridgeCredential } from "./auth.ts";
+import { registerAuthHomeFixture } from "./auth-home-fixture.ts";
 import { Bridge } from "./provider.ts";
 
 function deferred<T>() {
@@ -23,20 +24,14 @@ function deferred<T>() {
 }
 
 for (const scenario of [
-  { name: "configured startup refreshes models without probing", configured: true, reason: "startup", registryFails: false, shutdown: false },
+  { name: "configured startup probes before refreshing models", configured: true, reason: "startup", registryFails: false, shutdown: false },
   { name: "pending detection does not delay startup", configured: false, reason: "startup", registryFails: false, shutdown: false },
   { name: "model refresh failure is caught", configured: true, reason: "startup", registryFails: true, shutdown: false },
   { name: "shutdown during detection skips stale model refresh", configured: false, reason: "startup", registryFails: false, shutdown: true },
   { name: "reload does not automatically reopen a logged-out bridge", configured: false, reason: "reload", registryFails: false, shutdown: false },
 ] as const) {
   test(`session startup: ${scenario.name}`, async (t) => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "agy-startup-"));
-    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = directory;
-    t.after(() => {
-      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    });
+    const directory = await registerAuthHomeFixture(t);
     const authPath = path.join(directory, "auth.json");
     if (scenario.configured) await writeFile(authPath, JSON.stringify({ agy: createAgyBridgeCredential() }));
     const detection = deferred<OAuthCredential | undefined>();
@@ -69,7 +64,6 @@ for (const scenario of [
       process.off("unhandledRejection", onUnhandled);
       t.mock.restoreAll();
       syncBuiltinESMExports();
-      await rm(directory, { recursive: true, force: true });
     });
     bridge.start();
     assert.ok(sessionStart);
@@ -79,7 +73,7 @@ for (const scenario of [
     assert.equal(result, undefined);
     assert.equal(bridge.piContextAdapter.getSessionManager("startup-test"), sessionManager);
     await setImmediate();
-    const shouldDetect = !scenario.configured && scenario.reason === "startup";
+    const shouldDetect = scenario.reason === "startup";
     assert.equal(detect.mock.callCount(), shouldDetect ? 1 : 0);
     assert.equal(refreshModels.mock.callCount(), shouldDetect ? 0 : 1);
 

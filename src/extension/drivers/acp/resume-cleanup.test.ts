@@ -77,8 +77,11 @@ for (const scenario of ["rebuild", "cleanup failure", "cancel"] as const) {
     });
     const pending = prepareAcpRuntime({ id: "selected" } as Parameters<typeof prepareAcpRuntime>[0],
       { messages: [] }, [], { signal: controller.signal }, {
-        executable: process.execPath, cwd: process.cwd(),
-        args: ["--experimental-strip-types", fileURLToPath(new URL("./resume-cleanup-fixture.ts", import.meta.url)), log],
+        cwd: process.cwd(),
+        resolve: async () => ({
+          executable: process.execPath, cwd: process.cwd(),
+          args: ["--experimental-strip-types", fileURLToPath(new URL("./resume-cleanup-fixture.ts", import.meta.url)), log],
+        }),
       }, {
         store: { get: async () => undefined, delete: async () => { deletes++; } },
         sync: { decide: () => ({ action: "resume", conversationId: "saved" }) }, sessionVersion: "test",

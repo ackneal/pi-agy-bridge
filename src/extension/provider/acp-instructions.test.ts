@@ -1,5 +1,6 @@
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
+import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -43,7 +44,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+    useAcpExecutable(t, executable);
     const bridge = new Bridge(pi);
     const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
     const session = bridge.liveSessions.getOrCreate(sessionId);
@@ -93,7 +94,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     assert.equal(runtime.options.systemPrompt, composeAcpSystemPrompt(context));
     assert.ok(runtime.options.systemPrompt?.includes("PRIVATE_SECTION"));
     assert.equal(runtime.compatibilityKey, fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt(context)])));
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.compatibilityKey, runtime.compatibilityKey);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, runtime.compatibilityKey);
     assert.ok(!JSON.stringify(prompts[0]).includes("PRIVATE_"));
     assert.ok(gateway.hasPendingCalls);
     const call = first.message.content.find((part) => part.type === "toolCall");
@@ -111,7 +112,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     const active = session.activeProcess;
     assert.ok(active instanceof AcpRuntimeSession);
     assert.equal(active.options.systemPrompt, composeAcpSystemPrompt(next));
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.compatibilityKey, fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt(next)])));
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt(next)])));
     if (changed) {
       assert.notEqual(active, runtime);
       assert.equal(resolve.mock.callCount(), 0);

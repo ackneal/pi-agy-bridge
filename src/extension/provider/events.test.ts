@@ -1,8 +1,12 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AssistantMessageEvent, ToolCall } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { PiEventWriter } from "./events.ts";
+
+useAuthHomeFixture();
 
 const tool: ToolCall = { type: "toolCall", id: "call-1", name: "read", arguments: { path: "file" } };
 

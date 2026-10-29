@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { probeAgyAuthentication } from "./auth.ts";
-import { AgyAuthenticationRequiredError, type AgyUsage } from "./usage.ts";
+import type { AgyUsage } from "./usage.ts";
+import { AuthenticationRequiredError } from "../shared/types.ts";
 
 const groups = [{
   name: "Pro",
@@ -14,7 +15,7 @@ const groups = [{
 const text = "Quota\nPro  Five Hour  75%\n";
 const emit = (output: string) => `process.stdout.write(${JSON.stringify(output)});`;
 const callbackError = new Error("usage consumer failed");
-const callbackAuthError = new AgyAuthenticationRequiredError();
+const callbackAuthError = new AuthenticationRequiredError();
 
 type Row = {
   name: string;

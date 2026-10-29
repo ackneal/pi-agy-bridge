@@ -20,9 +20,9 @@ for (const row of [
     const context = new PiContextAdapter();
     const id = context.bind(manager);
     const store = new RuntimeSessionStore(context);
-    const checkpoint = await store.set(id, { sessionId: "conversation", ...row.metadata }, messages, undefined, "acp:v1");
+    const checkpoint = await store.set(id, { sessionId: "conversation", ...row.metadata }, messages, "acp:v1");
 
-    assert.deepEqual(await store.get(id, undefined, "acp:v1"), row.valid ? checkpoint : undefined);
+    assert.deepEqual(await store.get(id, "acp:v1"), row.valid ? checkpoint : undefined);
     assert.equal(checkpoint.compatibilityKey, row.metadata.compatibilityKey);
   });
 }
@@ -51,7 +51,7 @@ for (const row of [
     const checkpoint = row.checkpoint ? await store.set(id, {
       sessionId: "conversation",
       ...(row.checkpoint !== "legacy" ? { compatibilityKey: row.checkpoint } : {}),
-    }, messages, undefined, row.requested ? "acp:v1" : "cli:v1") : undefined;
+    }, messages, row.requested ? "acp:v1" : "cli:v1") : undefined;
     if (row.live) {
       const process: DriverSession = {
         driver: row.requested ? "acp" : "cli", isRunning: true,
@@ -83,7 +83,7 @@ for (const legacy of [false, true]) {
     const context = new PiContextAdapter();
     const id = context.bind(manager);
     const store = new RuntimeSessionStore(context);
-    const written = await store.set(id, { sessionId: "conversation", compatibilityKey: original }, messages, undefined, "acp:v1");
+    const written = await store.set(id, { sessionId: "conversation", compatibilityKey: original }, messages, "acp:v1");
     const entry = manager.getBranch().at(-1);
     assert.ok(entry?.type === "custom");
     assert.equal(Object.hasOwn(entry.data as object, "instructionKey"), false);
@@ -92,7 +92,7 @@ for (const legacy of [false, true]) {
       manager.appendCustomEntry("pi-agy-bridge.runtime-session", { ...metadata, instructionKey: original });
     }
 
-    const restored = await store.get(id, undefined, "acp:v1");
+    const restored = await store.get(id, "acp:v1");
     assert.ok(restored);
     assert.equal(restored.compatibilityKey, legacy ? undefined : original);
     assert.equal(Object.hasOwn(restored, "instructionKey"), false);

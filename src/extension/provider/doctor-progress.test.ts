@@ -1,9 +1,14 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { Bridge } from "./provider.ts";
+import { AgyAuthentication } from "./auth.ts";
+
+useAuthHomeFixture();
 
 test("doctor command progress and reporting", async (t) => {
   for (const row of [
@@ -35,16 +40,14 @@ test("doctor command progress and reporting", async (t) => {
         await pending;
         await shutdown();
       });
+      t.mock.method(AgyAuthentication.prototype, "detect", async () => undefined);
       const usage = t.mock.method(row.switch ? AcpDriver.prototype : bridge.driver, "usage", async (signal: AbortSignal) => {
         assert.equal(signal.aborted, false);
         entered();
         await gate;
         return undefined;
       });
-      let detections = 0;
       const detect = t.mock.method(row.switch ? AcpDriver.prototype : bridge.driver, "detectExecutable", () => {
-        detections++;
-        if (row.switch && detections === 1) return "/unused/acp";
         if (row.failure) throw new Error("synthetic diagnostics failure");
         return undefined;
       });
@@ -60,7 +63,7 @@ test("doctor command progress and reporting", async (t) => {
         ? row.switch ? [["agy-bridge", "Switching to Antigravity ACP…"], ["agy-bridge", undefined], checking] : [checking]
         : []);
       assert.equal(usage.mock.callCount(), 1);
-      assert.equal(detect.mock.callCount(), row.switch ? 1 : 0);
+      assert.equal(detect.mock.callCount(), 0);
       assert.equal(sendMessage.mock.callCount(), 0);
       if (row.shutdown) await shutdown();
       release();
@@ -68,7 +71,7 @@ test("doctor command progress and reporting", async (t) => {
 
       assert.deepEqual(setStatus.mock.calls.at(-1)?.arguments, row.hasUI ? ["agy-bridge", undefined] : undefined);
       assert.equal(setStatus.mock.callCount(), row.hasUI ? row.switch ? 4 : 2 : 0);
-      assert.equal(detect.mock.callCount(), row.shutdown ? 0 : row.switch ? 2 : 1);
+      assert.equal(detect.mock.callCount(), row.shutdown ? 0 : 1);
       if (row.switch) assert.equal(bridge.driver.id, "acp");
       assert.equal(sendMessage.mock.callCount(), row.shutdown ? 0 : 1);
       if (!row.shutdown) {

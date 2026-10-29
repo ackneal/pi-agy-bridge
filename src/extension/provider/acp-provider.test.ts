@@ -1,10 +1,13 @@
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
+import { AgyAuthentication } from "./auth.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
+import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import test, { afterEach, beforeEach } from "node:test";
+import test, { afterEach, beforeEach, mock } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
@@ -15,14 +18,18 @@ import { AcpSession } from "../drivers/acp/session.ts";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "../drivers/acp/instructions.ts";
 import { Bridge, streamAgyProvider } from "./provider.ts";
 
+useAuthHomeFixture();
+
 let home: string;
 let previousHome: string | undefined;
 beforeEach(async () => {
+  mock.method(AgyAuthentication.prototype, "detect", async () => undefined);
   home = await mkdtemp(path.join(tmpdir(), "agy-native-home-"));
   previousHome = process.env.GEMINI_HOME;
   process.env.GEMINI_HOME = home;
 });
 afterEach(async () => {
+  mock.restoreAll();
   if (previousHome === undefined) delete process.env.GEMINI_HOME;
   else process.env.GEMINI_HOME = previousHome;
   await rm(home, { recursive: true, force: true });
@@ -51,7 +58,7 @@ for (const row of [
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}" ${row.scenario}\n`, { mode: 0o755 });
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+    useAcpExecutable(t, executable);
     const bridge = new Bridge(pi);
     const sessionManager = SessionManager.inMemory(tmpdir());
     const sessionId = bridge.piContextAdapter.bind(sessionManager);
@@ -82,7 +89,7 @@ for (const row of [
     assert.deepEqual(notify.mock.calls[0]!.arguments, [
       `Antigravity ACP: unverified tool activity — ${row.tool} ${JSON.stringify(row.args)}`, "warning",
     ]);
-    const checkpoint = await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion);
+    const checkpoint = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
     assert.equal(checkpoint?.sessionId, session.activeProcess.session.id);
   });
 }
@@ -94,7 +101,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+    useAcpExecutable(t, executable);
     assert.equal(new Bridge(pi).driver.id, "acp");
     assert.equal(new Bridge(pi, new CliDriver()).driver.id, "cli");
     const bridge = new Bridge(pi);
@@ -155,8 +162,8 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
     assert.equal(runtime.session.id, first.message.responseId);
     assert.equal(session.driverId, "acp");
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, runtime.session.id);
-    assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, "cli:v1"), undefined);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, runtime.session.id);
+    assert.equal(await bridge.runtimeSessionStore.get(sessionId, "cli:v1"), undefined);
 
     if (scenario === "cancel" || scenario === "failure") {
       if (scenario === "cancel") controller.abort();
@@ -170,7 +177,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(session.activeProcess, null);
       assert.equal(session.activeMcpServer, null);
-      assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
+      assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
       assert.equal(close.mock.callCount(), 1);
       assert.equal(resolve.mock.callCount(), 0);
@@ -192,7 +199,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
         assert.equal(second.reason, "error");
         assert.match(second.error.errorMessage!, scenario === "unknown" ? /Unknown tool result ID: unknown-call/ : scenario === "duplicate" ? /Duplicate tool result ID:/ : /Missing tool result ID:/);
         assert.equal(session.activeProcess, null);
-        assert.equal(await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion), undefined);
+        assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
         assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), 2);
         assert.equal(close.mock.callCount(), 1);
       }
@@ -210,14 +217,14 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => executable);
+    useAcpExecutable(t, executable);
   const bridge = new Bridge(pi);
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
   const session = bridge.liveSessions.getOrCreate(sessionId);
   await bridge.runtimeSessionStore.set(sessionId, {
     sessionId: "stale-session-id",
     compatibilityKey: fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt({ messages: [] })])),
-  }, [], undefined, bridge.driver.sessionVersion);
+  }, [], bridge.driver.sessionVersion);
   t.after(async () => {
     await bridge.liveSessions.disposeAll();
     t.mock.restoreAll();
@@ -245,7 +252,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
   assert.equal(prepareAttempts, 2);
   assert.equal(session.driverId, "acp");
   assert.equal(session.conversationId, "synthetic-session");
-  assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, "synthetic-session");
+  assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, "synthetic-session");
   assert.equal(events.at(-1)?.type, "done");
 });
 
@@ -272,7 +279,7 @@ test("agy-bridge:driver command shows status and switches active driver", async 
   const setStatus = t.mock.fn();
   const ctx = { hasUI: true, ui: { setStatus }, modelRegistry: { refresh: async () => {} } } as unknown as ExtensionCommandContext;
   t.mock.method(CliDriver.prototype, "detectExecutable", () => process.execPath);
-  t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
+  useAcpExecutable(t, process.execPath);
   t.mock.method(CliDriver.prototype, "discoverModels", async () => []);
   t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
   bridge.start();

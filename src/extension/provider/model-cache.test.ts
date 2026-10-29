@@ -1,5 +1,6 @@
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { AcpDriver } from "../drivers/acp/driver.ts";
+import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
@@ -84,7 +85,7 @@ for (const allowNetwork of [false, true]) {
       on: () => {}, registerCommand: () => {},
       registerProvider: runtime.registerNativeProvider.bind(runtime),
     } as unknown as ExtensionAPI, new AcpDriver());
-    t.mock.method(AcpDriver.prototype, "detectExecutable", () => process.execPath);
+    useAcpExecutable(t, process.execPath);
     bridge.start();
     await runtime.refresh({ providers: ["agy"], allowNetwork: false });
 

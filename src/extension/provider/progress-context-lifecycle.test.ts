@@ -1,8 +1,13 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { Bridge } from "./provider.ts";
+import { AgyAuthentication } from "./auth.ts";
+
+useAuthHomeFixture();
 
 test("doctor progress is safe across context invalidation and shutdown", async (t) => {
   for (const scenario of [
@@ -33,6 +38,7 @@ test("doctor progress is safe across context invalidation and shutdown", async (
         await pending;
         if (shutdown) await shutdown();
       });
+      t.mock.method(AgyAuthentication.prototype, "detect", async () => undefined);
       t.mock.method(bridge.driver, "usage", async (signal: AbortSignal) => {
         assert.equal(signal.aborted, false);
         markEntered();

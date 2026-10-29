@@ -26,8 +26,8 @@ for (const outcome of ["success", "failure"] as const) {
     assert.equal(auth.status, "unauthenticated");
     assert.equal(auth.failure, undefined);
     assert.equal(auth.usage, undefined);
-    assert.equal(auth.oauth.name, "new");
-    assert.equal(auth.method.name, "new");
+    assert.equal(auth.oauth.name, "Antigravity");
+    assert.equal(auth.method.name, "Antigravity");
   });
 }
 

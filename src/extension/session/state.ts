@@ -23,7 +23,7 @@ export class RuntimeSessionStore {
     this.piContext = piContext;
   }
 
-  public async get(piSessionId: string, loginEpoch: string | undefined, version: string): Promise<AgyConversationCheckpoint | undefined> {
+  public async get(piSessionId: string, version: string): Promise<AgyConversationCheckpoint | undefined> {
     const sessionManager = this.piContext.getSessionManager(piSessionId);
     if (!sessionManager) return undefined;
 
@@ -37,7 +37,7 @@ export class RuntimeSessionStore {
       }
     }
     if (!entry || !isRecord(entry.data)) return undefined;
-    if (entry.data.deleted === true || entry.data.loginEpoch !== loginEpoch) return undefined;
+    if (entry.data.deleted === true) return undefined;
     if (entry.data.version !== version || typeof version !== "string") return undefined;
     if (typeof entry.data.sessionId !== "string" || !entry.data.sessionId.trim()) return undefined;
     if (!soundHash(entry.data)) return undefined;
@@ -58,7 +58,6 @@ export class RuntimeSessionStore {
     piSessionId: string,
     checkpoint: Omit<AgyConversationCheckpoint, "version">,
     messages: readonly unknown[],
-    loginEpoch: string | undefined,
     version: string
   ): Promise<AgyConversationCheckpoint> {
     const sessionManager = this.requireSessionManager(piSessionId);
@@ -70,7 +69,6 @@ export class RuntimeSessionStore {
     sessionManager.appendCustomEntry(ENTRY_TYPE, {
       sessionId: checkpoint.sessionId,
       version,
-      ...(loginEpoch !== undefined ? { loginEpoch } : {}),
       fingerprint,
       messageCount,
       ...pendingMetadata,

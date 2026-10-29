@@ -1,9 +1,13 @@
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { AcpDriver } from "../drivers/acp/driver.ts";
 import { CliDriver } from "../drivers/cli/driver.ts";
 import { Bridge } from "./provider.ts";
+import { AgyAuthentication } from "./auth.ts";
+
+useAuthHomeFixture();
 
 test("overlapping commands preserve the newest active footer operation", async (t) => {
   for (const scenario of [
@@ -33,6 +37,7 @@ test("overlapping commands preserve the newest active footer operation", async (
         await bridge.liveSessions.disposeAll();
       });
       bridge.start();
+      t.mock.method(AgyAuthentication.prototype, "detect", async () => undefined);
       const doctorGate = gates.get("doctor")!;
       const switchGate = gates.get("switch")!;
       const doctorUsage = t.mock.method(bridge.driver, "usage", async () => {

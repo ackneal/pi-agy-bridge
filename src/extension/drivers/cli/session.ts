@@ -92,7 +92,7 @@ export async function prepareCliRuntime(
   const latestAssistant = [...context.messages].reverse().find((message) => message.role === "assistant");
   const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
   const pluginDir = DEFAULT_AGY_PLUGIN_DIR;
-  const checkpoint = await dependencies.store.get(liveSession.piSessionId, options?.env?.AGY_BRIDGE_LOGIN_EPOCH, dependencies.sessionVersion);
+  const checkpoint = await dependencies.store.get(liveSession.piSessionId, dependencies.sessionVersion);
   checkPreparation();
   const decision = dependencies.sync.decide(liveSession, {
     syncKey, compatibilityKey,

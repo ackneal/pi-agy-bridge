@@ -3,13 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { debugLog } from "../shared/debug.ts";
 import { resolveAgyExecutable } from "./version.ts";
 import { recordAuthProbeDiagnostics, summarizeAuthOutput } from "./auth-diagnostics.ts";
-
-export class AgyAuthenticationRequiredError extends Error {
-  constructor(options?: ErrorOptions) {
-    super("Antigravity CLI authentication required. Run /login to authenticate.", options);
-    this.name = "AgyAuthenticationRequiredError";
-  }
-}
+import { AuthenticationRequiredError } from "../shared/types.ts";
 
 function runUsageQuery(file: string, signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   const args = ["--output-format", "json", "--print", "/usage"];
@@ -44,7 +38,7 @@ function runUsageQuery(file: string, signal?: AbortSignal): Promise<{ stdout: st
       const output = streams[stream].slice(-4096) + chunk;
       if (bytes[stream] <= limit) streams[stream] += chunk;
       if (/authentication required/i.test(stripVTControlCharacters(output))) {
-        stop(new AgyAuthenticationRequiredError());
+        stop(new AuthenticationRequiredError());
       } else if (bytes[stream] > limit) {
         stop(Object.assign(new RangeError(`${stream} maxBuffer length exceeded`), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }));
       }
@@ -263,7 +257,7 @@ export async function fetchAgyUsage(
     const { stdout, stderr } = await runUsageQuery(resolvedPath, signal);
     output = (stdout || stderr || "").trim();
   } catch (error) {
-    if (signal?.aborted || error instanceof AgyAuthenticationRequiredError) throw error;
+    if (signal?.aborted || error instanceof AuthenticationRequiredError) throw error;
     const failure = error as { code?: string | number; stdout?: string; stderr?: string };
     const reason = failure.code === "ETIMEDOUT" ? "timed out after 30 seconds"
       : failure.code === "ENOENT" ? "executable not found"

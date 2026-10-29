@@ -272,7 +272,7 @@ for (const { name, arrange, expected } of cases) {
     const terminalHandle = session.resources.terminals.bind("pi-terminal");
     bridge.runtimeSessionSync.record(session, prefix);
     assistant.responseId = arrange.conversationId;
-    if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { sessionId: arrange.conversationId, compatibilityKey }, prefix, undefined, bridge.driver.sessionVersion);
+    if (arrange.persisted) await bridge.runtimeSessionStore.set(sessionId, { sessionId: arrange.conversationId, compatibilityKey }, prefix, bridge.driver.sessionVersion);
     if (arrange.omitPriorError) prefix.splice(1, 1);
     if (arrange.foreignHistory) {
       const { responseId: _responseId, ...foreignAssistant } = assistant;
@@ -286,7 +286,7 @@ for (const { name, arrange, expected } of cases) {
       assistant.stopReason = "toolUse";
       assistant.content = [{ type: "toolCall", id: "pending-call", name: "test-tool", arguments: {} }];
       bridge.runtimeSessionSync.record(session, prefix);
-      await bridge.runtimeSessionStore.set(sessionId, { sessionId: "same-conversation", compatibilityKey }, prefix, undefined, bridge.driver.sessionVersion);
+      await bridge.runtimeSessionStore.set(sessionId, { sessionId: "same-conversation", compatibilityKey }, prefix, bridge.driver.sessionVersion);
     }
     const context: Context = { systemPrompt: "Rules", tools: [], messages: [...prefix, pending
       ? { role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 5 }
@@ -349,7 +349,7 @@ for (const { name, arrange, expected } of cases) {
       assert.equal(session.activeProcess, null);
       assert.equal(session.activeMcpServer, null);
       assert.equal(resolve.mock.callCount(), 0);
-      const stored = await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion);
+      const stored = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
       assert.equal(stored?.sessionId, expected.store === "retained" ? arrange.conversationId : undefined);
       assert.equal(listeners.size, 0);
       return;
@@ -362,7 +362,7 @@ for (const { name, arrange, expected } of cases) {
     assert.equal(session.activeProcess?.options.model, expected.model);
     assert.equal(session.activeProcess?.options.conversationId, expected.runtimeConversation);
     assert.equal(session.resources.terminals.resolve(terminalHandle), expected.preservesTerminal ? "pi-terminal" : undefined);
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, expected.responseId);
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, expected.responseId);
     assert.equal(listeners.size, 0);
     assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
 
@@ -382,7 +382,7 @@ for (const { name, arrange, expected } of cases) {
       assert.equal(session.activeProcess?.options.conversationId, "same-conversation");
       assert.equal(session.resources.terminals.resolve(terminalHandle), "pi-terminal");
       assert.equal(send.mock.calls[0]!.arguments[0].message.content, "next request");
-      assert.equal((await bridge.runtimeSessionStore.get(sessionId, undefined, bridge.driver.sessionVersion))?.sessionId, next.message.responseId);
+      assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, next.message.responseId);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
       assert.equal(listeners.size, 0);
       return;

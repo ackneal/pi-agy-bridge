@@ -17,7 +17,7 @@ for (const driver of ["cli", "acp"] as const) {
     const dependencies = {
       sessionVersion: version,
       store: {
-        get: async (...args: [string, string | undefined, string]) => {
+        get: async (...args: [string, string]) => {
           reads.push(args);
           throw stopAfterRead;
         },
@@ -28,13 +28,13 @@ for (const driver of ["cli", "acp"] as const) {
       },
       installPlugin: async () => { throw new Error("Preparation must stop at lookup"); },
     };
-    const options = { env: { AGY_BRIDGE_LOGIN_EPOCH: "login-epoch" } };
+    const options = { env: { AGY_BRIDGE_ENABLED: "1" } };
 
     const preparing = driver === "cli"
       ? prepareCliRuntime(model, { messages: [] }, [], options, process.cwd(), dependencies, session, resolveModelAndEffort(model.id), preparationId)
-      : prepareAcpRuntime(model, { messages: [] }, [], options, { executable: process.execPath, cwd: process.cwd() }, dependencies, session, preparationId);
+      : prepareAcpRuntime(model, { messages: [] }, [], options, { cwd: process.cwd(), resolve: async () => { throw new Error("Preparation must stop at lookup"); } }, dependencies, session, preparationId);
     await assert.rejects(preparing, stopAfterRead);
 
-    assert.deepEqual(reads, [[session.piSessionId, "login-epoch", version]]);
+    assert.deepEqual(reads, [[session.piSessionId, version]]);
   });
 }

@@ -15,7 +15,7 @@ export interface DoctorOptions {
   catalogModels?: readonly unknown[] | undefined;
   pluginError?: DriverFailure | undefined;
   discoveryError?: DriverFailure | undefined;
-  authStatus?: "authenticated" | "unauthenticated" | "unknown" | undefined;
+  authStatus?: "authenticated" | "unauthenticated" | "saved" | "unknown" | undefined;
   authError?: DriverFailure | undefined;
   usage?: AgyUsage | undefined;
   usageError?: DriverFailure | undefined;
@@ -94,8 +94,9 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
   const authStatus = options.authStatus === "unknown" || options.authStatus === undefined
     ? (options.usage ? "authenticated" : "unknown")
     : options.authStatus;
-  const authMark = authStatus === "authenticated" ? "✓" : "!";
-  lines.push(`  ${authMark} Auth: ${authStatus}`);
+  const authMark = authStatus === "authenticated" ? "✓" : "x";
+  const authLabel = authStatus === "saved" ? "saved login (backend unverified)" : authStatus;
+  lines.push(`  ${authMark} Auth: ${authLabel}`);
 
   if (process.platform === "win32") {
     lines.push("  ! Windows: Unix socket support is not verified.");

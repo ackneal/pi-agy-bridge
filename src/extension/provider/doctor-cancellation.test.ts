@@ -1,3 +1,5 @@
+import { beforeEach } from "node:test";
+import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -7,6 +9,8 @@ import { promisify } from "node:util";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
+
+useAuthHomeFixture();
 
 // version.ts captures the promisified function at import time; keep its dispatcher reusable.
 let execute: (args: readonly string[], signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
@@ -20,6 +24,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
   syncBuiltinESMExports();
   t.after(() => { cp.execFile = original; syncBuiltinESMExports(); });
   const { CliDriver } = await import("../drivers/cli/driver.ts");
+  const { fetchAgyUsage } = await import("../runtime/usage.ts");
   const { Bridge } = await import("./provider.ts");
 
   for (const stage of ["quota", "report"] as const) {
@@ -88,6 +93,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
         sendMessage,
       } as unknown as ExtensionAPI;
       const bridge = new Bridge(pi, new CliDriver());
+      t.mock.method(CliDriver.prototype, "usage", (signal: AbortSignal) => fetchAgyUsage("/fake/agy", signal));
       t.mock.method(CliDriver.prototype, "detectExecutable", () => "/fake/agy");
       bridge.start();
       assert.ok(doctor);
@@ -118,6 +124,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
 
 test("doctor starts a fresh query after login while the cancelled query is still closing", async (t) => {
   const { CliDriver } = await import("../drivers/cli/driver.ts");
+  const { fetchAgyUsage } = await import("../runtime/usage.ts");
   const { Bridge } = await import("./provider.ts");
   const controller = new AbortController();
   const pending: Promise<unknown>[] = [];
@@ -166,6 +173,7 @@ test("doctor starts a fresh query after login while the cancelled query is still
     registerProvider: (registered: Provider) => { provider = registered; },
     on: () => {}, sendMessage,
   } as unknown as ExtensionAPI, new CliDriver());
+  t.mock.method(CliDriver.prototype, "usage", (signal: AbortSignal) => fetchAgyUsage("/fake/agy", signal));
   t.mock.method(CliDriver.prototype, "detectExecutable", () => "/fake/agy");
   bridge.start();
 

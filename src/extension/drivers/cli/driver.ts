@@ -1,11 +1,11 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { BridgeDriver, DriverFailure, PrepareDriverInput } from "../types.ts";
+import type { BridgeDriver, DriverAuthentication, DriverFailure, PrepareDriverInput } from "../types.ts";
 import { ensureAgyPluginInstalled } from "../../discovery/plugin-install.ts";
 import { discoverAgyModels } from "../../discovery/models.ts";
 import { fetchAgyUsage } from "../../runtime/usage.ts";
 import { detectCliExecutable } from "../../runtime/version.ts";
+import { loginAgyAuthentication, probeAgyAuthentication } from "../../runtime/auth.ts";
 import { prepareDriverCwd } from "../cwd.ts";
-import { createCliAuthenticationBackend } from "./auth.ts";
 import { prepareCliRuntime, resolveModelAndEffort } from "./session.ts";
 
 export class CliDriver implements BridgeDriver {
@@ -17,7 +17,11 @@ export class CliDriver implements BridgeDriver {
   pluginError: DriverFailure | undefined;
 
   constructor() {
-    this.authentication = createCliAuthenticationBackend(() => this.detectExecutable());
+    this.authentication = {
+      label: this.label,
+      probe: (signal, onUsage) => probeAgyAuthentication(this.detectExecutable(), signal, onUsage),
+      login: (interaction, onUsage) => loginAgyAuthentication(interaction, this.detectExecutable(), onUsage),
+    } satisfies DriverAuthentication;
   }
 
   detectExecutable(): string | undefined {
