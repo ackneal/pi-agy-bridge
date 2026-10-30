@@ -7,10 +7,9 @@ import { acpContext, AcpRuntimeSession } from "./runtime.ts";
 test("ACP context preserves images and does not filter artifact text", () => {
   const blocks = acpContext([{ role: "user", content: [{ type: "text", text: "artifact /tmp/example" }, { type: "image", data: "YWJj", mimeType: "image/png" }], timestamp: 0 }]);
   assert.deepEqual(blocks.filter((block) => block.type === "image"), [{ type: "image", data: "YWJj", mimeType: "image/png" }]);
-  const markdown = blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n\n");
-  assert.ok(markdown.includes("## User\n\n> artifact /tmp/example"));
-  assert.ok(markdown.includes("Image attached: image/png"));
-  assert.ok(!markdown.includes('"type":"text"'));
+  const text = blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n\n");
+  assert.ok(text.includes("artifact /tmp/example"));
+  assert.ok(!text.includes('"type":"text"'));
 });
 
 test("ACP runtime exposes native identity and starts stopped", async () => {

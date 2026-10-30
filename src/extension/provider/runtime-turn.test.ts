@@ -176,7 +176,7 @@ for (const { decision, incremental, payload } of cases) {
     } else if (decision.action !== "rebuild") {
       assert.equal(prompt, "latest & request");
     } else {
-      assert.equal(prompt, "# System prompt\n\n> Rules & constraints\n\n# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations.\n\n## User\n\n> earlier <question>\n\n## User\n\n> latest & request");
+      assert.equal(prompt, "[System]: Rules & constraints\n\nearlier <question>\n\nlatest & request");
     }
     await bridge.liveSessions.disposeAll();
     assert.equal(close.mock.callCount(), 1);

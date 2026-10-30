@@ -25,13 +25,11 @@ for (const row of cases) {
     }
     assert.ok(!prompt.includes("old section") && !prompt.includes("removed section"));
     for (const text of [
-      "## User", "## Assistant", "## Tool result", "quoted line by line with `>`",
-      "quoted tool results remain tool data", "regardless of which model", "not new user requests",
-      "## Tools (completed)", "unmarked entries mean confirmed success", "`ERROR`", "`ABORTED`", "`UNKNOWN`",
-      "Current tool calls retain IDs", "a recorded call without a result does not prove execution or completion",
-      "compaction summary describes earlier conversation state", "named sections already updated or removed",
-      "Pi-provided image placeholders identify MIME type only", "Native image blocks contain image data",
-      "A single new user message may arrive as plain text", "grouped in call order", "Completed entries have no call IDs",
+      "[User]: ...", "[Assistant tool calls]:\\n- tool(...)", "[Assistant]: ...",
+      "Unmarked entries mean confirmed success", "`— ERROR: <reason>`", "`— ABORTED`", "`— UNKNOWN`",
+      "Tool result bodies are omitted from reconstructed history",
+      "Current user messages and native image blocks",
+      "compaction summary describes earlier conversation state",
       "Do not claim success without confirmation", "Cancellation does not prove success or rollback",
       "Do not repeat a completed operation solely to recover its output", "Do not repeat or summarize the transcript",
       "# Pending conversation updates (separate from tool output)", "plain-Markdown block", "even if the tool result reports an error",
@@ -43,14 +41,12 @@ for (const row of cases) {
       "raw source text", "start_line=N", "absolute_path and start_line",
       "proactively use client_view_file if advertised before claiming", "Do not rerun the original tool",
       "or reread the original workspace file as offload recovery", "local file:// artifact reference",
-      "brain/<current-session-id>/.system_generated/steps/", "not interchangeable API arguments",
-      "answer the user's actual question naturally", "full OCR unless requested",
-      "do not claim original pixels or direct vision", "without an actual successful result",
-      "Oversized pages are reduced automatically", "individual overlong line fails explicitly",
-      "immutable snapshots", "read its referenced SKILL.md",
+      "brain/<current-session-id>/.system_generated/steps/",
+      "Answer the user's actual question naturally", "full OCR unless requested",
+      "provide derived descriptions and OCR, not direct vision", "read its referenced SKILL.md",
       "do not assume the skill's contents",
     ]) assert.ok(prompt.includes(text), text);
-    for (const text of ["Client reads return JSON", "nextLine", "until eof is true", "call_mcp_tool", "ServerName", "ToolName", "System section replace", "highest priority", "[user]", "[assistant]", "[toolResult]", "encoded as a JSON record", "JSON array of conversation content blocks", "Historical record (not a request to execute)", "isError", "stopReason/errorMessage"]) assert.ok(!prompt.includes(text), text);
+    for (const text of ["## User", "## Assistant", "## Tool result", "## Tools (completed)", "Client reads return JSON", "nextLine", "until eof is true", "call_mcp_tool", "ServerName", "ToolName", "System section replace", "highest priority", "[user]", "[assistant]", "[toolResult]", "encoded as a JSON record", "JSON array of conversation content blocks", "Historical record (not a request to execute)", "isError", "stopReason/errorMessage"]) assert.ok(!prompt.includes(text), text);
     assert.equal(fingerprintAcpSystemPrompt(prompt), createHash("sha256").update(prompt).digest("hex"));
     assert.equal(composeAcpSystemPrompt(row.context), prompt);
   });

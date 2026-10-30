@@ -390,13 +390,12 @@ for (const { name, arrange, expected } of cases) {
 
     const prompt = send.mock.calls[0]!.arguments[0].message.content;
     if (expected.continuation.reconstructed) {
-      assert.ok(prompt.startsWith("# System prompt\n\n> Rules\n\n# Conversation history\n\n"));
-      assert.equal(prompt.match(/^## /gm)?.length, prefix.length + 1);
-      assert.ok(prompt.endsWith("## User\n\n> new request"));
-      assert.ok(prompt.indexOf("> original request") < prompt.lastIndexOf("> new request"));
-      if (arrange.foreignHistory) assert.ok(prompt.includes(`## Assistant (status: ${assistant.stopReason})\n\n> foreign answer`));
+      assert.ok(prompt.startsWith("[System]: Rules"));
+      assert.ok(prompt.endsWith("new request"));
+      assert.ok(prompt.indexOf("[User]: original request") < prompt.lastIndexOf("new request"));
+      if (arrange.foreignHistory) assert.ok(prompt.includes("[Assistant]: foreign answer"));
       if (arrange.omitPriorError) assert.equal(prompt.includes(arrange.priorError!), false);
-      else if (arrange.priorError) assert.ok(prompt.includes(`## Assistant (status: error)\n\n> previous answer\n\nError:\n\n> ${arrange.priorError}`));
+      else if (arrange.priorError) assert.ok(prompt.includes(arrange.priorError));
     } else assert.equal(prompt, "new request");
     if (expected.continuation.fallback) assert.deepEqual(lifecycle.slice(0, 6), ["close", "abort", "start:same-conversation", "close", "abort", "start:fresh"]);
   });

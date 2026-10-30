@@ -68,31 +68,31 @@ const completed: AssistantMessage = { ...assistantMetadata, role: "assistant", c
 describe("formatContextPrompt reconstruction", () => {
   it("quotes history, preserves images and omits completed result bodies", () => {
     assert.equal(formatContextPrompt(context, false), [
-      "# System prompt\n\n> Follow <policy> & safety.", historyHeading,
-      "## User\n\n> old <question>",
-      "## Tools (completed)", "read:", "> - README.md",
-      "## Assistant (status: stop)\n\n> read complete",
-      "## User\n\n> next & now\n> [Image omitted from reconstructed history: image/png; content unavailable]",
+      "[System]: Follow <policy> & safety.",
+      "[User]: old <question>",
+      "[Assistant tool calls]:\n- read(path=\"README.md\")",
+      "[Assistant]: read complete",
+      "next & now",
     ].join("\n\n"));
   });
 
-  it("keeps unfinished results even after an appended user request", () => {
+  it("serializes calls and preserves user request without result bodies", () => {
     const prompt = formatContextPrompt({ messages: [call("old", "old"), result("old", "OLD_BODY"), completed,
       call("current", "current"), result("current", "CURRENT_BODY"), { role: "user", content: "appended", timestamp: 4 }] }, false);
 
-    assert.ok(prompt.includes("> - old"));
+    assert.ok(prompt.includes("- read(path=\"old\")"));
+    assert.ok(prompt.includes("- read(path=\"current\")"));
     assert.ok(!prompt.includes("OLD_BODY"));
-    assert.ok(prompt.includes("id: current, status: success)\n\n> CURRENT_BODY\n\n## User\n\n> appended"));
+    assert.ok(!prompt.includes("CURRENT_BODY"));
+    assert.ok(prompt.endsWith("appended"));
   });
 
   for (const stopReason of ["pending", "deferred"] as const) {
-    it(`keeps ${stopReason} runs current`, () => {
+    it(`serializes ${stopReason} runs`, () => {
       const prompt = formatContextPrompt({ messages: [call("active", "active-path"),
         result("active", "ACTIVE_BODY"), { ...completed, stopReason }] }, false);
-      assert.ok(prompt.includes("### Tool call: read (id: active)"));
-      assert.ok(prompt.includes("id: active, status: success)\n\n> ACTIVE_BODY"));
-      assert.ok(prompt.includes(`status: ${stopReason}`));
-      assert.ok(!prompt.includes("## Tools (completed)"));
+      assert.ok(prompt.includes("- read(path=\"active-path\")"));
+      assert.ok(!prompt.includes("ACTIVE_BODY"));
     });
   }
 
@@ -114,30 +114,27 @@ describe("formatContextPrompt reconstruction", () => {
         const prompt = formatContextPrompt({ messages: [mixed, result("hidden", "SECRET_ONE"), result("chunk", "SECRET_TWO"),
           result("visible", "VISIBLE_BODY"), ...(old ? [completed] : [])] }, false);
 
-        assert.equal(prompt.includes("### Tool call: read (id: hidden)"), !removed && !old);
-        assert.equal(prompt.includes("### Tool call: read (id: chunk)"), !removed && !old);
-        assert.equal(prompt.includes("## Tool result: read (id: hidden,"), !removed && !old);
-        assert.equal(prompt.includes("## Tool result: read (id: chunk,"), !removed && !old);
-        assert.ok(prompt.includes("> retained explanation"));
-        assert.ok(prompt.includes(old ? "> - README.md" : "### Tool call: read (id: visible)"));
-        assert.equal(prompt.includes("VISIBLE_BODY"), !old);
-        assert.equal(prompt.includes("SECRET_ONE"), !removed && !old);
+        assert.equal(prompt.includes(`path=${JSON.stringify(path)}`), !removed);
+        assert.ok(prompt.includes("[Assistant]: retained explanation"));
+        assert.ok(prompt.includes("- read(path=\"README.md\")"));
+        assert.ok(!prompt.includes("SECRET_ONE"));
+        assert.ok(!prompt.includes("VISIBLE_BODY"));
       });
     }
   }
 
-  for (const { name, messages, calls, results, kept, removed } of [
+  for (const { name, messages, calls, kept, removed } of [
     {
       name: "generated read before ID reuse in a later run",
       messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"), result("shared", "TEMP_BODY"), completed,
         call("shared", "README.md"), result("shared", "REAL_BODY")],
-      calls: 1, results: 1, kept: ["README.md", "REAL_BODY"], removed: ["TEMP_BODY", ".system_generated"],
+      calls: 1, kept: ["README.md"], removed: ["TEMP_BODY", ".system_generated"],
     },
     {
       name: "generated read after ID reuse in the same run",
       messages: [call("shared", "README.md"), result("shared", "REAL_BODY"),
         call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"), result("shared", "TEMP_BODY")],
-      calls: 1, results: 1, kept: ["README.md", "REAL_BODY"], removed: ["TEMP_BODY", ".system_generated"],
+      calls: 1, kept: ["README.md"], removed: ["TEMP_BODY", ".system_generated"],
     },
     {
       name: "ambiguous duplicate IDs in one assistant batch are retained",
@@ -145,102 +142,66 @@ describe("formatContextPrompt reconstruction", () => {
         ...call("shared", "README.md").content,
         ...call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt").content,
       ] }, result("shared", "REAL_BODY"), result("shared", "TEMP_BODY")],
-      calls: 2, results: 2, kept: ["README.md", "REAL_BODY", "TEMP_BODY"], removed: [],
+      calls: 2, kept: ["README.md"], removed: [],
     },
     {
       name: "only one corresponding result is removed",
       messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"),
         result("shared", "TEMP_BODY"), result("shared", "UNPAIRED_BODY")],
-      calls: 0, results: 1, kept: ["UNPAIRED_BODY"], removed: ["TEMP_BODY", ".system_generated"],
+      calls: 0, kept: [], removed: ["TEMP_BODY", ".system_generated"],
     },
     {
       name: "a new assistant message closes the previous batch",
       messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"), completed,
         result("shared", "UNPAIRED_BODY")],
-      calls: 0, results: 1, kept: ["UNPAIRED_BODY"], removed: [".system_generated"],
+      calls: 0, kept: [], removed: [".system_generated"],
     },
     {
       name: "a result from a different tool with the same ID is retained",
       messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"),
         { ...result("shared", "BASH_BODY"), toolName: "bash" }, result("shared", "TEMP_BODY")],
-      calls: 0, results: 0, kept: ["BASH_BODY", "## Tool result: bash (id: shared,"], removed: ["TEMP_BODY", ".system_generated"],
+      calls: 0, kept: [], removed: ["TEMP_BODY", ".system_generated"],
     },
     {
       name: "user and system updates do not break the current tool batch",
       messages: [call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"),
         { role: "user", content: "Keep this update", timestamp: 4 } as Context["messages"][number],
         { role: "system", content: "Keep this rule", timestamp: 5 } as Context["messages"][number], result("shared", "TEMP_BODY")],
-      calls: 0, results: 0, kept: ["Keep this update", "Keep this rule"], removed: ["TEMP_BODY", ".system_generated"],
+      calls: 0, kept: ["Keep this update", "Keep this rule"], removed: ["TEMP_BODY", ".system_generated"],
     },
     {
       name: "a result preceding the generated read is retained",
       messages: [result("shared", "EARLIER_BODY"),
         call("shared", "/root/.gemini/antigravity-cli/brain/id/.system_generated/output.txt"), result("shared", "TEMP_BODY")],
-      calls: 0, results: 1, kept: ["EARLIER_BODY"], removed: ["TEMP_BODY", ".system_generated"],
+      calls: 0, kept: [], removed: ["TEMP_BODY", ".system_generated"],
     },
   ]) {
     it(`scopes generated-read filtering: ${name}`, () => {
       const before = structuredClone(messages);
       const prompt = formatContextPrompt({ messages }, false);
 
-      assert.equal(prompt.match(/### Tool call: read \(id: shared\)/g)?.length ?? 0, calls);
-      assert.equal(prompt.match(/## Tool result: read \(id: shared,/g)?.length ?? 0, results);
+      assert.equal(prompt.match(/- read\(path=/g)?.length ?? 0, calls);
       for (const value of kept) assert.ok(prompt.includes(value), value);
       for (const value of removed) assert.ok(!prompt.includes(value), value);
       assert.deepEqual(messages, before);
     });
   }
 
-  for (const { name, body, count, capped } of [
-    { name: "exact rendered budget", body: "x".repeat(7998), count: 3, capped: false },
-    { name: "quote markers push raw text over budget", body: "x".repeat(7999), count: 3, capped: true },
-    { name: "multiline quote markers count", body: "x\n".repeat(3000), count: 3, capped: true },
-    { name: "large results", body: "x".repeat(30000), count: 5, capped: true },
-  ]) {
-    it(`budgets current results: ${name}`, () => {
-      const messages = Array.from({ length: count }, (_, i) => result(`r${i}`, body, i === 0));
-      const prompt = formatContextPrompt({ messages }, false);
-      const bodies = prompt.split(/## Tool result:[^\n]+\n\n/).slice(1).map((part) => part.replace(/\n\n$/, ""));
-
-      assert.equal(bodies.length, count);
-      assert.ok(bodies.reduce((sum, value) => sum + value.length, 0) <= 24000);
-      if (capped) {
-        assert.ok(bodies.every((value) => value.length <= 8000));
-        assert.ok(bodies[0]!.includes("[Truncated:"));
-        assert.ok(bodies.at(-1)!.includes("[Truncated:"));
-        assert.ok(bodies[0]!.length >= bodies[1]!.length);
-      } else {
-        assert.deepEqual(bodies, Array(count).fill(`> ${body}`));
-      }
-    });
-  }
-
-  for (const old of [false, true]) {
-    it(`limits only old call arguments to 1000 rendered characters (${old})`, () => {
-      const args = "x".repeat(2000);
-      const prompt = formatContextPrompt({ messages: [call("args", args), ...(old ? [completed] : [])] }, false);
-      const body = old ? prompt.split("read:\n\n")[1]!.split("\n\n## Assistant")[0]! : prompt.split("### Tool call: read (id: args)\n\n")[1]!;
-
-      assert.equal(body.includes("[Truncated:"), old);
-      if (old) {
-        assert.equal(body.length, 1000 + 2 + " — UNKNOWN".length);
-        assert.ok(body.startsWith("> - "));
-        assert.ok(body.endsWith("[Truncated: 2000 characters total] — UNKNOWN"));
-      }
-      else assert.equal(body, `> ${JSON.stringify({ path: args })}`);
-    });
-  }
+  it("truncates long arguments exceeding 300 characters with ellipsis", () => {
+    const args = "x".repeat(500);
+    const prompt = formatContextPrompt({ messages: [call("args", args), completed] }, false);
+    assert.ok(prompt.includes("…"));
+    assert.ok(!prompt.includes("x".repeat(350)));
+  });
 });
 
 for (const { name, messages, expected, absent } of [
-  { name: "out of order results retain call order", messages: [{ ...call("a", "first"), content: [...call("a", "first").content, ...call("b", "second").content] }, result("b", "bad", true), result("a", "ok"), completed], expected: ["> - first", "> - second — ERROR: bad"], absent: ["id:", "Body omitted"] },
-  { name: "duplicates are unknown", messages: [call("a", "file"), result("a", "ok"), result("a", "ok"), completed], expected: ["> - file — UNKNOWN"], absent: ["SUCCESS"] },
-  { name: "missing aborted call", messages: [call("a", "file"), { ...completed, stopReason: "aborted" as const }], expected: ["> - file — ABORTED", "status: aborted"], absent: ["SUCCESS"] },
-  { name: "missing call is unknown", messages: [call("a", "file"), completed], expected: ["> - file — UNKNOWN"], absent: ["SUCCESS"] },
-  { name: "orphan success is unknown", messages: [result("a", "untrusted"), completed], expected: ["> - Unpaired result — UNKNOWN"], absent: ["SUCCESS", "untrusted", "id:"] },
-  { name: "reused IDs pair per batch", messages: [call("a", "one"), result("a", "ok"), call("a", "two"), result("a", "failure", true), completed], expected: ["> - one", "> - two — ERROR: failure"], absent: ["UNKNOWN"] },
-  { name: "tool image stays with operation", messages: [call("a", "image"), { ...result("a", "ok"), content: [{ type: "image" as const, mimeType: "image/png", data: "SECRET_BASE64" }] }, completed], expected: ["> - image\n\n> [Image omitted from reconstructed history: image/png; content unavailable]"], absent: ["SECRET_BASE64", "data:"] },
-  { name: "text splits groups", messages: [{ ...call("a", "one"), content: [...call("a", "one").content, { type: "text" as const, text: "between" }, ...call("b", "two").content] }, result("a", "ok"), result("b", "ok"), completed], expected: ["> - one", "> between", "## Tools (completed)\n\nread:\n\n> - two"], absent: ["id:"] },
+  { name: "out of order results retain call order", messages: [{ ...call("a", "first"), content: [...call("a", "first").content, ...call("b", "second").content] }, result("b", "bad", true), result("a", "ok"), completed], expected: ["- read(path=\"first\")", "- read(path=\"second\") — ERROR: bad"], absent: ["id:", "Body omitted"] },
+  { name: "duplicates are unknown", messages: [call("a", "file"), result("a", "ok"), result("a", "ok"), completed], expected: ["- read(path=\"file\") — UNKNOWN"], absent: ["SUCCESS"] },
+  { name: "missing aborted call", messages: [call("a", "file"), { ...completed, stopReason: "aborted" as const }], expected: ["- read(path=\"file\") — ABORTED"], absent: ["SUCCESS"] },
+  { name: "missing call is unknown", messages: [call("a", "file"), completed], expected: ["- read(path=\"file\") — UNKNOWN"], absent: ["SUCCESS"] },
+  { name: "reused IDs pair per batch", messages: [call("a", "one"), result("a", "ok"), call("a", "two"), result("a", "failure", true), completed], expected: ["- read(path=\"one\")", "- read(path=\"two\") — ERROR: failure"], absent: ["UNKNOWN"] },
+  { name: "text splits groups", messages: [{ ...call("a", "one"), content: [...call("a", "one").content, { type: "text" as const, text: "between" }, ...call("b", "two").content] }, result("a", "ok"), result("b", "ok"), completed], expected: ["- read(path=\"one\")", "- read(path=\"two\")", "between"], absent: ["id:"] },
 ]) {
   it(name, () => {
     const before = structuredClone(messages);
@@ -256,14 +217,11 @@ for (const { name, messages, expected, absent } of [
   });
 }
 
-for (const { name, input, expected, enabled } of ([
-  { name: "completed results", input: { systemPrompt: "PRIVATE_SYSTEM", messages: [call("private-id", "PRIVATE_PATH"), result("private-id", "PRIVATE_BODY"), completed] }, expected: [1, 0, 0, 0] },
-  { name: "current truncation and omission", input: { messages: Array.from({ length: 5 }, (_, index) => result(`private-${index}`, "x".repeat(12000))) }, expected: [2, 3, 0, 0] },
-  { name: "argument truncation and image replacement", input: { messages: [call("private-id", "x".repeat(2000)), {
-    ...result("private-id", "PRIVATE_BODY"), content: [{ type: "image" as const, mimeType: "image/png", data: "PRIVATE_BASE64" }],
-  }, completed] }, expected: [1, 0, 1, 1] },
-  { name: "source text is not a generated image placeholder", input: { messages: [{ role: "user" as const, content: "[Image omitted from reconstructed history: fake/type; content unavailable]", timestamp: 1 }] }, expected: [0, 0, 0, 0] },
-] satisfies { name: string; input: Context; expected: number[] }[]).flatMap((row) => [false, true].map((enabled) => ({ ...row, enabled })))) {
+for (const { name, input, enabled } of ([
+  { name: "completed results", input: { systemPrompt: "PRIVATE_SYSTEM", messages: [call("private-id", "PRIVATE_PATH"), result("private-id", "PRIVATE_BODY"), completed] } },
+  { name: "argument truncation", input: { messages: [call("private-id", "x".repeat(2000)), completed] } },
+  { name: "plain user", input: { messages: [{ role: "user" as const, content: "hello", timestamp: 1 }] } },
+] satisfies { name: string; input: Context }[]).flatMap((row) => [false, true].map((enabled) => ({ ...row, enabled })))) {
   it(`logs numeric rebuild metrics only when enabled (${name}, ${enabled})`, () => {
     const previous = process.env["AGY_BRIDGE_DEBUG"];
     process.env["AGY_BRIDGE_DEBUG"] = enabled ? "1" : "0";
@@ -277,7 +235,6 @@ for (const { name, input, expected, enabled } of ([
         const metrics = JSON.parse(logged.slice(logged.indexOf("{")));
         assert.equal(metrics.inputChars, JSON.stringify(input.messages).length + ("systemPrompt" in input ? input.systemPrompt.length : 0));
         assert.equal(metrics.finalChars, prompt.length);
-        assert.deepEqual([metrics.omittedToolResults, metrics.truncatedToolResults, metrics.truncatedArguments, metrics.imagePlaceholders], expected);
         assert.ok(!logged.includes("private-id"));
         assert.ok(Object.values(metrics).every((value) => typeof value === "number"));
         assert.ok(!logged.includes("PRIVATE"));

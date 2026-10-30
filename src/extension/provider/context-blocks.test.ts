@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AssistantMessage, Context, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
-import { formatContextBlocks, formatContextPrompt, RESULT_BODY_CEILING } from "./context-prompt.ts";
+import { formatContextBlocks, formatContextPrompt } from "./context-prompt.ts";
 
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const image: ImageContent = { type: "image", data: "YWJj", mimeType: "image/png" };
@@ -26,69 +26,51 @@ for (const row of [
     const blocks = formatContextBlocks(row.context, row.reused, 0);
     assert.ok(blocks.every((block) => block.type === "text"));
     assert.equal(blocks.map((block) => { assert.ok("text" in block); return block.text; }).join("\n\n"), formatContextPrompt(row.context, row.reused, 0));
-    assert.ok(blocks.length <= 1);
+    assert.ok(blocks.length <= 2);
   });
 }
 
 for (const row of [
-  { name: "historical user", messages: [user([{ type: "text" as const, text: "image question" }, image]), assistant([{ type: "text" as const, text: "answer" }], "stop"), user("next")], expected: ["> image question", "## Assistant (status: stop)"] },
-  { name: "completed tool result", messages: [call, result([{ type: "text" as const, text: "OLD_RESULT_BODY" }, image]), assistant([], "stop"), user("next")], expected: ["> - input", "## User"] },
+  { name: "historical user", messages: [user([{ type: "text" as const, text: "image question" }, image]), assistant([{ type: "text" as const, text: "answer" }], "stop"), user("next")], expected: ["[User]: image question", "[Assistant]: answer", "next"] },
+  { name: "completed tool result", messages: [call, result([{ type: "text" as const, text: "OLD_RESULT_BODY" }, image]), assistant([], "stop"), user("next")], expected: ["- read(path=\"input\")", "next"] },
 ]) {
   test(`completed history omits native images: ${row.name}`, () => {
     const blocks = formatContextBlocks({ messages: row.messages }, false);
     assert.ok(blocks.every((block) => block.type === "text"));
     const text = blocks.map((block) => block.text).join("\n\n");
-    assert.ok(text.includes("[Image omitted from reconstructed history: image/png; content unavailable]"));
-    assert.ok(!text.includes("Image attached:"));
+    assert.ok(!text.includes("OLD_RESULT_BODY"));
+    assert.ok(!text.includes("image/png"));
     for (const marker of row.expected) assert.ok(text.includes(marker));
-    if (row.name === "completed tool result") assert.ok(!text.includes("OLD_RESULT_BODY"));
   });
 }
 
 for (const row of [
-  { name: "current tool result", messages: [call, result([{ type: "text" as const, text: "current result" }, image]), user("next")], before: "> current result", after: "## User" },
-  { name: "truncated error result", messages: [call, result([{ type: "text" as const, text: "x".repeat(30_000) }, image], true), user("next")], before: "status: error", after: "## User" },
+  { name: "current user with image", messages: [call, assistant([], "stop"), user([{ type: "text" as const, text: "current prompt" }, image])], historyMarker: "- read(path=\"input\")", promptMarker: "current prompt" },
 ]) {
-  test(`native image stays with its source in active run: ${row.name}`, () => {
+  test(`native image separates into image block in active run: ${row.name}`, () => {
     const blocks = formatContextBlocks({ messages: row.messages }, false);
-    const index = blocks.findIndex((block) => block.type === "image");
-    assert.ok(index > 0);
-    assert.deepEqual(blocks.filter((block) => block.type === "image"), [image]);
-    const before = blocks[index - 1]!;
-    const after = blocks[index + 1]!;
-    assert.ok(before.type === "text" && after.type === "text");
-    assert.ok(before.text.includes(row.before));
-    assert.ok(before.text.includes("Image attached: image/png"));
-    assert.ok(!before.text.includes("content unavailable"));
-    assert.ok(after.text.includes(row.after));
-    assert.ok(!after.text.includes("Image attached"));
-    if (row.name === "truncated error result") {
-      assert.ok(before.text.includes("[Truncated:"));
-      assert.ok(before.text.length < RESULT_BODY_CEILING + 500);
-    }
+    assert.equal(blocks.length, 3);
+    assert.deepEqual(blocks[2], image);
+    const historyBlock = blocks[0]!;
+    const promptBlock = blocks[1]!;
+    assert.ok(historyBlock.type === "text" && promptBlock.type === "text");
+    assert.ok(historyBlock.text.includes(row.historyMarker));
+    assert.ok(promptBlock.text.includes(row.promptMarker));
   });
 }
 
-for (const source of ["historical user", "current tool result"] as const) {
-  test(`native images preserve interleaved content order: ${source}`, () => {
-    const secondImage: ImageContent = { ...image, data: "ZGVm" };
-    const content = [{ type: "text" as const, text: "before first" }, image,
-      { type: "text" as const, text: "between images" }, secondImage,
-      { type: "text" as const, text: "after second" }];
-    const messages = source === "current tool result" ? [call, result(content)] : [user(content)];
-    const blocks = formatContextBlocks({ messages }, false, 0);
-    assert.equal(blocks.length, 5);
-    assert.deepEqual(blocks[1], image);
-    assert.deepEqual(blocks[3], secondImage);
-    for (const [index, label] of [[0, "before first"], [2, "between images"], [4, "after second"]] as const) {
-      const block = blocks[index]!;
-      assert.ok(block.type === "text" && block.text.includes(`> ${label}`));
-      for (const other of ["before first", "between images", "after second"]) {
-        if (other !== label) assert.ok(!block.text.includes(`> ${other}`));
-      }
-    }
-  });
-}
+test("current user prompt with interleaved images preserves order", () => {
+  const secondImage: ImageContent = { ...image, data: "ZGVm" };
+  const content = [{ type: "text" as const, text: "before first" }, image,
+    { type: "text" as const, text: "between images" }, secondImage,
+    { type: "text" as const, text: "after second" }];
+  const messages = [user(content)];
+  const blocks = formatContextBlocks({ messages }, false, 0);
+  assert.equal(blocks.length, 3);
+  assert.deepEqual(blocks[1], image);
+  assert.deepEqual(blocks[2], secondImage);
+  assert.ok(blocks[0]?.type === "text" && blocks[0].text.includes("before first\n\nbetween images\n\nafter second"));
+});
 
 test("incremental user with image delivers single text block and image blocks", () => {
   const content = [{ type: "text" as const, text: "幫我看看這張圖 ./xxx/xxx.png" }, image];
@@ -111,23 +93,15 @@ test("incremental user sequence merges texts and appends image blocks", () => {
   assert.deepEqual(blocks[2], secondImage);
 });
 
-test("assistant message with mixed text, image, and toolCall preserves toolCall and order", () => {
+test("assistant message with mixed text and toolCall serializes correctly in history", () => {
   const mixedAssistant = assistant([
-    { type: "text", text: "executing command with visual context" },
-    image as unknown as TextContent,
+    { type: "text", text: "executing command" },
     { type: "toolCall", id: "call_42", name: "bash", arguments: { command: "echo test" } },
   ]);
   const blocks = formatContextBlocks({ messages: [mixedAssistant] }, false);
-  assert.equal(blocks.length, 3);
-  assert.deepEqual(blocks[1], image);
-  const before = blocks[0];
-  const after = blocks[2];
-  assert.ok(before?.type === "text");
-  assert.ok(after?.type === "text");
-  assert.ok(before.text.includes("## Assistant (status: toolUse)"));
-  assert.ok(before.text.includes("> executing command with visual context"));
-  assert.ok(before.text.includes("[Image attached: image/png]"));
-  assert.ok(after.text.includes("### Tool call: bash (id: call_42)"));
-  assert.ok(after.text.includes("> {\"command\":\"echo test\"}"));
+  assert.equal(blocks.length, 1);
+  assert.ok(blocks[0]?.type === "text");
+  assert.ok(blocks[0].text.includes("[Assistant]: executing command"));
+  assert.ok(blocks[0].text.includes("[Assistant tool calls]:\n- bash(command=\"echo test\")"));
 });
 

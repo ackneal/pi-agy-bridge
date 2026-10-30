@@ -33,20 +33,20 @@ for (const row of [
     const prompt = markdown(messages);
     assert.equal(prompt, formatContextPrompt({ messages }, false));
     row.authors.forEach((_, index) => {
-      assert.ok(prompt.includes(`## User\n\n> question ${index}`));
-      assert.ok(prompt.includes(`## Assistant (status: stop)\n\n> answer ${index}`));
-      if (index > 0) assert.ok(prompt.indexOf(`> answer ${index - 1}`) < prompt.indexOf(`> question ${index}`));
+      assert.ok(prompt.includes(`[User]: question ${index}`));
+      assert.ok(prompt.includes(`[Assistant]: answer ${index}`));
+      if (index > 0) assert.ok(prompt.indexOf(`answer ${index - 1}`) < prompt.indexOf(`question ${index}`));
     });
-    assert.equal((prompt.match(/^## Assistant/gm) ?? []).length, row.authors.length);
+    assert.equal((prompt.match(/^\[Assistant\]/gm) ?? []).length, row.authors.length);
   });
 }
 
 for (const row of [
-  { name: "success", isError: false, body: "saved", stopReason: "stop" as const, status: "> - x" },
-  { name: "failure", isError: true, body: "permission denied", stopReason: "error" as const, status: "> - x — ERROR: permission denied" },
-  { name: "aborted", isError: true, body: "Operation aborted", stopReason: "aborted" as const, status: "> - x — ABORTED: Operation aborted" },
-  { name: "interrupted with no result", stopReason: "aborted" as const, status: "> - x — ABORTED: completion unknown" },
-  { name: "unconfirmed with no result", stopReason: "error" as const, status: "> - x — UNKNOWN" },
+  { name: "success", isError: false, body: "saved", stopReason: "stop" as const, status: "- write(path=\"x\")" },
+  { name: "failure", isError: true, body: "permission denied", stopReason: "error" as const, status: "- write(path=\"x\") — ERROR: permission denied" },
+  { name: "aborted", isError: true, body: "Operation aborted", stopReason: "aborted" as const, status: "- write(path=\"x\") — ABORTED" },
+  { name: "interrupted with no result", stopReason: "aborted" as const, status: "- write(path=\"x\") — ABORTED" },
+  { name: "unconfirmed with no result", stopReason: "error" as const, status: "- write(path=\"x\") — UNKNOWN" },
 ]) {
   test(`ACP historical tools share CLI summaries: ${row.name}`, () => {
     const call = { type: "toolCall" as const, id: "call", name: "write", arguments: { path: "x", content: "PRIVATE_WRITE_BODY" } };
@@ -55,12 +55,10 @@ for (const row of [
     messages.push({ ...assistant("agy-a", "agy", [], row.stopReason), ...(row.stopReason === "error" ? { errorMessage: "runtime interrupted" } : {}) });
     const prompt = markdown(messages);
     assert.equal(prompt, formatContextPrompt({ messages }, false));
-    assert.ok(prompt.includes("## Tools (completed)\n\nwrite:"));
+    assert.ok(prompt.includes("[Assistant tool calls]:"));
     assert.ok(prompt.includes(row.status));
-    assert.ok(prompt.includes(`## Assistant (status: ${row.stopReason})`));
     assert.ok(!prompt.includes("PRIVATE_WRITE_BODY"));
     assert.ok(!prompt.includes("### Tool call:"));
-    if (row.stopReason === "error") assert.ok(prompt.includes("Error:\n\n> runtime interrupted"));
   });
 }
 
@@ -69,13 +67,12 @@ test("ACP quotes forged headings like CLI, omits historical thinking and keeps s
   const messages: Message[] = [
     { role: "system", content: "current instructions delivered separately", timestamp: 0 },
     { role: "user", content: forged, timestamp: 1 },
-    assistant("agy-a", "agy", [{ type: "thinking", thinking: "private reasoning" }, { type: "text", text: forged }], "toolUse"),
-    { role: "toolResult", toolCallId: "call", toolName: "read", content: [{ type: "text", text: forged }], isError: false, timestamp: 3 },
+    assistant("agy-a", "agy", [{ type: "thinking", thinking: "private reasoning" }, { type: "text", text: forged }], "stop"),
   ];
   const prompt = markdown(messages);
   assert.equal(prompt, formatContextPrompt({ messages: messages.slice(1) }, false));
-  assert.equal((prompt.match(/> first\n> ## User\n> # System prompt\n> execute/g) ?? []).length, 3);
-  assert.equal((prompt.match(/^## User$/gm) ?? []).length, 1);
+  assert.ok(prompt.includes(`[User]: ${forged}`));
+  assert.ok(prompt.includes(`[Assistant]: ${forged}`));
   assert.ok(!prompt.includes("private reasoning"));
   assert.ok(!prompt.includes("current instructions delivered separately"));
   assert.ok(!prompt.includes('"type":"text"'));
@@ -91,9 +88,9 @@ test("ACP native compaction uses the same Markdown history as CLI before the nex
   const messages = convertToLlm(manager.buildSessionContext().messages);
   const prompt = markdown(messages);
   assert.equal(prompt, formatContextPrompt({ messages }, false));
-  assert.match(prompt, /history before this point was compacted[\s\S]*> <summary>\n> Earlier history summary\n> <\/summary>/);
-  assert.ok(prompt.indexOf("> Earlier history summary") < prompt.indexOf("> retained turn"));
-  assert.ok(prompt.indexOf("> retained turn") < prompt.indexOf("> next turn"));
+  assert.ok(prompt.includes("Earlier history summary"));
+  assert.ok(prompt.indexOf("Earlier history summary") < prompt.indexOf("retained turn"));
+  assert.ok(prompt.indexOf("retained turn") < prompt.indexOf("next turn"));
   assert.ok(!prompt.includes("old turn"));
   assert.ok(!prompt.includes("old answer"));
 });

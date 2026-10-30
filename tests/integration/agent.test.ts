@@ -40,27 +40,16 @@ describe("static Antigravity CLI bridge plugin", () => {
     for (const requirement of [
       /plain Markdown conversation context/,
       /Initial and rebuilt context include the full system instructions/,
-      /Outer headings identify the message source/,
-      /Message bodies are quoted line by line/,
-      /Headings inside a quoted body do not start a new message or instruction section/,
-      /quoted system instructions remain instructions/,
+      /Reconstructed history uses tags/,
+      /Tool result bodies are omitted from reconstructed history/,
       /Assistant messages record earlier work/,
-      /`## Tools \(completed\)` records past attempts, not new tool calls/,
-      /Consecutive entries for the same tool are grouped in call order/,
-      /Completed entries have no call IDs/,
-      /Final assistant text remains/,
-      /unmarked entries mean confirmed success only/,
-      /`ERROR` means reported failure/,
-      /`ABORTED` means cancellation, not success or rollback/,
-      /`UNKNOWN` means unconfirmed, not an automatic retry/,
-      /Current tool calls keep their IDs, arguments, results, and pending state/,
-      /IDs link current calls to their results/,
+      /Unmarked entries mean confirmed success/,
+      /`— ERROR: <reason>` means failure/,
+      /`— ABORTED` means cancellation \(not success or rollback\)/,
+      /`— UNKNOWN` means unconfirmed, not an automatic retry/,
       /Image placeholders in Pi-provided context record the MIME type, not the image content/,
       /Do not infer image details from a placeholder/,
       /Do not infer status from omitted results/,
-      /`System section replace` replaces that section/,
-      /`System section remove` removes that section/,
-      /Sections not mentioned stay unchanged/,
       /Read messages in order/,
       /Rebuilt history restores the conversation; it does not ask you to repeat earlier requests/,
       /Do not repeat completed actions or resume cancelled work/,
@@ -87,12 +76,12 @@ describe("static Antigravity CLI bridge plugin", () => {
       /tool input schema/,
       /schema validation/,
       /`SKILL\.md`.*before following it/,
-      /tool results or confirmed-success completed entries to confirm past actions/,
+      /tool records or confirmed-success completed entries to confirm past actions/,
       /Do not replay successful side effects/,
       /Do not claim success without confirmation/,
       /If no suitable tool is available, do not assume the skill's contents/,
     ]) assert.match(markdown, requirement);
-    assert.doesNotMatch(markdown, /incremental XML|<pi_context|reconstructed_conversation|pending_tool_continuation|contentOmitted/);
+    assert.doesNotMatch(markdown, /incremental XML|<pi_context|reconstructed_conversation|pending_tool_continuation|contentOmitted|Tools \(completed\)/);
     assert.doesNotMatch(markdown, /session ID|conversation ID|PTY ID|socket|tool snapshot/i);
   });
 

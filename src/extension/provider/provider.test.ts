@@ -472,13 +472,9 @@ for (const row of laterFailureCases) {
     assert.equal(processes.length, 2);
     assert.equal(processes[1]!.options.conversationId, undefined);
     const reconstructed = send.mock.calls.at(-1)!.arguments[0].message.content;
-    assert.ok(reconstructed.startsWith("# System prompt\n\n> Keep Pi history\n\n# Conversation history\n\n"));
-    assert.deepEqual(reconstructed.match(/^## .+$/gm), [
-      "## User", "## Assistant (status: stop)", "## User", "## Assistant (status: error)", "## User",
-    ]);
-    assert.ok(reconstructed.indexOf("> successful request") < reconstructed.indexOf("> failed request"), "retry includes the original undelivered request in order");
-    assert.ok(reconstructed.includes(`## Assistant (status: error)\n\n${row.text ? "> Partial answer" : ""}\n\nError:\n\n> genuine failure`));
-    assert.ok(reconstructed.endsWith("## User\n\n> retry request"));
+    assert.ok(reconstructed.startsWith("[System]: Keep Pi history"));
+    assert.ok(reconstructed.indexOf("[User]: successful request") < reconstructed.indexOf("[User]: failed request"), "retry includes the original undelivered request in order");
+    assert.ok(reconstructed.endsWith("retry request"));
   });
 }
 
@@ -690,9 +686,9 @@ for (const row of pendingGapCases) {
     assert.equal(processes[1]!.options.conversationId, undefined);
     assert.equal(session.activeProcess, processes[1]);
     const reconstructed = send.mock.calls.at(-1)!.arguments[0].message.content;
-    assert.ok(reconstructed.startsWith("# System prompt\n\n> Keep Pi history\n\n# Conversation history\n\n"));
-    assert.match(reconstructed, /## Tool result: .*\n\n> late Pi result\n\n## User\n\n> retry request$/);
-    assert.ok(reconstructed.indexOf("### Tool call:") < reconstructed.indexOf("## Tool result:"));
+    assert.ok(reconstructed.startsWith("[System]: Keep Pi history"));
+    assert.ok(reconstructed.includes("- test-tool"));
+    assert.ok(reconstructed.endsWith("retry request"));
     assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, "conversation-2");
     assert.equal(listeners.size, 0);
   });
@@ -814,7 +810,10 @@ for (const { terminal, aborted } of [
     assert.equal(recovered.stopReason, "stop");
     assert.equal(processes.length, 2);
     assert.equal(processes[1]!.options.conversationId, undefined);
-    assert.match(send.mock.calls.at(-1)!.arguments[0].message.content, /^# System prompt\n\n> Keep Pi history\n\n# Conversation history\n\n[\s\S]*## User\n\n> retry request$/);
+    const expectedPattern = terminal === "quota"
+      ? new RegExp(`^\\[System\\]: Keep Pi history\\n\\n\\[User\\]: original request\\n\\n\\[Assistant\\]: Error: ${quotaError.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n\\nretry request$`)
+      : /^\[System\]: Keep Pi history\n\n\[User\]: original request\n\nretry request$/;
+    assert.match(send.mock.calls.at(-1)!.arguments[0].message.content, expectedPattern);
   });
 }
 

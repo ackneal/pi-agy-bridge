@@ -118,8 +118,8 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
       assert.equal(resolve.mock.callCount(), 0);
       assert.equal(prompts.length, 2);
       const replay = JSON.stringify(prompts[1]);
-      assert.ok(replay.includes("HISTORICAL_COMPLETED_RESULT"));
       assert.ok(replay.includes("synthetic.txt"));
+      assert.ok(!replay.includes("HISTORICAL_COMPLETED_RESULT"));
       assert.ok(!replay.includes("PRIVATE_"));
       assert.ok(!JSON.stringify(oldResult).includes("HISTORICAL_COMPLETED_RESULT"));
       if (scenario === "removed section") assert.ok(!active.options.systemPrompt?.includes("PRIVATE_SECTION"));
