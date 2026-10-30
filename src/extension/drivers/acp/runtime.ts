@@ -60,7 +60,7 @@ export class AcpRuntimeSession implements DriverSession {
       observeImage: (image, signal) => observeAcpImage({
         executable: options.executable, cwd: options.cwd, model: options.model,
         ...(options.args !== undefined ? { args: options.args } : {}),
-        ...(options.effort !== undefined ? { effort: options.effort } : {}),
+        ...(options.effort !== undefined ? { effort: "low" } : {}),
         image, userPrompt: this.userPrompt, signal,
       }),
     });

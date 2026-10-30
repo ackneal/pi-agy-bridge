@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
 import { AcpConnection, type AcpConnectionOptions } from "./connection.ts";
-import { observeAcpImage } from "./image-observer.ts";
+import { observeAcpImage, OBSERVER_TIMEOUT_MS } from "./image-observer.ts";
 
-const rows = ["success", "exact-limit", "cleanup-error", "no-effort", "capability", "no-image", "empty-id", "missing-model", "unsupported", "rejected", "reset", "empty", "stop", "overflow", "tool-call", "tool-update", "transport", "request-error", "cancel-start", "cancel-prompt", "timeout-start", "timeout-prompt"] as const;
+const rows = ["success", "exact-limit", "cleanup-error", "no-effort", "capability", "no-image", "empty-id", "missing-model", "unsupported", "rejected", "reset", "empty", "stop", "overflow", "tool-call", "tool-update", "transport", "request-error", "cancel-start", "cancel-prompt", "timeout-start", "timeout-prompt", "timeout-partial"] as const;
 for (const scenario of rows) {
   test(`image observer: ${scenario}`, async (t) => {
     const controller = new AbortController();
@@ -17,10 +17,10 @@ for (const scenario of rows) {
       { id: "thinking_level", name: "Effort", type: "select", currentValue: "low", options: [{ value: "high", name: "High" }] },
     ];
     if (scenario === "missing-model") config = config.filter((entry) => entry.id !== "model");
-    if (scenario === "timeout-start" || scenario === "timeout-prompt") t.mock.timers.enable({ apis: ["setTimeout"] });
+    if (scenario.startsWith("timeout-")) t.mock.timers.enable({ apis: ["setTimeout"] });
     const hang = (stage: string) => {
       if (scenario === `cancel-${stage}`) controller.abort(new Error(`cancel ${stage}`));
-      if (scenario === `timeout-${stage}`) t.mock.timers.tick(60_000);
+      if (scenario === `timeout-${stage}` || (scenario === "timeout-partial" && stage === "prompt")) t.mock.timers.tick(OBSERVER_TIMEOUT_MS);
       return new Promise<never>(() => {});
     };
     t.mock.method(AcpConnection.prototype, "start", function (this: AcpConnection) {
@@ -43,6 +43,10 @@ for (const scenario of rows) {
         return { configOptions: config };
       }
       assert.equal(method, acp.methods.agent.session.prompt);
+      if (scenario === "timeout-partial") {
+        await boundary.onUpdate?.({ sessionId: "observer", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Partial OCR" } } });
+        return hang("prompt");
+      }
       if (scenario.endsWith("-prompt")) return hang("prompt");
       if (scenario === "transport") { boundary.onClose?.(new Error("transport failed")); return new Promise(() => {}); }
       if (scenario === "request-error") throw new Error("prompt failed");
@@ -71,14 +75,18 @@ for (const scenario of rows) {
     const errors: Partial<Record<typeof scenario, RegExp>> = {
       "cleanup-error": /cleanup failed/, capability: /requires systemPrompt.append/, "no-image": /requires image capability/, "empty-id": /empty session ID/,
       "missing-model": /unavailable: model/, unsupported: /unsupported mode/, rejected: /did not apply.*mode/,
-      reset: /did not apply.*model/, empty: /empty output/, stop: /stopped with max_tokens/, overflow: /exceeds 64KiB/,
+      reset: /did not apply.*model/, empty: /empty output/, stop: /stopped with max_tokens/,
       "tool-call": /observer attempted a tool call/, "tool-update": /observer attempted a tool call/,
       transport: /transport failed/, "request-error": /prompt failed/, "cancel-start": /cancel start/, "cancel-prompt": /cancel prompt/,
       "timeout-start": /timed out/, "timeout-prompt": /timed out/,
     };
     if (errors[scenario]) await assert.rejects(result, errors[scenario]);
     else {
-      assert.equal(await result, scenario === "exact-limit" ? "é".repeat(32768) : "Description. OCR and answer.");
+      const expected = scenario === "exact-limit" ? "é".repeat(32768) :
+        scenario === "overflow" ? `${"é".repeat(32768)}\n\n[Observation truncated at 64KiB limit]` :
+        scenario === "timeout-partial" ? `Partial OCR\n\n[Observation interrupted: timed out after ${OBSERVER_TIMEOUT_MS}ms]` :
+        "Description. OCR and answer.";
+      assert.equal(await result, expected);
       const created = calls[0]!.params as acp.NewSessionRequest;
       assert.deepEqual(created.mcpServers, []);
       const meta = created._meta?.antigravity as { enabledTools: unknown[]; systemPrompt: { append: string } };
