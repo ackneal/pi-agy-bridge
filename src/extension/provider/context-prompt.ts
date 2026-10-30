@@ -1,8 +1,78 @@
+import fs from "node:fs";
 import path from "node:path";
 import { debugLog, isDebugEnabled } from "../shared/debug.ts";
 import type { Context, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 
 type ContextPart = string | ImageContent;
+
+const SUPPORTED_IMAGE_EXTENSIONS: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".heic": "image/heic",
+  ".bmp": "image/bmp",
+};
+
+const IMAGE_PATH_REGEX = /(?:[A-Za-z]:[\\/]|(?:\.{1,2}[\\/])|\/)[^\s"'>\)]+\.(?:png|jpe?g|webp|gif|heic|bmp)\b/gi;
+const MAX_DETECTED_IMAGE_BYTES = 20 * 1024 * 1024; // 20MB limit
+
+export function extractImagesFromText(text: string): ContextPart[] {
+  const parts: ContextPart[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(IMAGE_PATH_REGEX)) {
+    const filePath = match[0];
+    const matchIndex = match.index ?? 0;
+
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeType = SUPPORTED_IMAGE_EXTENSIONS[ext];
+    if (!mimeType) continue;
+
+    try {
+      if (fs.existsSync(filePath)) {
+        const stat = fs.statSync(filePath);
+        if (stat.isFile() && stat.size > 0 && stat.size <= MAX_DETECTED_IMAGE_BYTES) {
+          const textBefore = text.slice(lastIndex, matchIndex + filePath.length);
+          if (textBefore) parts.push(textBefore);
+          const data = fs.readFileSync(filePath).toString("base64");
+          parts.push({ type: "image", data, mimeType });
+          lastIndex = matchIndex + filePath.length;
+        }
+      }
+    } catch {
+      // Ignore file access errors and leave as plain text
+    }
+  }
+
+  const trailing = text.slice(lastIndex);
+  if (trailing) parts.push(trailing);
+
+  return parts.length ? parts : [text];
+}
+
+export function parseUserMessageParts(message: Extract<Message, { role: "user" }>, nativeImages: boolean): ContextPart[] {
+  if (typeof message.content === "string") {
+    if (!message.content) return [];
+    return nativeImages ? extractImagesFromText(message.content) : [message.content];
+  }
+
+  const parts: ContextPart[] = [];
+  for (const block of message.content) {
+    if (block.type === "text" && block.text) {
+      if (nativeImages) {
+        parts.push(...extractImagesFromText(block.text));
+      } else {
+        parts.push(block.text);
+      }
+    } else if (block.type === "image" && nativeImages) {
+      parts.push(block);
+    }
+  }
+  return parts;
+}
+
 
 function imageNotice(mimeType: string, nativeImages: boolean): string {
   return nativeImages ? `[Image attached: ${mimeType}]` : `[Image omitted from reconstructed history: ${mimeType}; content unavailable]`;
@@ -230,20 +300,11 @@ function contextParts(context: Context, isReused: boolean, syncedMessageCount: n
   if (isReused) {
     const messages = context.messages.slice(syncedMessageCount ?? Math.max(0, context.messages.length - 1));
     if (messages.length && messages.every((message) => message.role === "user")) {
-      const texts: string[] = [];
-      const images: ImageContent[] = [];
-      for (const message of messages) {
-        if (typeof message.content === "string") {
-          if (message.content) texts.push(message.content);
-          continue;
-        }
-        for (const block of message.content) {
-          if (block.type === "text" && block.text) texts.push(block.text);
-          if (block.type === "image" && nativeImages) images.push(block);
-        }
+      const parts: ContextPart[] = [];
+      for (const message of messages as Extract<Message, { role: "user" }>[]) {
+        parts.push(...parseUserMessageParts(message, nativeImages));
       }
-      const textPart = texts.join("\n\n");
-      return [textPart, ...images].filter(Boolean);
+      return parts;
     }
     return messages.length ? [formatContextUpdate(messages, "incremental_conversation")] : [];
   }
@@ -262,24 +323,12 @@ function contextParts(context: Context, isReused: boolean, syncedMessageCount: n
     historyText = historyText ? `${system}\n\n${historyText}` : system;
   }
 
-  const texts: string[] = [];
-  const images: ImageContent[] = [];
-  for (const message of currentMessages) {
-    if (typeof message.content === "string") {
-      if (message.content) texts.push(message.content);
-      continue;
-    }
-    for (const block of message.content) {
-      if (block.type === "text" && block.text) texts.push(block.text);
-      if (block.type === "image" && nativeImages) images.push(block);
-    }
-  }
-
-  const userText = texts.join("\n\n");
   const parts: ContextPart[] = [];
   if (historyText) parts.push(historyText);
-  if (userText) parts.push(userText);
-  if (images.length) parts.push(...images);
+
+  for (const message of currentMessages as Extract<Message, { role: "user" }>[]) {
+    parts.push(...parseUserMessageParts(message, nativeImages));
+  }
 
   if (isDebugEnabled()) {
     debugLog("context", "Rebuild representation characters", {

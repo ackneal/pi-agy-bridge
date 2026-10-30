@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type { AssistantMessage, Context, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 import { formatContextBlocks, formatContextPrompt } from "./context-prompt.ts";
@@ -66,10 +69,12 @@ test("current user prompt with interleaved images preserves order", () => {
     { type: "text" as const, text: "after second" }];
   const messages = [user(content)];
   const blocks = formatContextBlocks({ messages }, false, 0);
-  assert.equal(blocks.length, 3);
+  assert.equal(blocks.length, 5);
+  assert.deepEqual(blocks[0], { type: "text", text: "before first" });
   assert.deepEqual(blocks[1], image);
-  assert.deepEqual(blocks[2], secondImage);
-  assert.ok(blocks[0]?.type === "text" && blocks[0].text.includes("before first\n\nbetween images\n\nafter second"));
+  assert.deepEqual(blocks[2], { type: "text", text: "between images" });
+  assert.deepEqual(blocks[3], secondImage);
+  assert.deepEqual(blocks[4], { type: "text", text: "after second" });
 });
 
 test("incremental user with image delivers single text block and image blocks", () => {
@@ -87,10 +92,11 @@ test("incremental user sequence merges texts and appends image blocks", () => {
     user([{ type: "text", text: "還有這張 ./xxx/yyy.png" }, secondImage]),
   ];
   const blocks = formatContextBlocks({ messages }, true, 0);
-  assert.equal(blocks.length, 3);
-  assert.deepEqual(blocks[0], { type: "text", text: "幫我看看這張圖 ./xxx/xxx.png\n\n還有這張 ./xxx/yyy.png" });
+  assert.equal(blocks.length, 4);
+  assert.deepEqual(blocks[0], { type: "text", text: "幫我看看這張圖 ./xxx/xxx.png" });
   assert.deepEqual(blocks[1], image);
-  assert.deepEqual(blocks[2], secondImage);
+  assert.deepEqual(blocks[2], { type: "text", text: "還有這張 ./xxx/yyy.png" });
+  assert.deepEqual(blocks[3], secondImage);
 });
 
 test("assistant message with mixed text and toolCall serializes correctly in history", () => {
@@ -104,4 +110,21 @@ test("assistant message with mixed text and toolCall serializes correctly in his
   assert.ok(blocks[0].text.includes("[Assistant]: executing command"));
   assert.ok(blocks[0].text.includes("[Assistant tool calls]:\n- bash(command=\"echo test\")"));
 });
+
+test("user message containing valid image path automatically hydrates to ImageContent", () => {
+  const tempFile = path.join(os.tmpdir(), `test-auto-hydrate-${Date.now()}.png`);
+  fs.writeFileSync(tempFile, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"));
+  try {
+    const textMsg = `請看這張圖 ${tempFile} 有什麼問題？`;
+    const blocks = formatContextBlocks({ messages: [user(textMsg)] }, true, 0);
+    assert.equal(blocks.length, 3);
+    assert.deepEqual(blocks[0], { type: "text", text: `請看這張圖 ${tempFile}` });
+    assert.equal(blocks[1]?.type, "image");
+    assert.equal((blocks[1] as ImageContent).mimeType, "image/png");
+    assert.deepEqual(blocks[2], { type: "text", text: " 有什麼問題？" });
+  } finally {
+    fs.rmSync(tempFile, { force: true });
+  }
+});
+
 
