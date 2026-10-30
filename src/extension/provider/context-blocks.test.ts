@@ -69,14 +69,14 @@ for (const row of [
   });
 }
 
-for (const source of ["historical user", "current tool result", "incremental user"] as const) {
+for (const source of ["historical user", "current tool result"] as const) {
   test(`native images preserve interleaved content order: ${source}`, () => {
     const secondImage: ImageContent = { ...image, data: "ZGVm" };
     const content = [{ type: "text" as const, text: "before first" }, image,
       { type: "text" as const, text: "between images" }, secondImage,
       { type: "text" as const, text: "after second" }];
     const messages = source === "current tool result" ? [call, result(content)] : [user(content)];
-    const blocks = formatContextBlocks({ messages }, source === "incremental user", 0);
+    const blocks = formatContextBlocks({ messages }, false, 0);
     assert.equal(blocks.length, 5);
     assert.deepEqual(blocks[1], image);
     assert.deepEqual(blocks[3], secondImage);
@@ -90,12 +90,25 @@ for (const source of ["historical user", "current tool result", "incremental use
   });
 }
 
-test("incremental native images remain associated with their message", () => {
-  const blocks = formatContextBlocks({ messages: [user([{ type: "text", text: "new image" }, image]), user("later message")] }, true, 0);
-  assert.equal(blocks.length, 3);
+test("incremental user with image delivers single text block and image blocks", () => {
+  const content = [{ type: "text" as const, text: "幫我看看這張圖 ./xxx/xxx.png" }, image];
+  const blocks = formatContextBlocks({ messages: [user(content)] }, true, 0);
+  assert.equal(blocks.length, 2);
+  assert.deepEqual(blocks[0], { type: "text", text: "幫我看看這張圖 ./xxx/xxx.png" });
   assert.deepEqual(blocks[1], image);
-  assert.ok(blocks[0]?.type === "text" && blocks[0].text.includes("# Conversation updates\n\n## User\n\n> new image"));
-  assert.ok(blocks[2]?.type === "text" && blocks[2].text.includes("## User\n\n> later message"));
+});
+
+test("incremental user sequence merges texts and appends image blocks", () => {
+  const secondImage: ImageContent = { ...image, data: "ZGVm" };
+  const messages = [
+    user([{ type: "text", text: "幫我看看這張圖 ./xxx/xxx.png" }, image]),
+    user([{ type: "text", text: "還有這張 ./xxx/yyy.png" }, secondImage]),
+  ];
+  const blocks = formatContextBlocks({ messages }, true, 0);
+  assert.equal(blocks.length, 3);
+  assert.deepEqual(blocks[0], { type: "text", text: "幫我看看這張圖 ./xxx/xxx.png\n\n還有這張 ./xxx/yyy.png" });
+  assert.deepEqual(blocks[1], image);
+  assert.deepEqual(blocks[2], secondImage);
 });
 
 test("assistant message with mixed text, image, and toolCall preserves toolCall and order", () => {

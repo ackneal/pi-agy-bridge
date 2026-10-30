@@ -36,7 +36,7 @@ const cases: Case[] = [
       { role: "user", content: "second & new", timestamp: 3 },
     ] },
     isReused: true, syncedMessageCount: 1,
-    expected: "# Conversation updates\n\n## User\n\n> first <new>\n\n## User\n\n> second & new",
+    exact: "first <new>\n\nsecond & new",
   },
   {
     name: "zero synced messages includes the entire new slice",
@@ -51,10 +51,10 @@ const cases: Case[] = [
     expected: "# Conversation updates\n\n## System\n\n> rules & policy",
   },
   {
-    name: "preserves image association with text-only placeholders in incremental Markdown",
+    name: "omits image blocks for incremental user prompt in CLI",
     context: { messages: [oldMessage, { role: "user", content: [{ type: "text", text: "look" }, image], timestamp: 2 }] },
     isReused: true, syncedMessageCount: 1,
-    expected: "# Conversation updates\n\n## User\n\n> look\n> [Image omitted from reconstructed history: image/png; content unavailable]",
+    exact: "look",
   },
   ...[
     { name: "fully synced history", messages: [oldMessage], syncedMessageCount: 1 },

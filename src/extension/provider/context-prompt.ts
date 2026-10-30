@@ -270,9 +270,22 @@ export function formatContextUpdate(messages: readonly Message[], purpose: "incr
 function contextParts(context: Context, isReused: boolean, syncedMessageCount: number | undefined, nativeImages: boolean): ContextPart[] {
   if (isReused) {
     const messages = context.messages.slice(syncedMessageCount ?? Math.max(0, context.messages.length - 1));
-    const only = messages[0];
-    if (messages.length === 1 && only?.role === "user" &&
-      (typeof only.content === "string" || only.content.every((block) => block.type === "text"))) return [typeof only.content === "string" ? only.content : only.content.map((block) => block.type === "text" ? block.text : "").join("\n")];
+    if (messages.length && messages.every((message) => message.role === "user")) {
+      const texts: string[] = [];
+      const images: ImageContent[] = [];
+      for (const message of messages) {
+        if (typeof message.content === "string") {
+          if (message.content) texts.push(message.content);
+          continue;
+        }
+        for (const block of message.content) {
+          if (block.type === "text" && block.text) texts.push(block.text);
+          if (block.type === "image" && nativeImages) images.push(block);
+        }
+      }
+      const textPart = texts.join("\n\n");
+      return [textPart, ...images].filter(Boolean);
+    }
     return messages.length ? ["# Conversation updates", ...messages.flatMap((message) => renderParts(message, text(message, nativeImages), nativeImages))] : [];
   }
 
