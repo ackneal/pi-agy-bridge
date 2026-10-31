@@ -166,6 +166,60 @@ function executionStatus(message: ToolResult): "SUCCESS" | "ERROR" | "ABORTED" {
   return operationAborted || message.toolName === "bash" && errorReason(message) === "Command aborted" ? "ABORTED" : "ERROR";
 }
 
+interface ReadRange {
+  path: string;
+  start: number;
+  end: number;
+  hasExplicitRange: boolean;
+}
+
+function parseReadRange(call: ToolCall): ReadRange | undefined {
+  if (call.name !== "read" || !call.arguments || typeof call.arguments !== "object" || Array.isArray(call.arguments)) {
+    return undefined;
+  }
+  const { path: filePath, offset, limit, ...rest } = call.arguments as Record<string, unknown>;
+  if (typeof filePath !== "string" || !filePath) return undefined;
+  if (Object.values(rest).some((value) => value !== undefined)) return undefined;
+  if (offset !== undefined && (typeof offset !== "number" || !Number.isInteger(offset) || offset < 1)) return undefined;
+  if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1)) return undefined;
+
+  const start = offset ?? 1;
+  const end = limit !== undefined ? start + limit - 1 : Infinity;
+  return {
+    path: filePath,
+    start,
+    end,
+    hasExplicitRange: offset !== undefined || limit !== undefined,
+  };
+}
+
+function mergeReadCalls(previous: ToolCall, current: ToolCall): ToolCall | undefined {
+  const prevRange = parseReadRange(previous);
+  const currRange = parseReadRange(current);
+  if (!prevRange || !currRange || prevRange.path !== currRange.path) return undefined;
+  if (currRange.start > prevRange.end + 1 || prevRange.start > currRange.end + 1) return undefined;
+
+  const start = Math.min(prevRange.start, currRange.start);
+  const end = Math.max(prevRange.end, currRange.end);
+  const hasExplicitRange = prevRange.hasExplicitRange || currRange.hasExplicitRange;
+
+  const args: ToolCall["arguments"] = { path: prevRange.path };
+  if (end !== Infinity) {
+    args.offset = start;
+    args.limit = end - start + 1;
+  } else if (start > 1 || (hasExplicitRange && (previous.arguments.offset !== undefined || current.arguments.offset === 1))) {
+    args.offset = start;
+  }
+
+  return { ...previous, arguments: args };
+}
+
+interface ResolvedToolCall {
+  call: ToolCall;
+  status: "SUCCESS" | "ERROR" | "ABORTED" | "UNKNOWN";
+  suffix: string;
+}
+
 export function serializeToolArguments(call: ToolCall): string {
   if (!call.arguments || typeof call.arguments !== "object") return "";
 
@@ -191,18 +245,21 @@ export function serializeToolArguments(call: ToolCall): string {
 
 export function serializeConversation(messages: readonly Message[]): string {
   const filtered = filterHistory(messages);
-  const parts: string[] = [];
+  const parts: (string | ResolvedToolCall[])[] = [];
+  let activeToolGroup: ResolvedToolCall[] | undefined;
 
   for (let index = 0; index < filtered.length; index++) {
     const message = filtered[index]!;
 
     if (message.role === "system") {
+      activeToolGroup = undefined;
       const content = typeof message.content === "string" ? message.content.trim() : "";
       if (content) parts.push(`[System]: ${content}`);
       continue;
     }
 
     if (message.role === "user") {
+      activeToolGroup = undefined;
       let content = "";
       if (typeof message.content === "string") {
         content = message.content.trim();
@@ -217,35 +274,6 @@ export function serializeConversation(messages: readonly Message[]): string {
 
     if (message.role === "assistant") {
       const calls = message.content.filter((block): block is ToolCall => block.type === "toolCall");
-
-      let toolCallBlock = "";
-      if (calls.length) {
-        let end = index + 1;
-        while (end < filtered.length && filtered[end]!.role === "toolResult") end++;
-        const results = filtered.slice(index + 1, end) as ToolResult[];
-
-        let terminal = index;
-        while (terminal < filtered.length && filtered[terminal]!.role !== "user" && filtered[terminal]!.role !== "system" && !endsRun(filtered[terminal]!)) terminal++;
-        const aborted = terminal < filtered.length && (filtered[terminal] as Extract<Message, { role: "assistant" }>).stopReason === "aborted";
-
-        const toolLines: string[] = [];
-        for (const call of calls) {
-          const matches = results.filter((item) => item.toolCallId === call.id && item.toolName === call.name);
-          const unique = Boolean(call.id.trim()) && calls.filter((item) => item.id === call.id && item.name === call.name).length === 1;
-          const result = unique && matches.length === 1 ? matches[0] : undefined;
-          const status = result ? executionStatus(result) : aborted ? "ABORTED" : "UNKNOWN";
-          const reason = result ? errorReason(result) : undefined;
-          const suffix = status === "ERROR" ? ` — ERROR: ${reason ?? "failed"}` : status === "ABORTED" ? " — ABORTED" : status === "UNKNOWN" ? " — UNKNOWN" : "";
-
-          const argsStr = serializeToolArguments(call);
-          toolLines.push(`- ${call.name}(${argsStr})${suffix}`);
-        }
-
-        if (toolLines.length) {
-          toolCallBlock = `[Assistant tool calls]:\n${toolLines.join("\n")}`;
-        }
-      }
-
       const textBlocks = message.content.filter((block) => block.type === "text" && block.text.trim());
       let text = textBlocks.map((b) => (b as TextContent).text).join("\n\n");
       if (message.errorMessage) {
@@ -253,24 +281,79 @@ export function serializeConversation(messages: readonly Message[]): string {
       }
       const textBlock = text ? `[Assistant]: ${text}` : "";
 
+      if (!calls.length) {
+        activeToolGroup = undefined;
+        if (textBlock) parts.push(textBlock);
+        continue;
+      }
+
       const firstCallIndex = message.content.findIndex((b) => b.type === "toolCall");
       const firstTextIndex = message.content.findIndex((b) => b.type === "text" && b.text.trim());
+      const textBeforeCalls = Boolean(textBlock && firstTextIndex !== -1 && firstCallIndex !== -1 && firstTextIndex < firstCallIndex);
 
-      if (textBlock && toolCallBlock) {
-        if (firstTextIndex !== -1 && firstCallIndex !== -1 && firstTextIndex < firstCallIndex) {
-          parts.push(textBlock, toolCallBlock);
-        } else {
-          parts.push(toolCallBlock, textBlock);
-        }
-      } else if (toolCallBlock) {
-        parts.push(toolCallBlock);
-      } else if (textBlock) {
+      if (textBeforeCalls) {
+        activeToolGroup = undefined;
         parts.push(textBlock);
+      }
+
+      let end = index + 1;
+      while (end < filtered.length && filtered[end]!.role === "toolResult") end++;
+      const results = filtered.slice(index + 1, end) as ToolResult[];
+
+      let terminal = index;
+      while (terminal < filtered.length && filtered[terminal]!.role !== "user" && filtered[terminal]!.role !== "system" && !endsRun(filtered[terminal]!)) terminal++;
+      const aborted = terminal < filtered.length && (filtered[terminal] as Extract<Message, { role: "assistant" }>).stopReason === "aborted";
+
+      const group: ResolvedToolCall[] = [];
+      let splitByText = false;
+      for (const block of message.content) {
+        if (block.type === "text" && block.text.trim()) {
+          if (group.length > 0) splitByText = true;
+          continue;
+        }
+        if (block.type !== "toolCall") continue;
+
+        const call = block;
+        const matches = results.filter((item) => item.toolCallId === call.id && item.toolName === call.name);
+        const unique = Boolean(call.id.trim()) && calls.filter((item) => item.id === call.id && item.name === call.name).length === 1;
+        const result = unique && matches.length === 1 ? matches[0] : undefined;
+        const status = result ? executionStatus(result) : aborted ? "ABORTED" : "UNKNOWN";
+        const reason = result ? errorReason(result) : undefined;
+        const suffix = status === "ERROR" ? ` — ERROR: ${reason ?? "failed"}` : status === "ABORTED" ? " — ABORTED" : status === "UNKNOWN" ? " — UNKNOWN" : "";
+
+        const targetGroup = group.length > 0 ? group : activeToolGroup;
+        const previous = !splitByText && targetGroup?.at(-1);
+        const merged = previous && previous.status === "SUCCESS" && status === "SUCCESS"
+          ? mergeReadCalls(previous.call, call)
+          : undefined;
+
+        if (merged && previous) {
+          previous.call = merged;
+        } else {
+          group.push({ call, status, suffix });
+        }
+        splitByText = false;
+      }
+
+      if (group.length > 0) {
+        parts.push(group);
+        activeToolGroup = group;
+      }
+
+      if (textBlock && !textBeforeCalls) {
+        parts.push(textBlock);
+        activeToolGroup = undefined;
+      }
+      if (endsRun(message)) {
+        activeToolGroup = undefined;
       }
     }
   }
 
-  return parts.join("\n\n");
+  return parts.map((part) => typeof part === "string"
+    ? part
+    : `[Assistant tool calls]:\n${part.map((item) => `- ${item.call.name}(${serializeToolArguments(item.call)})${item.suffix}`).join("\n")}`)
+    .join("\n\n");
 }
 
 export function serializeContextUpdate(messages: readonly Message[], purpose: "incremental_conversation" | "pending_tool_continuation"): string {

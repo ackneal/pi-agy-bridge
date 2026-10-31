@@ -150,6 +150,53 @@ const cases: CompletedCase[] = [
     name: `${name} never implies success`, messages: [assistant(calls), ...results, terminal()],
     check(prompt) { row(prompt, "uncertain", "UNKNOWN"); assert.doesNotMatch(prompt, /SUCCESS/); },
   })),
+  {
+    name: "merges consecutive contiguous file reads across assistant turns into one range",
+    messages: [
+      assistant([call("id-one", "", "read", { path: "src/extension/drivers/acp/installation.test.ts", offset: 1, limit: 150 })]),
+      result("id-one"),
+      assistant([call("id-two", "", "read", { path: "src/extension/drivers/acp/installation.test.ts", offset: 151, limit: 150 })]),
+      result("id-two"),
+      assistant([call("id-three", "", "read", { path: "src/extension/drivers/acp/installation.test.ts", offset: 301, limit: 150 })]),
+      result("id-three"),
+      terminal(),
+    ],
+    check(prompt) {
+      assert.equal(prompt, '[Assistant tool calls]:\n- read(path="src/extension/drivers/acp/installation.test.ts", offset=1, limit=450)');
+    },
+  },
+  {
+    name: "merges consecutive contiguous file reads within the same assistant turn",
+    messages: [
+      assistant([
+        call("id-one", "", "read", { path: "file.ts", limit: 150 }),
+        call("id-two", "", "read", { path: "file.ts", offset: 151, limit: 150 }),
+      ]),
+      result("id-one"),
+      result("id-two"),
+      terminal(),
+    ],
+    check(prompt) {
+      assert.equal(prompt, '[Assistant tool calls]:\n- read(path="file.ts", offset=1, limit=300)');
+    },
+  },
+  {
+    name: "does not merge disjoint or failed file reads",
+    messages: [
+      assistant([call("id-one", "", "read", { path: "file.ts", offset: 1, limit: 100 })]),
+      result("id-one"),
+      assistant([call("id-two", "", "read", { path: "file.ts", offset: 201, limit: 100 })]),
+      result("id-two"),
+      assistant([call("id-three", "", "read", { path: "file.ts", offset: 301, limit: 100 })]),
+      result("id-three", "Permission denied", true),
+      terminal(),
+    ],
+    check(prompt) {
+      assert.ok(prompt.includes('- read(path="file.ts", offset=1, limit=100)'), prompt);
+      assert.ok(prompt.includes('- read(path="file.ts", offset=201, limit=100)'), prompt);
+      assert.ok(prompt.includes('- read(path="file.ts", offset=301, limit=100) — ERROR: Permission denied'), prompt);
+    },
+  },
 ];
 
 for (const { name, messages, check } of cases) {
