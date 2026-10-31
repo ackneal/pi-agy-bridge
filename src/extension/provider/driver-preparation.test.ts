@@ -162,7 +162,7 @@ for (const id of ["cli", "acp"] as const) {
         if (!standalone) assert.equal(metadata[0]!.mcpServers[0]!.name, "pi-agy-bridge_pi");
         assert.ok(meta.systemPrompt.append.endsWith("RESOLVED_RULE"));
         if (standalone) assert.equal(meta.systemPrompt.append, "RESOLVED_RULE");
-        else assert.ok(meta.systemPrompt.append.startsWith("# Tool and Conversation Protocol"));
+        else assert.ok(meta.systemPrompt.append.startsWith("# Bridge Integration Instructions"));
         assert.deepEqual(payloads[0], [
           { type: "text", text: "before native" }, nativeImage,
           { type: "text", text: `between ${imagePath}` },
@@ -226,8 +226,8 @@ for (const mode of modes) {
       assert.ok(!meta.systemPrompt.append.includes("WRONG_RAW_SYSTEM"));
       if (mode === SessionMode.Standalone) assert.equal(meta.systemPrompt.append, "CONTRACT_SYSTEM");
       else {
-        assert.ok(meta.systemPrompt.append.startsWith("# Tool and Conversation Protocol"));
-        assert.ok(meta.systemPrompt.append.endsWith("# Working Instructions\n\nCONTRACT_SYSTEM"));
+        assert.ok(meta.systemPrompt.append.startsWith("# Bridge Integration Instructions"));
+        assert.ok(meta.systemPrompt.append.endsWith("# Workspace Instructions\n\nCONTRACT_SYSTEM"));
       }
     });
   }

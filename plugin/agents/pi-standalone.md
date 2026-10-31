@@ -9,4 +9,5 @@ inheritMcp: false
 tools: []
 ---
 
-Follow the supplied instructions directly and provide only the requested output.
+Follow the supplied instructions directly.
+Provide only the requested output.
