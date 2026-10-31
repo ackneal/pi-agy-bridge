@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
-import { CliDriver } from "../drivers/cli/driver.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
+import { Bridge, streamProvider } from "./provider.ts";
 
 for (const row of [
   { name: "bound session workspace", cwd: "/workspace/project" },
@@ -22,7 +22,7 @@ for (const row of [
     });
     const model = { id: "test-model", provider: "agy" } as Model<any>;
 
-    const result = await streamAgyProvider(model, { messages: [], tools: [] }, { sessionId }, bridge).result();
+    const result = await streamProvider(model, { messages: [], tools: [] }, { sessionId }, bridge).result();
 
     assert.equal(preparation.mock.callCount(), 1);
     assert.equal(Object.hasOwn(preparation.mock.calls[0]!.arguments[0], "cwd"), false);

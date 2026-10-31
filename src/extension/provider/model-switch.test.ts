@@ -7,13 +7,13 @@ import test from "node:test";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { prepareDriverCwd } from "../drivers/cwd.ts";
-import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
+import { RuntimeSession as CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
 import type { AgyInput } from "../shared/types.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamProvider } from "./provider.ts";
 
 type ModelSwitchCase = {
   name: string;
@@ -334,7 +334,7 @@ for (const { name, arrange, expected } of cases) {
     });
     const run = async (selected: Model<any>) => {
       const events: AssistantMessageEvent[] = [];
-      for await (const event of streamAgyProvider(selected, context, { sessionId, signal: controller.signal }, bridge)) events.push(event);
+      for await (const event of streamProvider(selected, context, { sessionId, signal: controller.signal }, bridge)) events.push(event);
       await new Promise<void>((resolve) => setImmediate(resolve));
       return events.at(-1);
     };

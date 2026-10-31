@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import { createAcpAuthenticationBackend } from "./auth.ts";
-import { AcpConnection } from "./connection.ts";
+import { Connection } from "./connection.ts";
 
 for (const row of [
   { mode: "catalog", login: false, result: true },
@@ -35,8 +35,8 @@ for (const row of [
 test("ACP probe cancellation takes precedence over an authentication-required response", async (t) => {
   const controller = new AbortController();
   const cancelled = new Error("cancel auth check");
-  t.mock.method(AcpConnection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
-  t.mock.method(AcpConnection.prototype, "request", async () => {
+  t.mock.method(Connection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
+  t.mock.method(Connection.prototype, "request", async () => {
     controller.abort(cancelled);
     throw acp.RequestError.authRequired();
   });

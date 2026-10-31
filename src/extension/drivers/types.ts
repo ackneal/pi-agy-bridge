@@ -1,8 +1,19 @@
-import type { AnyModel, AssistantMessage, Context, Message, Model, ProviderAuthInteraction, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
+import type { AnyModel, AssistantMessage, Context, ImageContent, Message, Model, ProviderAuthInteraction, SimpleStreamOptions, TextContent, Tool } from "@earendil-works/pi-ai";
 import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
+
+export enum SessionMode {
+  Conversation = "conversation",
+  Standalone = "standalone",
+}
+
+export type ContentPart = TextContent | ImageContent;
+
+export type BridgeMessage =
+  | { role: "system"; content: string }
+  | { role: "user"; content: string | ContentPart[] };
 
 export interface DriverInstallationProgress {
   phase: "download" | "verify" | "extract" | "validate" | "complete" | "error" | "cancelled";
@@ -29,13 +40,15 @@ export interface DriverFailure {
 export interface PrepareDriverInput {
   model: Model<any>;
   context: Context;
+  /** Instructions must be available before native initialization; user content is selected after synchronization. */
+  messages: readonly BridgeMessage[];
   tools: readonly Tool[];
   options: SimpleStreamOptions | undefined;
   session: LiveSession;
   store: Pick<RuntimeSessionStore, "get" | "delete">;
   sync: Pick<RuntimeSessionSync, "decide">;
   preparationId: symbol;
-  readonly standalone?: boolean;
+  readonly mode: SessionMode;
 }
 
 export interface BridgeDriver {
@@ -61,10 +74,8 @@ export type DriverId = "cli" | "acp";
 
 export interface DriverSubmission {
   model: Model<any>;
-  context: Context;
   options: SimpleStreamOptions | undefined;
-  reconstructContext: boolean;
-  syncedMessageCount: number;
+  messages: readonly BridgeMessage[];
   /** Revalidate ownership/cancellation immediately before native input delivery. */
   beforeInput(): boolean;
 }
@@ -76,7 +87,7 @@ export interface DriverSession {
   /** Working directory and driver-specific constraints that must match to reuse or restore a conversation. */
   readonly compatibilityKey?: string | undefined;
   onRuntimeEvent(handler: (event: RuntimeEvent) => void): () => void;
-  formatContextUpdate(messages: readonly Message[]): string;
+  serializeContextUpdate(messages: readonly Message[]): string;
   submit(input: DriverSubmission): Promise<void>;
   abort(): Promise<void>;
 }

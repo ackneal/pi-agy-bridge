@@ -1,4 +1,4 @@
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Context, Tool } from "@earendil-works/pi-ai";

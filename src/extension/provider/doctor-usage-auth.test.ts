@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
 import { AuthenticationRequiredError } from "../shared/types.ts";
 import { Bridge } from "./provider.ts";

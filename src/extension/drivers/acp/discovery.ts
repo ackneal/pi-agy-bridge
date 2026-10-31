@@ -1,14 +1,14 @@
 import * as acp from "@agentclientprotocol/sdk";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { modelDefaults, UNSUPPORTED_THINKING_LEVELS } from "../../discovery/model-metadata.ts";
-import { AcpConnection, type AcpConnectionOptions } from "./connection.ts";
+import { Connection, type AcpConnectionOptions } from "./connection.ts";
 
 export type AcpDiscoveryOptions = Pick<AcpConnectionOptions, "executable" | "cwd" | "args" | "requestTimeoutMs" | "allowInteractiveAuthentication">;
 
 export async function withAcpDiscovery<T>(options: AcpDiscoveryOptions, signal: AbortSignal | undefined,
-  operation: (connection: AcpConnection, initialized: acp.InitializeResponse) => Promise<T>): Promise<T> {
+  operation: (connection: Connection, initialized: acp.InitializeResponse) => Promise<T>): Promise<T> {
   signal?.throwIfAborted();
-  const connection = new AcpConnection({
+  const connection = new Connection({
     ...options,
     requestTimeoutMs: options.requestTimeoutMs ?? (options.allowInteractiveAuthentication ? 180_000 : 30_000),
   });
@@ -26,7 +26,7 @@ export async function withAcpDiscovery<T>(options: AcpDiscoveryOptions, signal: 
   }
 }
 
-export async function newDiscoverySession(connection: AcpConnection, cwd: string): Promise<acp.NewSessionResponse> {
+export async function newDiscoverySession(connection: Connection, cwd: string): Promise<acp.NewSessionResponse> {
   const session = await connection.request(acp.methods.agent.session.new, {
     cwd, mcpServers: [], _meta: { antigravity: { enabledTools: [] } },
   });

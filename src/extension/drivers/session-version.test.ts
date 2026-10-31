@@ -32,7 +32,7 @@ for (const driver of ["cli", "acp"] as const) {
 
     const preparing = driver === "cli"
       ? prepareCliRuntime(model, { messages: [] }, [], options, process.cwd(), dependencies, session, resolveModelAndEffort(model.id), preparationId)
-      : prepareAcpRuntime(model, { messages: [] }, [], options, { cwd: process.cwd(), resolve: async () => { throw new Error("Preparation must stop at lookup"); } }, dependencies, session, preparationId);
+      : prepareAcpRuntime(model, { messages: [] }, [], [], options, { cwd: process.cwd(), resolve: async () => { throw new Error("Preparation must stop at lookup"); } }, dependencies, session, preparationId);
     await assert.rejects(preparing, stopAfterRead);
 
     assert.deepEqual(reads, [[session.piSessionId, version]]);

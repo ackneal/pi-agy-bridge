@@ -44,7 +44,7 @@
   "scripts": {
     "check:version": "node scripts/check-version.js",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test --test-timeout=30000 \"**/*.test.ts\""
+    "test": "node --experimental-transform-types --test --test-timeout=30000 \"**/*.test.ts\""
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

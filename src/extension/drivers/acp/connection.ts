@@ -16,7 +16,7 @@ export interface AcpConnectionOptions {
   onRead?: (request: acp.ReadTextFileRequest, signal: AbortSignal) => Promise<acp.ReadTextFileResponse>;
 }
 
-export class AcpConnection {
+export class Connection {
   private child: ChildProcessWithoutNullStreams | undefined;
   private sdk: acp.ClientConnection | undefined;
   private startup: Promise<acp.InitializeResponse> | undefined;

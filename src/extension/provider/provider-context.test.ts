@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
-import { formatContextPrompt } from "./context-prompt.ts";
+import { prepareBridgeMessages } from "./context-prompt.ts";
+import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
 
 const assistantMetadata: Pick<AssistantMessage, "api" | "provider" | "model" | "usage"> = {
   api: "agy",
@@ -65,9 +66,9 @@ const call = (id: string, path: string): AssistantMessage => ({ ...assistantMeta
 const result = (id: string, body: string, isError = false): Extract<Context["messages"][number], { role: "toolResult" }> => ({ role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text: body }], isError, timestamp: 2 });
 const completed: AssistantMessage = { ...assistantMetadata, role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop", timestamp: 3 };
 
-describe("formatContextPrompt reconstruction", () => {
+describe("bridge message reconstruction", () => {
   it("quotes history, preserves images and omits completed result bodies", () => {
-    assert.equal(formatContextPrompt(context, false), [
+    assert.equal(serializeCliPrompt(prepareBridgeMessages(context, true)), [
       "[System]: Follow <policy> & safety.",
       "[User]: old <question>",
       "[Assistant tool calls]:\n- read(path=\"README.md\")",
@@ -77,8 +78,8 @@ describe("formatContextPrompt reconstruction", () => {
   });
 
   it("serializes calls and preserves user request without result bodies", () => {
-    const prompt = formatContextPrompt({ messages: [call("old", "old"), result("old", "OLD_BODY"), completed,
-      call("current", "current"), result("current", "CURRENT_BODY"), { role: "user", content: "appended", timestamp: 4 }] }, false);
+    const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [call("old", "old"), result("old", "OLD_BODY"), completed,
+      call("current", "current"), result("current", "CURRENT_BODY"), { role: "user", content: "appended", timestamp: 4 }] }, true));
 
     assert.ok(prompt.includes("- read(path=\"old\")"));
     assert.ok(prompt.includes("- read(path=\"current\")"));
@@ -89,8 +90,8 @@ describe("formatContextPrompt reconstruction", () => {
 
   for (const stopReason of ["pending", "deferred"] as const) {
     it(`serializes ${stopReason} runs`, () => {
-      const prompt = formatContextPrompt({ messages: [call("active", "active-path"),
-        result("active", "ACTIVE_BODY"), { ...completed, stopReason }] }, false);
+      const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [call("active", "active-path"),
+        result("active", "ACTIVE_BODY"), { ...completed, stopReason }] }, true));
       assert.ok(prompt.includes("- read(path=\"active-path\")"));
       assert.ok(!prompt.includes("ACTIVE_BODY"));
     });
@@ -111,8 +112,8 @@ describe("formatContextPrompt reconstruction", () => {
         const hidden = call("hidden", path);
         const mixed: AssistantMessage = { ...hidden, content: [{ type: "text", text: "retained explanation" }, ...hidden.content,
           ...call("chunk", path).content, ...call("visible", "README.md").content] };
-        const prompt = formatContextPrompt({ messages: [mixed, result("hidden", "SECRET_ONE"), result("chunk", "SECRET_TWO"),
-          result("visible", "VISIBLE_BODY"), ...(old ? [completed] : [])] }, false);
+        const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [mixed, result("hidden", "SECRET_ONE"), result("chunk", "SECRET_TWO"),
+          result("visible", "VISIBLE_BODY"), ...(old ? [completed] : [])] }, true));
 
         assert.equal(prompt.includes(`path=${JSON.stringify(path)}`), !removed);
         assert.ok(prompt.includes("[Assistant]: retained explanation"));
@@ -178,7 +179,7 @@ describe("formatContextPrompt reconstruction", () => {
   ]) {
     it(`scopes generated-read filtering: ${name}`, () => {
       const before = structuredClone(messages);
-      const prompt = formatContextPrompt({ messages }, false);
+      const prompt = serializeCliPrompt(prepareBridgeMessages({ messages }, true));
 
       assert.equal(prompt.match(/- read\(path=/g)?.length ?? 0, calls);
       for (const value of kept) assert.ok(prompt.includes(value), value);
@@ -189,7 +190,7 @@ describe("formatContextPrompt reconstruction", () => {
 
   it("truncates long arguments exceeding 300 characters with ellipsis", () => {
     const args = "x".repeat(500);
-    const prompt = formatContextPrompt({ messages: [call("args", args), completed] }, false);
+    const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [call("args", args), completed] }, true));
     assert.ok(prompt.includes("…"));
     assert.ok(!prompt.includes("x".repeat(350)));
   });
@@ -205,7 +206,7 @@ for (const { name, messages, expected, absent } of [
 ]) {
   it(name, () => {
     const before = structuredClone(messages);
-    const prompt = formatContextPrompt({ messages }, false);
+    const prompt = serializeCliPrompt(prepareBridgeMessages({ messages }, true));
     let position = -1;
     for (const value of expected) {
       const next = prompt.indexOf(value, position + 1);
@@ -217,24 +218,26 @@ for (const { name, messages, expected, absent } of [
   });
 }
 
-for (const { name, input, enabled } of ([
+for (const { name, input, enabled, rebuild } of ([
   { name: "completed results", input: { systemPrompt: "PRIVATE_SYSTEM", messages: [call("private-id", "PRIVATE_PATH"), result("private-id", "PRIVATE_BODY"), completed] } },
   { name: "argument truncation", input: { messages: [call("private-id", "x".repeat(2000)), completed] } },
   { name: "plain user", input: { messages: [{ role: "user" as const, content: "hello", timestamp: 1 }] } },
-] satisfies { name: string; input: Context }[]).flatMap((row) => [false, true].map((enabled) => ({ ...row, enabled })))) {
-  it(`logs numeric rebuild metrics only when enabled (${name}, ${enabled})`, () => {
+] satisfies { name: string; input: Context }[]).flatMap((row) => [false, true].flatMap((enabled) => [false, true].map((rebuild) => ({ ...row, enabled, rebuild }))))) {
+  it(`logs numeric metrics only on enabled rebuild (${name}, debug=${enabled}, rebuild=${rebuild})`, () => {
     const previous = process.env["AGY_BRIDGE_DEBUG"];
     process.env["AGY_BRIDGE_DEBUG"] = enabled ? "1" : "0";
     const write = process.stderr.write;
     let logged = "";
     process.stderr.write = ((chunk: string | Uint8Array) => { logged += String(chunk); return true; }) as typeof write;
     try {
-      const prompt = formatContextPrompt(input, false);
-      assert.equal(Boolean(logged), enabled);
-      if (enabled) {
+      const messages = prepareBridgeMessages(input, rebuild);
+      assert.equal(Boolean(logged), enabled && rebuild);
+      if (enabled && rebuild) {
         const metrics = JSON.parse(logged.slice(logged.indexOf("{")));
         assert.equal(metrics.inputChars, JSON.stringify(input.messages).length + ("systemPrompt" in input ? input.systemPrompt.length : 0));
-        assert.equal(metrics.finalChars, prompt.length);
+        const text = messages.flatMap((message) => typeof message.content === "string" ? [message.content]
+          : message.content.flatMap((part) => part.type === "text" ? [part.text] : [])).join("");
+        assert.equal(metrics.textChars, text.length);
         assert.ok(!logged.includes("private-id"));
         assert.ok(Object.values(metrics).every((value) => typeof value === "number"));
         assert.ok(!logged.includes("PRIVATE"));

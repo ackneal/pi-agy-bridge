@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { getCurrentSystemPrompt, normalizeContext, type Context } from "@earendil-works/pi-ai";
+import type { BridgeMessage } from "../types.ts";
 
 const integrationInstructions = `# Tool and Conversation Protocol
 
@@ -43,8 +43,8 @@ Follow this protocol when using tools and interpreting conversation context. The
 - When a Pi-advertised skill applies, read its referenced SKILL.md using an available Pi file-reading tool before following it.
 - If no suitable tool is available, do not assume the skill's contents.`;
 
-export function composeAcpSystemPrompt(context: Context): string {
-  const prompt = getCurrentSystemPrompt(normalizeContext(context).messages);
+export function composeAcpSystemPrompt(messages: readonly BridgeMessage[]): string {
+  const prompt = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
   return prompt ? `${integrationInstructions}\n\n# Working Instructions\n\n${prompt}` : integrationInstructions;
 }
 

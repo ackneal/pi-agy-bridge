@@ -1,19 +1,32 @@
+import { prepareBridgeMessages } from "../../provider/context-prompt.ts";
 import { fingerprintAcpSystemPrompt } from "./instructions.ts";
+import type { BridgeMessage } from "../types.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { acpContext, AcpRuntimeSession } from "./runtime.ts";
+import { serializeAcpContent, RuntimeSession } from "./runtime.ts";
 
 test("ACP context preserves images and does not filter artifact text", () => {
-  const blocks = acpContext([{ role: "user", content: [{ type: "text", text: "artifact /tmp/example" }, { type: "image", data: "YWJj", mimeType: "image/png" }], timestamp: 0 }]);
+  const blocks = serializeAcpContent(prepareBridgeMessages({ messages: [{ role: "user", content: [{ type: "text", text: "artifact /tmp/example" }, { type: "image", data: "YWJj", mimeType: "image/png" }], timestamp: 0 }] }, true));
   assert.deepEqual(blocks.filter((block) => block.type === "image"), [{ type: "image", data: "YWJj", mimeType: "image/png" }]);
   const text = blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n\n");
   assert.ok(text.includes("artifact /tmp/example"));
   assert.ok(!text.includes('"type":"text"'));
 });
 
+for (const row of [
+  { name: "string", messages: [{ role: "user", content: " \n\t" }], expected: [{ type: "text", text: " \n\t" }] },
+  { name: "parts around image", messages: [{ role: "user", content: [
+    { type: "text", text: " \n\t" }, { type: "image", data: "YWJj", mimeType: "image/png" }, { type: "text", text: "\n " },
+  ] }], expected: [{ type: "text", text: " \n\t" }, { type: "image", data: "YWJj", mimeType: "image/png" }, { type: "text", text: "\n " }] },
+] satisfies { name: string; messages: BridgeMessage[]; expected: unknown[] }[]) {
+  test(`ACP serializer preserves whitespace: ${row.name}`, () => {
+    assert.deepEqual(serializeAcpContent(row.messages), row.expected);
+  });
+}
+
 test("ACP runtime exposes native identity and starts stopped", async () => {
-  const runtime = new AcpRuntimeSession({ executable: "unused", cwd: process.cwd(), model: "raw-model-id", mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
+  const runtime = new RuntimeSession({ executable: "unused", cwd: process.cwd(), model: "raw-model-id", mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
   assert.equal(runtime.driver, "acp");
   assert.equal(runtime.isRunning, false);
   await runtime.abort();
@@ -21,7 +34,7 @@ test("ACP runtime exposes native identity and starts stopped", async () => {
 
 for (const systemPrompt of [undefined, "", "Pi instructions"]) {
   test(`ACP runtime compatibility identity: ${JSON.stringify(systemPrompt)}`, async () => {
-    const runtime = new AcpRuntimeSession({ executable: "unused", cwd: process.cwd(), model: "raw-model-id", ...(systemPrompt === undefined ? {} : { systemPrompt }), mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
+    const runtime = new RuntimeSession({ executable: "unused", cwd: process.cwd(), model: "raw-model-id", ...(systemPrompt === undefined ? {} : { systemPrompt }), mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
     assert.equal(runtime.compatibilityKey, systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([process.cwd(), systemPrompt])));
     await runtime.abort();
   });
@@ -30,15 +43,15 @@ for (const systemPrompt of [undefined, "", "Pi instructions"]) {
 test("ACP context omits all system updates but preserves history", () => {
   const user = { role: "user" as const, content: "historical input", timestamp: 0 };
   const result = { role: "toolResult" as const, toolCallId: "call", toolName: "read", content: [{ type: "text" as const, text: "untrusted result" }], isError: false, timestamp: 1 };
-  assert.deepEqual(acpContext([
+  assert.deepEqual(serializeAcpContent(prepareBridgeMessages({ messages: [
     { role: "system", content: "base", timestamp: 0 }, user,
     { role: "system", content: "update", timestamp: 1 }, result,
-  ]), acpContext([user, result]));
+  ] }, true)), serializeAcpContent(prepareBridgeMessages({ messages: [user, result] }, true)));
 });
 
 test("ACP persisted identity distinguishes workspaces with identical instructions", async (t) => {
   const runtimes = ["/workspace/one", "/workspace/two"].map((cwd) =>
-    new AcpRuntimeSession({ executable: "unused", cwd, model: "raw", systemPrompt: "same instructions", mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } }));
+    new RuntimeSession({ executable: "unused", cwd, model: "raw", systemPrompt: "same instructions", mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } }));
   t.after(() => Promise.all(runtimes.map((runtime) => runtime.abort())));
 
   assert.notEqual(runtimes[0]!.compatibilityKey, runtimes[1]!.compatibilityKey);
@@ -91,7 +104,7 @@ test("runtime reads artifact images through an isolated observer with the origin
         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(result) } } });
       return { stopReason: 'end_turn' };
     `);
-  const runtime = new AcpRuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
+  const runtime = new RuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
     args: ["--experimental-strip-types", "--input-type=module-typescript", "-e", script],
     mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
   t.after(() => runtime.abort());
@@ -116,10 +129,10 @@ test("runtime reads artifact images through an isolated observer with the origin
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         reasoning: false, contextWindow: 1000, maxTokens: 100,
       },
-      context: { messages: [
-        { role: "user", content: "old objective", timestamp: 0 },
-        { role: "user", content: [{ type: "text", text: row.objective }], timestamp: 1 },
-      ] }, reconstructContext: true, syncedMessageCount: 0, beforeInput: () => true,
+      messages: [
+        { role: "user", content: row.objective },
+      ],
+      beforeInput: () => true,
       options: { onPayload: (payload) => ({ ...payload as object, prompt: [{ type: "text", text: "REWRITTEN objective" }] }) },
     });
     await completion;

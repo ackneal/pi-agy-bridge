@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CliEventTranslator } from "./events.ts";
+import { EventTranslator } from "./events.ts";
 import type { RuntimeEvent } from "../types.ts";
 import type { AgyEvent } from "../../shared/types.ts";
 
@@ -17,7 +17,7 @@ for (const row of [
   },
 ] satisfies { name: string; events: AgyEvent[]; types: string[] }[]) {
   test(row.name, () => {
-    const translator = new CliEventTranslator();
+    const translator = new EventTranslator();
     const facts: RuntimeEvent[] = [];
     for (const event of row.events) translator.translate(event, "agy", (fact) => facts.push(fact));
     assert.deepEqual(facts.map((fact) => fact.type), row.types);
@@ -30,7 +30,7 @@ for (const row of [
 
 {
   test("native policy never emits executable tool facts", () => {
-    const translator = new CliEventTranslator({ allowedToolNames: new Set(["read"]) });
+    const translator = new EventTranslator({ allowedToolNames: new Set(["read"]) });
     const facts: RuntimeEvent[] = [];
     translator.translate({ event: "step_update", tool_call: { id: "call", name: "read", arguments: '{"path":"a"}' } }, "agy", (fact) => facts.push(fact));
     assert.equal(facts.length, 0);
@@ -45,7 +45,7 @@ for (const row of [
 for (const source of ["agy", "runtime"] as const) {
   test(`error completion and mutable historical state (${source})`, () => {
     const state = { conversationId: "session", lastError: "old" as string | undefined };
-    const translator = new CliEventTranslator({ errorState: state });
+    const translator = new EventTranslator({ errorState: state });
     const facts: RuntimeEvent[] = [];
     translator.translate({ event: "result", status: "error", conversation_id: "session", error: "new" }, source, (fact) => facts.push(fact));
     assert.deepEqual(facts.at(-1), { type: "complete", reason: "error", error: "new", resumable: source === "agy" });

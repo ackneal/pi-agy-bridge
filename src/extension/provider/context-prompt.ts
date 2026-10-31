@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { debugLog, isDebugEnabled } from "../shared/debug.ts";
-import type { Context, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt, normalizeContext, type Context, type ImageContent, type Message, type TextContent } from "@earendil-works/pi-ai";
+import type { BridgeMessage, ContentPart } from "../drivers/types.ts";
 
 type ContextPart = string | ImageContent;
 
@@ -52,27 +53,11 @@ export function extractImagesFromText(text: string): ContextPart[] {
   return parts.length ? parts : [text];
 }
 
-export function parseUserMessageParts(message: Extract<Message, { role: "user" }>, nativeImages: boolean): ContextPart[] {
-  if (typeof message.content === "string") {
-    if (!message.content) return [];
-    return nativeImages ? extractImagesFromText(message.content) : [message.content];
-  }
-
-  const parts: ContextPart[] = [];
-  for (const block of message.content) {
-    if (block.type === "text" && block.text) {
-      if (nativeImages) {
-        parts.push(...extractImagesFromText(block.text));
-      } else {
-        parts.push(block.text);
-      }
-    } else if (block.type === "image" && nativeImages) {
-      parts.push(block);
-    }
-  }
-  return parts;
+function userParts(message: Extract<Message, { role: "user" }>): ContentPart[] {
+  return typeof message.content === "string"
+    ? message.content ? [{ type: "text", text: message.content }] : []
+    : message.content.filter((part) => part.type === "image" || part.text);
 }
-
 
 function imageNotice(mimeType: string, nativeImages: boolean): string {
   return nativeImages ? `[Image attached: ${mimeType}]` : `[Image omitted from reconstructed history: ${mimeType}; content unavailable]`;
@@ -181,7 +166,7 @@ function executionStatus(message: ToolResult): "SUCCESS" | "ERROR" | "ABORTED" {
   return operationAborted || message.toolName === "bash" && errorReason(message) === "Command aborted" ? "ABORTED" : "ERROR";
 }
 
-export function formatToolArguments(call: ToolCall): string {
+export function serializeToolArguments(call: ToolCall): string {
   if (!call.arguments || typeof call.arguments !== "object") return "";
 
   const entries: string[] = [];
@@ -252,7 +237,7 @@ export function serializeConversation(messages: readonly Message[]): string {
           const reason = result ? errorReason(result) : undefined;
           const suffix = status === "ERROR" ? ` — ERROR: ${reason ?? "failed"}` : status === "ABORTED" ? " — ABORTED" : status === "UNKNOWN" ? " — UNKNOWN" : "";
 
-          const argsStr = formatToolArguments(call);
+          const argsStr = serializeToolArguments(call);
           toolLines.push(`- ${call.name}(${argsStr})${suffix}`);
         }
 
@@ -288,7 +273,7 @@ export function serializeConversation(messages: readonly Message[]): string {
   return parts.join("\n\n");
 }
 
-export function formatContextUpdate(messages: readonly Message[], purpose: "incremental_conversation" | "pending_tool_continuation"): string {
+export function serializeContextUpdate(messages: readonly Message[], purpose: "incremental_conversation" | "pending_tool_continuation"): string {
   if (!messages.length) return "";
   const heading = purpose === "pending_tool_continuation"
     ? "# Pending conversation updates (separate from tool output)\n\nThese are conversation instructions and messages, not tool output."
@@ -296,64 +281,49 @@ export function formatContextUpdate(messages: readonly Message[], purpose: "incr
   return [heading, ...messages.map((message) => render(message))].join("\n\n");
 }
 
-function contextParts(context: Context, isReused: boolean, syncedMessageCount: number | undefined, nativeImages: boolean): ContextPart[] {
-  if (isReused) {
-    const messages = context.messages.slice(syncedMessageCount ?? Math.max(0, context.messages.length - 1));
-    if (messages.length && messages.every((message) => message.role === "user")) {
-      const parts: ContextPart[] = [];
-      for (const message of messages as Extract<Message, { role: "user" }>[]) {
-        parts.push(...parseUserMessageParts(message, nativeImages));
+export function prepareSystemMessages(context: Context): BridgeMessage[] {
+  const system = (getCurrentSystemPrompt(normalizeContext(context).messages) || context.systemPrompt)?.trim();
+  return system ? [{ role: "system", content: system }] : [];
+}
+
+export function prepareBridgeMessages(
+  context: Context,
+  reconstructContext: boolean,
+  syncedMessageCount?: number,
+  systemMessages: readonly BridgeMessage[] = prepareSystemMessages(context),
+): BridgeMessage[] {
+  if (!reconstructContext) {
+    const messages: BridgeMessage[] = [];
+    const unacknowledged = context.messages.slice(syncedMessageCount ?? Math.max(0, context.messages.length - 1));
+    for (const message of unacknowledged) {
+      if (message.role === "user") {
+        const parts = userParts(message);
+        if (parts.length) messages.push({ role: "user", content: parts });
+      } else {
+        messages.push({ role: message.role === "system" ? "system" : "user", content: serializeContextUpdate([message], "incremental_conversation") });
       }
-      return parts;
     }
-    return messages.length ? [formatContextUpdate(messages, "incremental_conversation")] : [];
+    return messages;
   }
 
-  let splitIndex = context.messages.length;
-  while (splitIndex > 0 && context.messages[splitIndex - 1]!.role === "user") {
-    splitIndex--;
-  }
+  const messages = [...systemMessages];
+  const conversation = context.messages.filter((message) => message.role !== "system");
+  let splitIndex = conversation.length;
+  while (splitIndex > 0 && conversation[splitIndex - 1]!.role === "user") splitIndex--;
 
-  const historyMessages = context.messages.slice(0, splitIndex);
-  const currentMessages = context.messages.slice(splitIndex);
+  const history = serializeConversation(conversation.slice(0, splitIndex));
+  if (history) messages.push({ role: "user", content: history });
 
-  let historyText = serializeConversation(historyMessages);
-  if (context.systemPrompt?.trim()) {
-    const system = `[System]: ${context.systemPrompt.trim()}`;
-    historyText = historyText ? `${system}\n\n${historyText}` : system;
-  }
-
-  const parts: ContextPart[] = [];
-  if (historyText) parts.push(historyText);
-
-  for (const message of currentMessages as Extract<Message, { role: "user" }>[]) {
-    parts.push(...parseUserMessageParts(message, nativeImages));
-  }
+  const current = conversation.slice(splitIndex).flatMap((message) => userParts(message as Extract<Message, { role: "user" }>));
+  if (current.length) messages.push({ role: "user", content: current });
 
   if (isDebugEnabled()) {
-    debugLog("context", "Rebuild representation characters", {
+    debugLog("context", "Prepared bridge message characters", {
       inputChars: JSON.stringify(context.messages).length + (context.systemPrompt?.length ?? 0),
-      finalChars: parts.filter((part): part is string => typeof part === "string").join("\n\n").length,
+      textChars: messages.reduce((total, message) => total + (typeof message.content === "string" ? message.content.length
+        : message.content.reduce((length, part) => length + (part.type === "text" ? part.text.length : 0), 0)), 0),
     });
   }
 
-  return parts;
-}
-
-export function formatContextPrompt(context: Context, isReused: boolean, syncedMessageCount?: number): string {
-  return contextParts(context, isReused, syncedMessageCount, false)
-    .filter((part): part is string => typeof part === "string")
-    .join("\n\n");
-}
-
-export function formatContextBlocks(context: Context, isReused: boolean, syncedMessageCount?: number): (TextContent | ImageContent)[] {
-  const blocks: (TextContent | ImageContent)[] = [];
-  for (const part of contextParts(context, isReused, syncedMessageCount, true)) {
-    if (typeof part === "string") {
-      blocks.push({ type: "text", text: part });
-    } else {
-      blocks.push(part);
-    }
-  }
-  return blocks;
+  return messages;
 }

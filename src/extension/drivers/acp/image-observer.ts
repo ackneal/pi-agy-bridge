@@ -1,5 +1,5 @@
 import * as acp from "@agentclientprotocol/sdk";
-import { AcpConnection } from "./connection.ts";
+import { Connection } from "./connection.ts";
 
 export interface AcpImageObserverOptions {
   executable: string;
@@ -31,7 +31,7 @@ export async function observeAcpImage(options: AcpImageObserverOptions): Promise
   let sessionId: string | undefined;
   let text = "";
   let bytes = 0;
-  const connection = new AcpConnection({
+  const connection = new Connection({
     executable: options.executable, cwd: options.cwd,
     ...(options.args !== undefined ? { args: options.args } : {}),
     requestTimeoutMs: OBSERVER_TIMEOUT_MS,

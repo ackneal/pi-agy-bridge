@@ -3,7 +3,7 @@ import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AcpDriver } from "../drivers/acp/driver.ts";
+import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
 import { Bridge } from "./provider.ts";
 
 useAuthHomeFixture();

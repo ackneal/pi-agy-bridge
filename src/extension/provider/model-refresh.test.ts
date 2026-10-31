@@ -1,7 +1,7 @@
 import { beforeEach } from "node:test";
 import { useAuthHomeFixture } from "./auth-home-fixture.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
-import { AcpDriver } from "../drivers/acp/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";

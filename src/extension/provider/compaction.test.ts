@@ -6,10 +6,11 @@ import { test } from "node:test";
 import { compact, generateSummaryWithUsage, ModelRuntime, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { normalizeContext, type Model, type Provider } from "@earendil-works/pi-ai";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import { rawAcpContent } from "../drivers/acp/runtime.ts";
-import { rawCliPrompt } from "../drivers/cli/runtime.ts";
-import type { BridgeDriver, DriverId, DriverSession, RuntimeEvent } from "../drivers/types.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { serializeAcpContent } from "../drivers/acp/runtime.ts";
+import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
+import { prepareBridgeMessages } from "./context-prompt.ts";
+import { type BridgeDriver, type DriverId, type DriverSession, type RuntimeEvent, SessionMode } from "../drivers/types.ts";
+import { Bridge, streamProvider } from "./provider.ts";
 
 const model = {
   id: "summary-model", name: "summary-model", provider: "agy", api: "agy", baseUrl: "agy",
@@ -34,7 +35,7 @@ for (const id of ["cli", "acp"] as DriverId[]) {
         discoverModels: async () => [], usage: async () => undefined,
         async prepareSession(input) {
           prepared++;
-          assert.equal(input.standalone, true);
+          assert.equal(input.mode, SessionMode.Standalone);
           assert.deepEqual(input.tools, []);
           assert.equal(await input.store.get(input.session.piSessionId, "test:v1"), undefined);
           await input.store.delete(input.session.piSessionId);
@@ -49,10 +50,10 @@ for (const id of ["cli", "acp"] as DriverId[]) {
           proc = {
             driver: id, get isRunning() { return running; },
             onRuntimeEvent(callback) { handler = callback; return () => { handler = undefined; }; },
-            formatContextUpdate: () => "",
+            serializeContextUpdate: () => "",
             abort: async () => { disposed++; running = false; },
             async submit(submission) {
-              assert.equal(submission.reconstructContext, true);
+              assert.equal(submission.messages.length > 0, true);
               assert.equal(submission.beforeInput(), true);
               if (outcome === "abort") { controller.abort(); return; }
               if (outcome === "delayed-abort") { submitReturned?.(); return; }
@@ -83,10 +84,10 @@ for (const id of ["cli", "acp"] as DriverId[]) {
       const invalidate = t.mock.method(bridge.runtimeSessionStore, "delete", async () => { assert.fail("standalone request must not invalidate a checkpoint"); });
       t.mock.method(bridge.liveSessions, "getOrCreate", () => { assert.fail("standalone request must not enter live registry"); });
 
-      let streamResult: ReturnType<ReturnType<typeof streamAgyProvider>["result"]> | undefined;
+      let streamResult: ReturnType<ReturnType<typeof streamProvider>["result"]> | undefined;
       const summarize = () => generateSummaryWithUsage([{ role: "user", content: "Original conversation detail", timestamp: 1 }], model, 2048, undefined, undefined, controller.signal, undefined, undefined, undefined,
         (selected, context, options) => {
-          const stream = streamAgyProvider(selected, context, options, bridge);
+          const stream = streamProvider(selected, context, options, bridge);
           streamResult = stream.result();
           return stream;
         });
@@ -145,7 +146,7 @@ test("ModelRuntime pre-resolved compaction auth succeeds for enabled credentials
         const proc: DriverSession = {
           driver: "acp", isRunning: true,
           onRuntimeEvent(callback) { handler = callback; return () => { handler = undefined; }; },
-          formatContextUpdate: () => "",
+          serializeContextUpdate: () => "",
           abort: async () => {},
           async submit(submission) {
             assert.equal(submission.beforeInput(), true);
@@ -188,12 +189,13 @@ test("standalone raw content bypasses markdown transcript wrapping", () => {
     ],
   };
 
-  const acpBlocks = rawAcpContent(context.messages);
+  const bridgeMessages = prepareBridgeMessages(context, true);
+  const acpBlocks = serializeAcpContent(bridgeMessages);
   assert.deepEqual(acpBlocks, [{ type: "text", text: "<conversation>detail</conversation>" }]);
   assert.ok(!acpBlocks.some((b) => b.type === "text" && (b.text.includes("## User") || b.text.startsWith("> ") || b.text.includes("\n> "))));
 
-  const cliPrompt = rawCliPrompt(context);
-  assert.equal(cliPrompt, "Summarize directly\n\n<conversation>detail</conversation>");
+  const cliPrompt = serializeCliPrompt(bridgeMessages);
+  assert.equal(cliPrompt, "[System]: Summarize directly\n\n<conversation>detail</conversation>");
   assert.ok(!cliPrompt.includes("# System prompt"));
   assert.ok(!cliPrompt.includes("## User"));
   assert.ok(!cliPrompt.startsWith("> ") && !cliPrompt.includes("\n> "));

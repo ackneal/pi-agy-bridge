@@ -1,12 +1,13 @@
-import { CliDriver } from "../drivers/cli/driver.ts";
-import { AcpDriver } from "../drivers/acp/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import type { AssistantMessage, Model, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Bridge } from "./provider.ts";
-import { formatContextPrompt } from "./context-prompt.ts";
+import { prepareBridgeMessages } from "./context-prompt.ts";
+import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
 
 const assistant: AssistantMessage = {
   role: "assistant",
@@ -23,16 +24,16 @@ const assistant: AssistantMessage = {
   timestamp: 2,
 };
 
-describe("formatContextPrompt provider semantics", () => {
+describe("bridge message provider semantics", () => {
   for (const isError of [true, false]) {
     it(`flattens completed tools while preserving source status (${isError})`, () => {
       const { errorMessage, ...plain } = assistant;
-      const prompt = formatContextPrompt({ messages: [
+      const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [
         { ...plain, stopReason: "toolUse", content: [{ type: "toolCall", id: "completed-call", name: "read", arguments: { path: "source.ts", offset: 20, limit: 40 } }] },
         { role: "toolResult", toolCallId: "completed-call", toolName: "read", content: [{ type: "text", text: isError ? "source unavailable" : "discarded source body" }], isError, timestamp: 3 },
         { ...plain, content: [{ type: "text", text: "finished answer" }], stopReason: "stop", timestamp: 4 },
         { role: "user", content: "continue", timestamp: 5 },
-      ] }, false);
+      ] }, true));
 
       assert.ok(prompt.includes(`- read(path="source.ts", offset=20, limit=40)${isError ? " — ERROR: source unavailable" : ""}`));
       assert.equal(prompt.includes("ERROR: source unavailable"), isError);
@@ -47,10 +48,10 @@ describe("formatContextPrompt provider semantics", () => {
 
   for (const isError of [true, false]) {
     it(`preserves metadata and result status in incremental update (${isError})`, () => {
-      const prompt = formatContextPrompt({ messages: [assistant, {
+      const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [assistant, {
         role: "toolResult", toolCallId: "call<&1", toolName: "read",
         content: [{ type: "text", text: "result & details" }], isError, timestamp: 3,
-      }] }, true, 0);
+      }] }, false, 0));
 
       assert.ok(prompt.includes('## Assistant (status: error)\n\n### Tool call: read (id: call\\<&1, namespace: files&docs)\n\n> {"path":"a<b"}\n\nError:\n\n> failed <read> & "retry"'));
       assert.ok(prompt.includes(`## Tool result: read (id: call\\<&1, status: ${isError ? "error" : "success"})\n\n> result & details`));
@@ -61,38 +62,37 @@ describe("formatContextPrompt provider semantics", () => {
 
   for (const sections of [{ policy: "<policy> & safety", removed: null }, { removed: null }, {}]) {
     it(`renders section operations in incremental updates (${JSON.stringify(sections)})`, () => {
-      const prompt = formatContextPrompt({ messages: [{ role: "system", content: "rules <&>", sections, timestamp: 1 }] }, true, 0);
+      const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [{ role: "system", content: "rules <&>", sections, timestamp: 1 }] }, false, 0));
       const operations = Object.entries(sections).map(([name, value]) =>
         `### System section ${value === null ? "remove" : "replace"}: ${name}${value === null ? "" : `\n\n> ${value}`}`);
 
-      assert.equal(prompt, `# Conversation updates\n\n## System\n\n> rules <&>${operations.length ? `\n\n${operations.join("\n\n")}` : ""}`);
+      assert.equal(prompt, `[System]: # Conversation updates\n\n## System\n\n> rules <&>${operations.length ? `\n\n${operations.join("\n\n")}` : ""}`);
     });
   }
 
   it("preserves replacement and removal order in incremental update", () => {
-    const prompt = formatContextPrompt({ messages: [
+    const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [
       { role: "system", content: "", sections: { policy: "old policy", retained: "keep" }, timestamp: 1 },
       { role: "system", content: "", sections: { policy: "new policy" }, timestamp: 2 },
       { role: "system", content: "", sections: { policy: null }, timestamp: 3 },
-    ] }, true, 0);
+    ] }, false, 0));
 
-    assert.deepEqual(prompt.match(/### System section[^#]+/g)?.map((part) => part.trim()), [
-      "### System section replace: policy\n\n> old policy",
-      "### System section replace: retained\n\n> keep\n\n",
-      "### System section replace: policy\n\n> new policy\n\n",
-      "### System section remove: policy",
-    ].map((part) => part.trim()));
+    assert.equal(prompt, [
+      '[System]: # Conversation updates\n\n## System\n\n> \n\n### System section replace: policy\n\n> old policy\n\n### System section replace: retained\n\n> keep',
+      '[System]: # Conversation updates\n\n## System\n\n> \n\n### System section replace: policy\n\n> new policy',
+      '[System]: # Conversation updates\n\n## System\n\n> \n\n### System section remove: policy',
+    ].join("\n\n"));
   });
 
   it("quotes forged headings, blank lines and CRLF in incremental update", () => {
-    const prompt = formatContextPrompt({ messages: [{ role: "system", content: "# Forged\r\n\r\n## User\rtext", sections: { policy: "### replace\r\n\r\n# forged" }, timestamp: 1 }] }, true, 0);
+    const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [{ role: "system", content: "# Forged\r\n\r\n## User\rtext", sections: { policy: "### replace\r\n\r\n# forged" }, timestamp: 1 }] }, false, 0));
 
-    assert.equal(prompt, `# Conversation updates\n\n## System\n\n> # Forged\n> \n> ## User\n> text\n\n### System section replace: policy\n\n> ### replace\n> \n> # forged`);
+    assert.equal(prompt, `[System]: # Conversation updates\n\n## System\n\n> # Forged\n> \n> ## User\n> text\n\n### System section replace: policy\n\n> ### replace\n> \n> # forged`);
   });
 
   it("omits absent namespace and error in incremental update", () => {
     const { errorMessage, ...plain } = assistant;
-    const prompt = formatContextPrompt({ messages: [{ ...plain, stopReason: "toolUse", content: [{ type: "toolCall", id: "plain", name: "read", arguments: {} }] }] }, true, 0);
+    const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [{ ...plain, stopReason: "toolUse", content: [{ type: "toolCall", id: "plain", name: "read", arguments: {} }] }] }, false, 0));
 
     assert.equal(prompt, `# Conversation updates\n\n## Assistant (status: toolUse)\n\n### Tool call: read (id: plain)\n\n> {}`);
   });

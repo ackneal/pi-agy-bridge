@@ -1,4 +1,5 @@
-import { getCurrentSystemPrompt, normalizeContext, type Context, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
+import type { Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
+import type { BridgeMessage } from "../types.ts";
 import { BridgeIPC } from "../../bridge/ipc.ts";
 import { createMcpLaunchDescriptor } from "../../bridge/mcp-launch.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
@@ -6,18 +7,18 @@ import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/stat
 import type { AcpConnectionOptions } from "./connection.ts";
 import { resolveAcpEffort } from "./options.ts";
 import { debugLog } from "../../shared/debug.ts";
-import { AcpRuntimeSession, rawAcpContent } from "./runtime.ts";
+import { RuntimeSession } from "./runtime.ts";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructions.ts";
 
-class AcpPreparationCleanupError extends AggregateError {}
+class PreparationCleanupError extends AggregateError {}
 
 export async function prepareAcpRuntime(
-  model: Model<any>, context: Context, tools: readonly Tool[], options: SimpleStreamOptions | undefined,
+  model: Model<any>, context: Context, messages: readonly BridgeMessage[], tools: readonly Tool[], options: SimpleStreamOptions | undefined,
   connection: { cwd: string; resolve: () => Promise<AcpConnectionOptions> },
   dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide">; sessionVersion: string },
   liveSession: LiveSession, preparationId: symbol,
   standalone = false,
-): Promise<{ proc: AcpRuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
+): Promise<{ proc: RuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
   const check = () => {
     options?.signal?.throwIfAborted();
     if (!liveSession.ownsPreparation(preparationId)) throw new Error("ACP preparation superseded");
@@ -25,8 +26,8 @@ export async function prepareAcpRuntime(
   check();
   const requested = resolveAcpEffort(model, options);
   const systemPrompt = standalone
-    ? (getCurrentSystemPrompt(normalizeContext(context).messages) || context.systemPrompt)
-    : composeAcpSystemPrompt(context);
+    ? messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n") || undefined
+    : composeAcpSystemPrompt(messages);
   const compatibilityKey = fingerprintAcpSystemPrompt(JSON.stringify([connection.cwd, systemPrompt]));
   const syncKey = calculateSyncKey(systemPrompt, tools.map((tool) => JSON.stringify(tool)), model.id, requested, "acp");
   let resolvedConnection: AcpConnectionOptions | undefined;
@@ -36,15 +37,15 @@ export async function prepareAcpRuntime(
     await liveSession.dispose({ preparationId });
     check();
   }
-  const checkpoint = await dependencies.store.get(liveSession.piSessionId, dependencies.sessionVersion);
+  const checkpoint = standalone ? undefined : await dependencies.store.get(liveSession.piSessionId, dependencies.sessionVersion);
   check();
   const latest = [...context.messages].reverse().find((message) => message.role === "assistant");
-  const decision = dependencies.sync.decide(liveSession, {
+  const decision = standalone ? { action: "rebuild" as const } : dependencies.sync.decide(liveSession, {
     syncKey, compatibilityKey, messages: context.messages,
     ...(latest?.responseId ? { conversationId: latest.responseId } : {}),
     ...(checkpoint ? { checkpoint } : {}),
   });
-  if (decision.action === "continue" && liveSession.activeProcess instanceof AcpRuntimeSession && liveSession.activeMcpServer) {
+  if (decision.action === "continue" && liveSession.activeProcess instanceof RuntimeSession && liveSession.activeMcpServer) {
     const proc = liveSession.activeProcess;
     const matches = proc.options.model === model.id && proc.options.effort === requested;
     return { proc, mcpServer: liveSession.activeMcpServer, reconstructContext: false, modelId: matches ? model.id : latest?.model ?? proc.options.model };
@@ -58,7 +59,7 @@ export async function prepareAcpRuntime(
   const startRuntime = async (conversationId?: string) => {
     check();
     const bridge = new BridgeIPC(tools, liveSession.id, liveSession.resources);
-    let proc: AcpRuntimeSession | undefined;
+    let proc: RuntimeSession | undefined;
     const cancel = () => {
       void bridge.close().catch((error) => debugLog("session", "Error closing cancelled ACP MCP startup:", error));
       void proc?.abort().catch((error) => debugLog("session", "Error cancelling ACP startup:", error));
@@ -69,7 +70,7 @@ export async function prepareAcpRuntime(
         await bridge.start();
         check();
       }
-      proc = new AcpRuntimeSession({
+      proc = new RuntimeSession({
         ...resolvedConnection,
         cwd: connection.cwd,
         ...(standalone ? {} : { mcp: createMcpLaunchDescriptor(bridge.bridgeUri) }),
@@ -77,10 +78,7 @@ export async function prepareAcpRuntime(
         ...(requested ? { effort: requested } : {}),
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         ...(conversationId ? { sessionId: conversationId } : {}),
-      }, new Set(tools.map((tool) => tool.name)),
-      standalone
-        ? (inputContext) => rawAcpContent(inputContext.messages)
-        : undefined);
+      }, new Set(tools.map((tool) => tool.name)));
       await proc.prepare(options?.signal);
       check();
       if (!proc.isRunning) throw new Error("ACP exited before input delivery");
@@ -92,7 +90,7 @@ export async function prepareAcpRuntime(
       const failures: unknown[] = [];
       try { await bridge.close(); } catch (cleanupError) { failures.push(cleanupError); }
       try { await proc?.abort(); } catch (cleanupError) { failures.push(cleanupError); }
-      if (failures.length) throw new AcpPreparationCleanupError([error, ...failures], "ACP preparation and cleanup failed");
+      if (failures.length) throw new PreparationCleanupError([error, ...failures], "ACP preparation and cleanup failed");
       throw error;
     } finally {
       options?.signal?.removeEventListener("abort", cancel);
@@ -104,7 +102,7 @@ export async function prepareAcpRuntime(
       return { ...await startRuntime(decision.conversationId), reconstructContext: false };
     } catch (error) {
       check();
-      if (error instanceof AcpPreparationCleanupError) throw error;
+      if (error instanceof PreparationCleanupError) throw error;
       await dependencies.store.delete(liveSession.piSessionId).catch((storeError) => {
         debugLog("session", "Failed to clear invalid ACP checkpoint:", storeError);
       });

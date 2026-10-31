@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Context, Message } from "@earendil-works/pi-ai";
-import { formatContextPrompt } from "./context-prompt.ts";
+import { prepareBridgeMessages } from "./context-prompt.ts";
+import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
 
-const format: (context: Context, isReused: boolean, syncedMessageCount?: number) => string = formatContextPrompt;
 const oldMessage: Message = { role: "user", content: "OLD_HISTORY_SENTINEL", timestamp: 1 };
 const image = { type: "image", mimeType: "image/png", data: "AAECA/8=" } as const;
 interface Case {
@@ -42,13 +42,13 @@ const cases: Case[] = [
     name: "zero synced messages includes the entire new slice",
     context: { messages: [{ role: "system", content: "new rules", timestamp: 1 }, { role: "user", content: "request", timestamp: 2 }] },
     isReused: true, syncedMessageCount: 0,
-    expected: "# Conversation updates\n\n## System\n\n> new rules\n\n## User\n\n> request",
+    expected: "[System]: # Conversation updates\n\n## System\n\n> new rules\n\nrequest",
   },
   {
     name: "formats a single new system message as quoted Markdown",
     context: { messages: [oldMessage, { role: "system", content: "rules & policy", timestamp: 2 }] },
     isReused: true, syncedMessageCount: 1,
-    expected: "# Conversation updates\n\n## System\n\n> rules & policy",
+    expected: "[System]: # Conversation updates\n\n## System\n\n> rules & policy",
   },
   {
     name: "omits image blocks for incremental user prompt in CLI",
@@ -65,10 +65,10 @@ const cases: Case[] = [
   })),
 ];
 
-describe("formatContextPrompt context updates", () => {
+describe("bridge message context updates", () => {
   for (const { name, context, isReused, syncedMessageCount, exact, expected } of cases) {
     it(name, () => {
-      const prompt = format(context, isReused, syncedMessageCount);
+      const prompt = serializeCliPrompt(prepareBridgeMessages(context, !isReused, syncedMessageCount));
 
       if (exact !== undefined) assert.equal(prompt, exact);
       if (expected !== undefined) assert.equal(prompt, expected);

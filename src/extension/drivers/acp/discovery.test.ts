@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
-import { AcpConnection } from "./connection.ts";
+import { Connection } from "./connection.ts";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { discoverAcpModels, newDiscoverySession, withAcpDiscovery } from "./discovery.ts";
@@ -32,9 +32,9 @@ for (const grouped of [false, true]) {
       { value: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
       { value: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
     ];
-    t.mock.method(AcpConnection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
-    t.mock.method(AcpConnection.prototype, "dispose", async () => {});
-    t.mock.method(AcpConnection.prototype, "request", async () => ({
+    t.mock.method(Connection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
+    t.mock.method(Connection.prototype, "dispose", async () => {});
+    t.mock.method(Connection.prototype, "request", async () => ({
       sessionId: "synthetic", configOptions: [{ id: "model", name: "Model", type: "select", currentValue: values[0]!.value,
         options: grouped ? [{ group: "available", name: "Available models", options: values }] : values }],
     }));
@@ -53,12 +53,12 @@ for (const scenario of [
 ]) {
   test(`ACP discovery classification: ${scenario.name}`, async (t) => {
     const controller = new AbortController();
-    t.mock.method(AcpConnection.prototype, "start", async () => {
+    t.mock.method(Connection.prototype, "start", async () => {
       if (scenario.initialize) throw scenario.error;
       return { protocolVersion: acp.PROTOCOL_VERSION };
     });
-    t.mock.method(AcpConnection.prototype, "dispose", async () => {});
-    const request = t.mock.method(AcpConnection.prototype, "request", async (method: acp.AgentRequestMethod, params: acp.AgentRequestParamsByMethod[acp.AgentRequestMethod]) => {
+    t.mock.method(Connection.prototype, "dispose", async () => {});
+    const request = t.mock.method(Connection.prototype, "request", async (method: acp.AgentRequestMethod, params: acp.AgentRequestParamsByMethod[acp.AgentRequestMethod]) => {
       assert.equal(method, acp.methods.agent.session.new);
       assert.deepEqual(params, { cwd: process.cwd(), mcpServers: [], _meta: { antigravity: { enabledTools: [] } } });
       if (scenario.cancel) controller.abort(new Error("cancelled"));
@@ -72,9 +72,9 @@ for (const scenario of [
 }
 
 test("ACP explicit session verification still creates a session", async (t) => {
-  t.mock.method(AcpConnection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
-  t.mock.method(AcpConnection.prototype, "dispose", async () => {});
-  const request = t.mock.method(AcpConnection.prototype, "request", async () => ({ sessionId: "verified" } as never));
+  t.mock.method(Connection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
+  t.mock.method(Connection.prototype, "dispose", async () => {});
+  const request = t.mock.method(Connection.prototype, "request", async () => ({ sessionId: "verified" } as never));
   const session = await withAcpDiscovery({ executable: "unused", cwd: process.cwd() }, undefined,
     (connection) => newDiscoverySession(connection, process.cwd()));
   assert.equal(session.sessionId, "verified");

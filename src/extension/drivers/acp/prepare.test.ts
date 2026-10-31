@@ -4,11 +4,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { prepareAcpRuntime } from "./prepare.ts";
-import { AcpDriver } from "./driver.ts";
+import { Driver } from "./driver.ts";
+import { SessionMode } from "../types.ts";
 import { useAcpExecutable } from "./executable-fixture.ts";
-import { CliRuntimeSession } from "../cli/runtime.ts";
+import { RuntimeSession as CliRuntimeSession } from "../cli/runtime.ts";
 import { LiveSession } from "../../session/session.ts";
 import { RuntimeSessionSync } from "../../session/state.ts";
+import { prepareSystemMessages } from "../../provider/context-prompt.ts";
 
 test("ACP clears the previous driver once before checkpoint lookup", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "agy-acp-prepare-"));
@@ -24,7 +26,7 @@ test("ACP clears the previous driver once before checkpoint lookup", async (t) =
   const previous = new CliRuntimeSession({ agentName: "pi-bridge", model: "raw" }, new Set(), {});
   live.setSession(previous, "previous-sync");
   const abort = t.mock.method(previous, "abort", async () => {});
-  const driver = new AcpDriver();
+  const driver = new Driver();
   useAcpExecutable(t, process.execPath);
   const dispose = t.mock.method(live, "dispose", live.dispose.bind(live));
   const stopped = new Error("Stopped at checkpoint lookup");
@@ -34,11 +36,14 @@ test("ACP clears the previous driver once before checkpoint lookup", async (t) =
     throw stopped;
   });
 
+  const context = { messages: [] };
+
   await assert.rejects(driver.prepareSession({
     model: { id: "raw" } as Parameters<typeof prepareAcpRuntime>[0],
-    context: { messages: [] }, tools: [], options: undefined, session: live,
+    context, messages: prepareSystemMessages(context), tools: [], options: undefined, session: live,
     store: { get, delete: async () => {} }, sync: new RuntimeSessionSync(),
     preparationId: live.beginPreparation(),
+    mode: SessionMode.Conversation,
   }), (error) => error === stopped);
 
   assert.equal(get.mock.callCount(), 1);
@@ -51,7 +56,7 @@ test("superseded ACP preparation stops before checkpoint or resource acquisition
   const stale = live.beginPreparation();
   live.beginPreparation();
   let reads = 0;
-  await assert.rejects(prepareAcpRuntime({ id: "raw" } as Parameters<typeof prepareAcpRuntime>[0], { messages: [] }, [], undefined, { cwd: process.cwd(), resolve: async () => { throw new Error("Superseded preparation must not resolve installation"); } }, {
+  await assert.rejects(prepareAcpRuntime({ id: "raw" } as Parameters<typeof prepareAcpRuntime>[0], { messages: [] }, [], [], undefined, { cwd: process.cwd(), resolve: async () => { throw new Error("Superseded preparation must not resolve installation"); } }, {
     store: { get: async () => { reads++; return undefined; }, delete: async () => {} }, sync: new RuntimeSessionSync(), sessionVersion: "acp:v1",
   }, live, stale), /superseded/);
   assert.equal(reads, 0);

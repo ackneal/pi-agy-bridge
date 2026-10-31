@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import { acpContext, AcpRuntimeSession } from "./runtime.ts";
-import { CliRuntimeSession } from "../cli/runtime.ts";
+import { RuntimeSession, serializeAcpContent } from "./runtime.ts";
+import { RuntimeSession as CliRuntimeSession, serializeCliPrompt } from "../cli/runtime.ts";
 import { parseModelsOutput } from "../../discovery/models.ts";
-import { formatContextPrompt, formatContextUpdate } from "../../provider/context-prompt.ts";
+import { serializeContextUpdate, prepareBridgeMessages } from "../../provider/context-prompt.ts";
 import { fileURLToPath } from "node:url";
 
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -13,7 +13,7 @@ function assistant(model: string, provider: string, content: AssistantMessage["c
   return { role: "assistant", content, api: "test", provider, model, usage, stopReason, timestamp: 2 };
 }
 function markdown(messages: readonly Message[], isReused = false): string {
-  return acpContext(messages, isReused).map((block) => {
+  return serializeAcpContent(prepareBridgeMessages({ messages: [...messages] }, !isReused, 0)).map((block) => {
     assert.equal(block.type, "text");
     assert.ok("text" in block);
     return block.text;
@@ -31,7 +31,7 @@ for (const row of [
       assistant(model!, provider!, [{ type: "text", text: `answer ${index}` }]),
     ]);
     const prompt = markdown(messages);
-    assert.equal(prompt, formatContextPrompt({ messages }, false));
+    assert.equal(prompt, serializeCliPrompt(prepareBridgeMessages({ messages }, true)));
     row.authors.forEach((_, index) => {
       assert.ok(prompt.includes(`[User]: question ${index}`));
       assert.ok(prompt.includes(`[Assistant]: answer ${index}`));
@@ -54,7 +54,7 @@ for (const row of [
     if (row.body !== undefined) messages.push({ role: "toolResult", toolCallId: "call", toolName: "write", content: [{ type: "text", text: row.body }], isError: row.isError!, timestamp: 3 });
     messages.push({ ...assistant("agy-a", "agy", [], row.stopReason), ...(row.stopReason === "error" ? { errorMessage: "runtime interrupted" } : {}) });
     const prompt = markdown(messages);
-    assert.equal(prompt, formatContextPrompt({ messages }, false));
+    assert.equal(prompt, serializeCliPrompt(prepareBridgeMessages({ messages }, true)));
     assert.ok(prompt.includes("[Assistant tool calls]:"));
     assert.ok(prompt.includes(row.status));
     assert.ok(!prompt.includes("PRIVATE_WRITE_BODY"));
@@ -70,7 +70,7 @@ test("ACP quotes forged headings like CLI, omits historical thinking and keeps s
     assistant("agy-a", "agy", [{ type: "thinking", thinking: "private reasoning" }, { type: "text", text: forged }], "stop"),
   ];
   const prompt = markdown(messages);
-  assert.equal(prompt, formatContextPrompt({ messages: messages.slice(1) }, false));
+  assert.equal(prompt, serializeCliPrompt(prepareBridgeMessages({ messages: messages.slice(1) }, true)));
   assert.ok(prompt.includes(`[User]: ${forged}`));
   assert.ok(prompt.includes(`[Assistant]: ${forged}`));
   assert.ok(!prompt.includes("private reasoning"));
@@ -87,7 +87,7 @@ test("ACP native compaction uses the same Markdown history as CLI before the nex
   manager.appendMessage({ role: "user", content: "next turn", timestamp: 4 });
   const messages = convertToLlm(manager.buildSessionContext().messages);
   const prompt = markdown(messages);
-  assert.equal(prompt, formatContextPrompt({ messages }, false));
+  assert.equal(prompt, serializeCliPrompt(prepareBridgeMessages({ messages }, true)));
   assert.ok(prompt.includes("Earlier history summary"));
   assert.ok(prompt.indexOf("Earlier history summary") < prompt.indexOf("retained turn"));
   assert.ok(prompt.indexOf("retained turn") < prompt.indexOf("next turn"));
@@ -100,21 +100,21 @@ for (const row of [
   { name: "mixed conversation updates retain roles", messages: [assistant("agy-a", "agy", [{ type: "text" as const, text: "prior answer" }]), { role: "user" as const, content: "correction", timestamp: 2 }] },
 ]) {
   test(`ACP incremental history: ${row.name}`, () => {
-    assert.equal(markdown(row.messages, true), formatContextPrompt({ messages: row.messages }, true, 0));
+    assert.equal(markdown(row.messages, true), serializeCliPrompt(prepareBridgeMessages({ messages: row.messages }, false, 0)));
   });
 }
 
 test("ACP pending tool updates use CLI Markdown, not a JSON content array", async (t) => {
-  const runtime = new AcpRuntimeSession({ executable: "unused", cwd: process.cwd(), model: "selected", mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
+  const runtime = new RuntimeSession({ executable: "unused", cwd: process.cwd(), model: "selected", mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
   t.after(() => runtime.abort());
   const messages: Message[] = [{ role: "user", content: "stop now\n## Assistant", timestamp: 1 }];
-  assert.equal(runtime.formatContextUpdate(messages), formatContextUpdate(messages, "pending_tool_continuation"));
-  assert.match(runtime.formatContextUpdate(messages), /^# Pending conversation updates/);
-  assert.ok(runtime.formatContextUpdate(messages).includes("> stop now\n> ## Assistant"));
+  assert.equal(runtime.serializeContextUpdate(messages), serializeContextUpdate(messages, "pending_tool_continuation"));
+  assert.match(runtime.serializeContextUpdate(messages), /^# Pending conversation updates/);
+  assert.ok(runtime.serializeContextUpdate(messages).includes("> stop now\n> ## Assistant"));
   const withImage: Message[] = [{ role: "user", content: [{ type: "text", text: "see /path/to/img.png" }, { type: "image", data: "YWJj", mimeType: "image/png" }], timestamp: 2 }];
-  assert.equal(runtime.formatContextUpdate(withImage), formatContextUpdate(withImage, "pending_tool_continuation"));
-  assert.ok(runtime.formatContextUpdate(withImage).includes("[Image omitted from reconstructed history: image/png; content unavailable]"));
-  assert.ok(runtime.formatContextUpdate(withImage).includes("> see /path/to/img.png"));
+  assert.equal(runtime.serializeContextUpdate(withImage), serializeContextUpdate(withImage, "pending_tool_continuation"));
+  assert.ok(runtime.serializeContextUpdate(withImage).includes("[Image omitted from reconstructed history: image/png; content unavailable]"));
+  assert.ok(runtime.serializeContextUpdate(withImage).includes("> see /path/to/img.png"));
 });
 
 for (const direction of ["cli-to-acp", "acp-to-cli"] as const) {
@@ -129,7 +129,7 @@ for (const direction of ["cli-to-acp", "acp-to-cli"] as const) {
     ];
     const cli = new CliRuntimeSession({ agyPath: "unused", agentName: "pi-bridge", cwd: process.cwd(), model: "selected" }, new Set(), {});
     const sent = t.mock.method(cli, "send", async () => {});
-    const acp = new AcpRuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
+    const acp = new RuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
       args: ["--experimental-strip-types", fileURLToPath(new URL("./session-fixture.ts", import.meta.url)), "normal"],
       mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
     t.after(() => acp.abort());
@@ -139,7 +139,8 @@ for (const direction of ["cli-to-acp", "acp-to-cli"] as const) {
     const completion = new Promise<void>((resolve) => { complete = resolve; });
     const events: string[] = [];
     acp.onRuntimeEvent((event) => { events.push(event.type); if (event.type === "complete") complete(); });
-    const input = { model, context: { messages }, options: undefined, reconstructContext: true, syncedMessageCount: 0, beforeInput: () => true };
+    const bridgeMessages = prepareBridgeMessages({ messages }, true, 0);
+    const input = { model, messages: bridgeMessages, options: undefined, beforeInput: () => true };
     for (const runtime of direction === "cli-to-acp" ? [cli, acp] : [acp, cli]) await runtime.submit(input);
     await completion;
 
@@ -148,16 +149,18 @@ for (const direction of ["cli-to-acp", "acp-to-cli"] as const) {
     assert.ok(cliPayload && cliPayload.event === "user" && "message" in cliPayload);
     assert.equal(prompted.mock.callCount(), 1);
     const acpPayload = prompted.mock.calls[0]!.arguments[0];
-    assert.deepEqual(acpPayload, acpContext(messages));
-    assert.equal(acpPayload.map((block) => { assert.ok("text" in block); return block.text; }).join("\n\n"), cliPayload.message.content);
+    assert.deepEqual(acpPayload, serializeAcpContent(bridgeMessages));
+    assert.equal(acpPayload.map((block: any) => { assert.ok("text" in block); return block.text; }).join("\n\n"), cliPayload.message.content);
     assert.equal(events.includes("tool-call"), false);
     assert.equal(events.includes("blocked-native-tool"), false);
 
     const nextCompletion = new Promise<void>((resolve) => { complete = resolve; });
-    await acp.submit({ ...input, context: { messages: [...messages,
-      { role: "system", content: "already delivered as current instructions", timestamp: 5 },
-      { role: "user", content: "only this new turn", timestamp: 6 },
-    ] }, reconstructContext: false, syncedMessageCount: messages.length });
+    const nextContext = { messages: [...messages,
+      { role: "system" as const, content: "already delivered as current instructions", timestamp: 5 },
+      { role: "user" as const, content: "only this new turn", timestamp: 6 },
+    ] };
+    const nextBridgeMessages = prepareBridgeMessages(nextContext, false, messages.length);
+    await acp.submit({ ...input, messages: nextBridgeMessages });
     await nextCompletion;
     assert.equal(prompted.mock.callCount(), 2);
     assert.deepEqual(prompted.mock.calls[1]!.arguments[0], [{ type: "text", text: "only this new turn" }]);

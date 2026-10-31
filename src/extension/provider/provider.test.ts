@@ -10,7 +10,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { AgyRuntime, type AgyEventSource } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { DEFAULT_AGY_PLUGIN_DIR } from "../discovery/plugin-install.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { prepareDriverCwd } from "../drivers/cwd.ts";
 import { resolveModelAndEffort } from "../drivers/cli/session.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
@@ -18,7 +18,7 @@ import { PiRuntimeOutput } from "./output.ts";
 import { RuntimeSessionSync, type AgyConversationCheckpoint } from "../session/state.ts";
 import { LiveSession } from "../session/session.ts";
 import type { AgyEvent, AgyInput } from "../shared/types.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamProvider } from "./provider.ts";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -115,7 +115,7 @@ for (const row of fixedEffortCases) {
     });
     const model = { id: row.modelId, provider: "agy", thinkingLevelMap: allNullThinkingLevels } as Model<any>;
 
-    const message = await streamAgyProvider(model, { messages: [], tools: [] }, {
+    const message = await streamProvider(model, { messages: [], tools: [] }, {
       sessionId: "validation-test", ...row.options,
     }, bridge).result();
 
@@ -324,7 +324,7 @@ async function createRuntimeFixture(t: TestContext) {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
 
-    const message = await streamAgyProvider(model, context, {
+    const message = await streamProvider(model, context, {
       sessionId, ...(signal ? { signal } : {}), ...options,
     }, runtimeBridge).result();
 
@@ -1072,7 +1072,7 @@ for (const row of [
     const model = { id: "test-model", provider: "agy" } as Model<any>;
     const continuation = "Continue from the current conversation state without repeating completed work.";
     const observed: unknown[] = [];
-    const result = await streamAgyProvider(model, { systemPrompt: "Keep Pi history", tools: [], messages }, {
+    const result = await streamProvider(model, { systemPrompt: "Keep Pi history", tools: [], messages }, {
       sessionId,
       onPayload: (payload) => {
         observed.push(payload);

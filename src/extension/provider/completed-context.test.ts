@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import type { AssistantMessage, Context, Message } from "@earendil-works/pi-ai";
-import { formatContextPrompt, formatContextUpdate } from "./context-prompt.ts";
+import { prepareBridgeMessages, serializeConversation } from "./context-prompt.ts";
+import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
 
 type Call = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 type Result = Extract<Message, { role: "toolResult" }>;
@@ -154,7 +155,7 @@ const cases: CompletedCase[] = [
 for (const { name, messages, check } of cases) {
   it(`completed context: ${name}`, () => {
     const before = structuredClone(messages);
-    const prompt = formatContextPrompt({ messages }, false);
+    const prompt = serializeConversation(messages);
 
     check(prompt);
     assert.doesNotMatch(prompt, /id:|id-(?:one|two|bash|three|before|after|edit|write|error|success|missing|duplicate|shared|orphan)|Body omitted|body omitted|PRIVATE_RESULT_BODY/);
@@ -166,7 +167,7 @@ for (const stopReason of ["pending", "deferred"] as const) {
   it(`completed context: ${stopReason} assistant serializes tool calls`, () => {
     const args = { path: "latest.ts", content: "FULL_ARGUMENT_" + "x".repeat(1500) };
     const messages: Message[] = [assistant([call("id-current", "", "write", args)]), result("id-current", "CURRENT_BODY", false, "write"), terminal(stopReason)];
-    const prompt = formatContextPrompt({ messages }, false);
+    const prompt = serializeConversation(messages);
 
     assert.ok(prompt.includes("- write(path=\"latest.ts\")"), prompt);
     assert.doesNotMatch(prompt, /FULL_ARGUMENT_|CURRENT_BODY/);
@@ -181,7 +182,7 @@ for (const mode of ["completed", "user", "incremental"] as const) {
       ? [{ role: "user", content: [{ type: "text", text: "IMAGE_REQUEST" }, image], timestamp: 1 }]
       : [assistant([call("id-image", "picture.png")]), imageResult, terminal()];
     const context: Context = { messages };
-    const prompt = mode === "incremental" ? formatContextUpdate(messages, "incremental_conversation") : formatContextPrompt(context, false);
+    const prompt = serializeCliPrompt(prepareBridgeMessages(context, mode !== "incremental", 0));
 
     assert.ok(prompt.length < 5000, `image payload expanded output to ${prompt.length}`);
     assert.doesNotMatch(prompt, /PRIVATE_BASE64|AAAA|data:image/);

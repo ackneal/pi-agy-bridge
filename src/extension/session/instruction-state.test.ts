@@ -56,7 +56,7 @@ for (const row of [
       const process: DriverSession = {
         driver: row.requested ? "acp" : "cli", isRunning: true,
         ...(row.requested && !("missingLiveKey" in row && row.missingLiveKey) ? { compatibilityKey: original } : {}),
-        onRuntimeEvent: () => () => {}, formatContextUpdate: () => "",
+        onRuntimeEvent: () => () => {}, serializeContextUpdate: () => "",
         submit: async () => {}, abort: async () => {},
       };
       const mcp = new BridgeIPC([], session.id, session.resources);

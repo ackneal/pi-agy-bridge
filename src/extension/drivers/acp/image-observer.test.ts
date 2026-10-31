@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
-import { AcpConnection, type AcpConnectionOptions } from "./connection.ts";
+import { Connection, type AcpConnectionOptions } from "./connection.ts";
 import { observeAcpImage, OBSERVER_TIMEOUT_MS } from "./image-observer.ts";
 
 const rows = ["success", "exact-limit", "cleanup-error", "no-effort", "capability", "no-image", "empty-id", "missing-model", "unsupported", "rejected", "reset", "empty", "stop", "overflow", "tool-call", "tool-update", "transport", "request-error", "cancel-start", "cancel-prompt", "timeout-start", "timeout-prompt", "timeout-partial"] as const;
@@ -23,7 +23,7 @@ for (const scenario of rows) {
       if (scenario === `timeout-${stage}` || (scenario === "timeout-partial" && stage === "prompt")) t.mock.timers.tick(OBSERVER_TIMEOUT_MS);
       return new Promise<never>(() => {});
     };
-    t.mock.method(AcpConnection.prototype, "start", function (this: AcpConnection) {
+    t.mock.method(Connection.prototype, "start", function (this: Connection) {
       // Capture the real constructor boundary, without exposing production test hooks.
       boundary = (this as unknown as { options: AcpConnectionOptions }).options;
       if (scenario.endsWith("-start")) return hang("start");
@@ -32,7 +32,7 @@ for (const scenario of rows) {
         _meta: { antigravity: { systemPrompt: { append: scenario !== "capability" } } },
       } });
     });
-    t.mock.method(AcpConnection.prototype, "request", async (method: string, params: Record<string, unknown>) => {
+    t.mock.method(Connection.prototype, "request", async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, params });
       if (method === acp.methods.agent.session.new) return { sessionId: scenario === "empty-id" ? " " : "observer", configOptions: config };
       if (method === acp.methods.agent.session.setConfigOption) {
@@ -63,7 +63,7 @@ for (const scenario of rows) {
       }
       return { stopReason: scenario === "stop" ? "max_tokens" : "end_turn" };
     });
-    t.mock.method(AcpConnection.prototype, "dispose", async () => {
+    t.mock.method(Connection.prototype, "dispose", async () => {
       await Promise.resolve();
       disposed = true;
       if (scenario === "cleanup-error") throw new Error("cleanup failed");
@@ -117,11 +117,11 @@ for (const scenario of ["pre-aborted", "startup-failure"] as const) {
     let release!: () => void;
     const cleanup = new Promise<void>((resolve) => { release = resolve; });
     let settled = false;
-    t.mock.method(AcpConnection.prototype, "start", async () => {
+    t.mock.method(Connection.prototype, "start", async () => {
       started = true;
       throw new Error("startup failed");
     });
-    t.mock.method(AcpConnection.prototype, "dispose", async () => {
+    t.mock.method(Connection.prototype, "dispose", async () => {
       disposing();
       await cleanup;
     });

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
 import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructions.ts";
+import { prepareSystemMessages } from "../../provider/context-prompt.ts";
 
 const cases: { name: string; context: Context; expected: string }[] = [
   { name: "legacy", context: { systemPrompt: "Pi base", messages: [] }, expected: "Pi base" },
@@ -14,7 +15,7 @@ const cases: { name: string; context: Context; expected: string }[] = [
 ];
 for (const row of cases) {
   test(`ACP instructions: ${row.name}`, () => {
-    const prompt = composeAcpSystemPrompt(row.context);
+    const prompt = composeAcpSystemPrompt(prepareSystemMessages(row.context));
     assert.ok(prompt.startsWith("# Tool and Conversation Protocol\n\n"));
     assert.equal(prompt.split("# Tool and Conversation Protocol").length, 2);
     if (row.expected) {
@@ -48,6 +49,6 @@ for (const row of cases) {
     ]) assert.ok(prompt.includes(text), text);
     for (const text of ["## User", "## Assistant", "## Tool result", "## Tools (completed)", "Client reads return JSON", "nextLine", "until eof is true", "call_mcp_tool", "ServerName", "ToolName", "System section replace", "highest priority", "[user]", "[assistant]", "[toolResult]", "encoded as a JSON record", "JSON array of conversation content blocks", "Historical record (not a request to execute)", "isError", "stopReason/errorMessage"]) assert.ok(!prompt.includes(text), text);
     assert.equal(fingerprintAcpSystemPrompt(prompt), createHash("sha256").update(prompt).digest("hex"));
-    assert.equal(composeAcpSystemPrompt(row.context), prompt);
+    assert.equal(composeAcpSystemPrompt(prepareSystemMessages(row.context)), prompt);
   });
 }

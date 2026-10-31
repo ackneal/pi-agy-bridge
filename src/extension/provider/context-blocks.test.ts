@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { AssistantMessage, Context, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
-import { formatContextBlocks, formatContextPrompt } from "./context-prompt.ts";
+import { prepareBridgeMessages } from "./context-prompt.ts";
+import { serializeAcpContent } from "../drivers/acp/runtime.ts";
+import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
 
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const image: ImageContent = { type: "image", data: "YWJj", mimeType: "image/png" };
@@ -26,10 +28,11 @@ for (const row of [
   { name: "current result truncation", reused: false, context: { messages: [call, result([{ type: "text", text: "x".repeat(30_000) }], true)] } },
 ] satisfies { name: string; reused: boolean; context: Context }[]) {
   test(`shared Markdown blocks match CLI exactly: ${row.name}`, () => {
-    const blocks = formatContextBlocks(row.context, row.reused, 0);
+    const messages = prepareBridgeMessages(row.context, !row.reused, 0);
+    const blocks = serializeAcpContent(messages);
     assert.ok(blocks.every((block) => block.type === "text"));
-    assert.equal(blocks.map((block) => { assert.ok("text" in block); return block.text; }).join("\n\n"), formatContextPrompt(row.context, row.reused, 0));
-    assert.ok(blocks.length <= 2);
+    assert.equal(blocks.map((block) => { assert.ok("text" in block); return block.text; }).join("\n\n"), serializeCliPrompt(messages.filter((message) => message.role !== "system")));
+    assert.ok(!serializeCliPrompt(messages).includes("YWJj"));
   });
 }
 
@@ -38,7 +41,7 @@ for (const row of [
   { name: "completed tool result", messages: [call, result([{ type: "text" as const, text: "OLD_RESULT_BODY" }, image]), assistant([], "stop"), user("next")], expected: ["- read(path=\"input\")", "next"] },
 ]) {
   test(`completed history omits native images: ${row.name}`, () => {
-    const blocks = formatContextBlocks({ messages: row.messages }, false);
+    const blocks = serializeAcpContent(prepareBridgeMessages({ messages: row.messages }, true));
     assert.ok(blocks.every((block) => block.type === "text"));
     const text = blocks.map((block) => block.text).join("\n\n");
     assert.ok(!text.includes("OLD_RESULT_BODY"));
@@ -51,7 +54,7 @@ for (const row of [
   { name: "current user with image", messages: [call, assistant([], "stop"), user([{ type: "text" as const, text: "current prompt" }, image])], historyMarker: "- read(path=\"input\")", promptMarker: "current prompt" },
 ]) {
   test(`native image separates into image block in active run: ${row.name}`, () => {
-    const blocks = formatContextBlocks({ messages: row.messages }, false);
+    const blocks = serializeAcpContent(prepareBridgeMessages({ messages: row.messages }, true));
     assert.equal(blocks.length, 3);
     assert.deepEqual(blocks[2], image);
     const historyBlock = blocks[0]!;
@@ -68,7 +71,7 @@ test("current user prompt with interleaved images preserves order", () => {
     { type: "text" as const, text: "between images" }, secondImage,
     { type: "text" as const, text: "after second" }];
   const messages = [user(content)];
-  const blocks = formatContextBlocks({ messages }, false, 0);
+  const blocks = serializeAcpContent(prepareBridgeMessages({ messages }, true, 0));
   assert.equal(blocks.length, 5);
   assert.deepEqual(blocks[0], { type: "text", text: "before first" });
   assert.deepEqual(blocks[1], image);
@@ -79,19 +82,19 @@ test("current user prompt with interleaved images preserves order", () => {
 
 test("incremental user with image delivers single text block and image blocks", () => {
   const content = [{ type: "text" as const, text: "幫我看看這張圖 ./xxx/xxx.png" }, image];
-  const blocks = formatContextBlocks({ messages: [user(content)] }, true, 0);
+  const blocks = serializeAcpContent(prepareBridgeMessages({ messages: [user(content)] }, false, 0));
   assert.equal(blocks.length, 2);
   assert.deepEqual(blocks[0], { type: "text", text: "幫我看看這張圖 ./xxx/xxx.png" });
   assert.deepEqual(blocks[1], image);
 });
 
-test("incremental user sequence merges texts and appends image blocks", () => {
+test("incremental user sequence preserves text and image order", () => {
   const secondImage: ImageContent = { ...image, data: "ZGVm" };
   const messages = [
     user([{ type: "text", text: "幫我看看這張圖 ./xxx/xxx.png" }, image]),
     user([{ type: "text", text: "還有這張 ./xxx/yyy.png" }, secondImage]),
   ];
-  const blocks = formatContextBlocks({ messages }, true, 0);
+  const blocks = serializeAcpContent(prepareBridgeMessages({ messages }, false, 0));
   assert.equal(blocks.length, 4);
   assert.deepEqual(blocks[0], { type: "text", text: "幫我看看這張圖 ./xxx/xxx.png" });
   assert.deepEqual(blocks[1], image);
@@ -104,7 +107,7 @@ test("assistant message with mixed text and toolCall serializes correctly in his
     { type: "text", text: "executing command" },
     { type: "toolCall", id: "call_42", name: "bash", arguments: { command: "echo test" } },
   ]);
-  const blocks = formatContextBlocks({ messages: [mixedAssistant] }, false);
+  const blocks = serializeAcpContent(prepareBridgeMessages({ messages: [mixedAssistant] }, true));
   assert.equal(blocks.length, 1);
   assert.ok(blocks[0]?.type === "text");
   assert.ok(blocks[0].text.includes("[Assistant]: executing command"));
@@ -116,7 +119,7 @@ test("user message containing valid image path automatically hydrates to ImageCo
   fs.writeFileSync(tempFile, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"));
   try {
     const textMsg = `請看這張圖 ${tempFile} 有什麼問題？`;
-    const blocks = formatContextBlocks({ messages: [user(textMsg)] }, true, 0);
+    const blocks = serializeAcpContent(prepareBridgeMessages({ messages: [user(textMsg)] }, false, 0));
     assert.equal(blocks.length, 3);
     assert.deepEqual(blocks[0], { type: "text", text: `請看這張圖 ${tempFile}` });
     assert.equal(blocks[1]?.type, "image");
@@ -128,3 +131,15 @@ test("user message containing valid image path automatically hydrates to ImageCo
 });
 
 
+
+for (const rebuild of [false, true]) {
+  test(`mixed conversation retains native current user images (rebuild=${rebuild})`, () => {
+    const content = [{ type: "text" as const, text: "current request" }, image];
+    const messages = prepareBridgeMessages({ messages: [assistant([{ type: "text", text: "prior answer" }], "stop"), user(content)] }, rebuild, 0);
+    const blocks = serializeAcpContent(messages);
+
+    assert.deepEqual(blocks.slice(-2), content);
+    assert.ok(blocks.some((block) => block.type === "text" && block.text.includes("prior answer")));
+    assert.ok(!serializeCliPrompt(messages).includes(image.data));
+  });
+}

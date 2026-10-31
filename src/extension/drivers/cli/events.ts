@@ -15,7 +15,7 @@ export interface CliEventTranslatorOptions {
   allowedToolNames?: ReadonlySet<string>;
 }
 
-export class CliEventTranslator {
+export class EventTranslator {
   private errorState: ConversationErrorState;
   private readonly allowedToolNames: ReadonlySet<string> | undefined;
   private hasStepUsage = false;

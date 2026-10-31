@@ -7,9 +7,10 @@ import { createAcpAuthenticationBackend } from "./auth.ts";
 import { discoverAcpModels } from "./discovery.ts";
 import { detectAcpExecutable, resolveAcpConnectionOptions, resolveAcpEffort } from "./options.ts";
 import { prepareAcpRuntime } from "./prepare.ts";
+import { SessionMode } from "../types.ts";
 import { ensureAcpInstallation, findAcpInstallation } from "./installation.ts";
 
-export class AcpDriver implements BridgeDriver {
+export class Driver implements BridgeDriver {
   readonly id = "acp";
   readonly label = "Antigravity ACP";
   readonly sessionVersion = "acp:v1";
@@ -71,7 +72,7 @@ export class AcpDriver implements BridgeDriver {
       resolve: () => this.connectionOptions(input.options?.signal),
     };
     const dependencies = { store: input.store, sync: input.sync, sessionVersion: this.sessionVersion };
-    return prepareAcpRuntime(input.model, input.context, input.tools, input.options, connection, dependencies, input.session, input.preparationId, input.standalone ?? false);
+    return prepareAcpRuntime(input.model, input.context, input.messages, input.tools, input.options, connection, dependencies, input.session, input.preparationId, input.mode === SessionMode.Standalone);
   }
 
   async discoverModels(signal: AbortSignal) {

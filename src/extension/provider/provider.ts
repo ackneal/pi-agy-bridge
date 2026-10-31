@@ -28,9 +28,11 @@ import { collectDoctorReport, type DoctorOptions } from "./doctor.ts";
 import { formatAcpToolWarning } from "./tool-warning.ts";
 import { AcpInstallationProgress } from "./installation-progress.ts";
 import { ProgressStatus } from "./progress.ts";
+import { prepareBridgeMessages, prepareSystemMessages } from "./context-prompt.ts";
+import { SessionMode, type ContentPart } from "../drivers/types.ts";
 import { resolveAcpRelease } from "../drivers/acp/release.ts";
 
-export function streamAgyProvider(
+export function streamProvider(
   model: Model<any>,
   context: Context,
   options: SimpleStreamOptions | undefined,
@@ -39,8 +41,9 @@ export function streamAgyProvider(
   debugArtifact("provider-context", { model: model.id, sessionId: options?.sessionId, context });
   const contextTools = context.tools ?? [];
   const piSessionId = options?.sessionId;
-  // Summary routing IDs are not Pi session identities. Keep these requests
-  // isolated from the conversation and its executable tools.
+  // Pi compaction/branch summaries use fresh routing IDs with caching disabled.
+  // This is a heuristic: a bound summary (including bug reports) cannot be
+  // distinguished from a cache-disabled conversation without a purpose flag.
   const standalone = Boolean(piSessionId && options?.cacheRetention === "none" &&
     !bridge.piContextAdapter.getSessionManager(piSessionId));
   const tools = standalone ? [] : bridge.getTools(context);
@@ -72,6 +75,7 @@ export function streamAgyProvider(
     return stream;
   }
 
+  const mode = standalone ? SessionMode.Standalone : SessionMode.Conversation;
   const liveSession = standalone
     ? new LiveSession(piSessionId)
     : bridge.liveSessions.getOrCreate(piSessionId);
@@ -90,12 +94,13 @@ export function streamAgyProvider(
 
   (async () => {
     try {
+      const systemMessages = prepareSystemMessages(context);
       const runtime = await bridge.driver.prepareSession({
-        model, context, tools, options, session: liveSession, preparationId,
+        model, context, messages: systemMessages, tools, options, session: liveSession, preparationId,
         // Standalone routing must not consult or invalidate conversation checkpoints.
         store: standalone ? { get: async () => undefined, delete: async () => {} } : bridge.runtimeSessionStore,
         sync: bridge.runtimeSessionSync,
-        standalone,
+        mode,
       });
       const mcpServer = runtime.mcpServer;
       adapter.setModel(runtime.modelId);
@@ -111,7 +116,7 @@ export function streamAgyProvider(
       // response instead so the current turn sees them before resuming.
       const hasPendingCalls = mcpServer.hasPendingCalls;
       const contextUpdate = hasPendingCalls && contextUpdates.length > 0
-        ? runtime.proc.formatContextUpdate(contextUpdates)
+        ? runtime.proc.serializeContextUpdate(contextUpdates)
         : undefined;
       const enqueuedToolResults = hasPendingCalls
         ? mcpServer.resolveToolResults(toolResults, contextUpdate)
@@ -130,7 +135,14 @@ export function streamAgyProvider(
 
       turn.openToolDispatch();
 
-      await turn.send({ model, context, options, reconstructContext: runtime.reconstructContext, syncedMessageCount });
+      const submissionContext: Context = standalone ? { messages: context.messages.flatMap((message) => {
+        if (message.role === "system") return [];
+        const content = typeof message.content === "string" ? message.content
+          : message.content.filter((part): part is ContentPart => part.type === "text" || part.type === "image");
+        return [{ role: "user" as const, content, timestamp: message.timestamp }];
+      }) } : context;
+      const messages = prepareBridgeMessages(submissionContext, runtime.reconstructContext, syncedMessageCount, systemMessages);
+      await turn.send({ model, options, messages });
     } catch (error) {
       turn.fail(error);
     } finally {
@@ -515,7 +527,7 @@ export class Bridge {
       const signal = options?.signal
         ? AbortSignal.any([options.signal, this.runtimeLifetime.signal])
         : this.runtimeLifetime.signal;
-      return streamAgyProvider(model, context, { ...options, env, signal }, this);
+      return streamProvider(model, context, { ...options, env, signal }, this);
     };
 
     debugLog("provider", "Registering bridge provider", { driver: driver.id });

@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
-import { CliRuntimeSession, rawCliPrompt } from "./runtime.ts";
+import { RuntimeSession } from "./runtime.ts";
 import type { ConversationErrorState } from "./events.ts";
 import { BridgeIPC } from "../../bridge/ipc.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
@@ -71,7 +71,7 @@ export async function prepareCliRuntime(
   selection: ReturnType<typeof resolveModelAndEffort>,
   preparationId: symbol,
   standalone = false,
-): Promise<{ proc: CliRuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
+): Promise<{ proc: RuntimeSession; mcpServer: BridgeIPC; reconstructContext: boolean; modelId: string }> {
   const checkPreparation = () => {
     options?.signal?.throwIfAborted();
     if (!liveSession.ownsPreparation(preparationId)) {
@@ -93,9 +93,9 @@ export async function prepareCliRuntime(
   const latestAssistant = [...context.messages].reverse().find((message) => message.role === "assistant");
   const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
   const pluginDir = DEFAULT_AGY_PLUGIN_DIR;
-  const checkpoint = await dependencies.store.get(liveSession.piSessionId, dependencies.sessionVersion);
+  const checkpoint = standalone ? undefined : await dependencies.store.get(liveSession.piSessionId, dependencies.sessionVersion);
   checkPreparation();
-  const decision = dependencies.sync.decide(liveSession, {
+  const decision = standalone ? { action: "rebuild" as const } : dependencies.sync.decide(liveSession, {
     syncKey, compatibilityKey,
     ...(expectedConversationId ? { conversationId: expectedConversationId } : {}),
     messages: context.messages,
@@ -117,7 +117,7 @@ export async function prepareCliRuntime(
       throw new Error("Antigravity CLI process or Pi MCP bridge was not initialized");
     }
     const proc = liveSession.activeProcess;
-    if (!(proc instanceof CliRuntimeSession)) throw new Error("CLI cannot reuse another driver's runtime");
+    if (!(proc instanceof RuntimeSession)) throw new Error("CLI cannot reuse another driver's runtime");
     const modelMatches = proc.options.model === baseModel && proc.options.effort === effort;
     if (liveSession.syncKey !== syncKey) {
       debugLog("session", "Deferring runtime settings change until the pending Antigravity CLI turn finishes", {
@@ -150,7 +150,7 @@ export async function prepareCliRuntime(
 
   const startRuntime = async (conversationId?: string) => {
     const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
-    let proc: CliRuntimeSession | null = null;
+    let proc: RuntimeSession | null = null;
     const abortStartup = () => {
       void mcpServer.close().catch((error) => debugLog("session", "Error closing cancelled MCP startup:", error));
       void proc?.abort().catch((error) => debugLog("session", "Error aborting cancelled Antigravity CLI startup:", error));
@@ -165,7 +165,7 @@ export async function prepareCliRuntime(
       await dependencies.installPlugin(pluginDir);
       checkPreparation();
       const errorState = errorStateFor(liveSession, conversationId);
-      proc = new CliRuntimeSession({
+      proc = new RuntimeSession({
         agyPath: dependencies.executable,
         agentName,
         cwd,
@@ -173,8 +173,7 @@ export async function prepareCliRuntime(
         conversationId,
         effort,
         environment: standalone ? {} : buildCliProcessEnvironment(mcpServer.bridgeUri),
-      }, new Set(tools.map((tool) => tool.name)), errorState, compatibilityKey,
-      standalone ? (inputContext) => rawCliPrompt(inputContext) : undefined);
+      }, new Set(tools.map((tool) => tool.name)), errorState, compatibilityKey);
       const initEvent = await proc.start();
       checkPreparation();
       debugLog("register", "Antigravity CLI init conversation id:", initEvent.conversation_id);

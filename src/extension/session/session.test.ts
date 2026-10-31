@@ -59,7 +59,7 @@ describe("LiveSession", () => {
     const subscriptions: { handler: EventHandler; unsubscribeCalls: number }[] = [];
     const runtime: DriverSession = {
       driver: "cli", isRunning: true,
-      formatContextUpdate: () => "", submit: async () => {},
+      serializeContextUpdate: () => "", submit: async () => {},
       onRuntimeEvent: (handler: EventHandler) => {
         const subscription = { handler, unsubscribeCalls: 0 };
         subscriptions.push(subscription);
@@ -348,7 +348,7 @@ describe("LiveSession", () => {
       const session = new LiveSession("pi-session-a");
       const lifecycle: string[] = [];
       const mockProc: DriverSession = {
-        driver: "cli", formatContextUpdate: () => "", submit: async () => {},
+        driver: "cli", serializeContextUpdate: () => "", submit: async () => {},
         isRunning: true,
         onRuntimeEvent: () => () => { lifecycle.push("unsubscribe"); },
         abort: async () => { lifecycle.push("process"); },
@@ -528,7 +528,7 @@ for (const { driver, stage } of [
     const key = "a".repeat(64);
     const process: DriverSession = {
       driver, compatibilityKey: key, isRunning: true,
-      onRuntimeEvent: () => () => {}, formatContextUpdate: () => "",
+      onRuntimeEvent: () => () => {}, serializeContextUpdate: () => "",
       submit: async () => {}, abort: async () => {},
     };
     if (stage !== "initial") session.setSession(process, "settings", undefined, "conversation");

@@ -1,59 +1,69 @@
 import type { ContentBlock, SessionNotification } from "@agentclientprotocol/sdk";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import type { Context, Message, TextContent } from "@earendil-works/pi-ai";
-import type { DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
-import { AcpSession, type AcpSessionOptions } from "./session.ts";
+import type { Message } from "@earendil-works/pi-ai";
+import type { BridgeMessage, DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
+import { Session, type AcpSessionOptions } from "./session.ts";
 import { EventProcessor } from "./events.ts";
-import { AcpMcpPermissions } from "./permissions.ts";
+import { McpPermissions } from "./permissions.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { fingerprintAcpSystemPrompt } from "./instructions.ts";
-import { formatContextBlocks, formatContextUpdate } from "../../provider/context-prompt.ts";
+import { extractImagesFromText, serializeContextUpdate } from "../../provider/context-prompt.ts";
 import { expandHome } from "../../shared/paths.ts";
-import { AcpArtifactReader } from "./artifact-reader.ts";
+import { ArtifactReader } from "./artifact-reader.ts";
 import { observeAcpImage } from "./image-observer.ts";
 
-/** ACP delivers current system instructions separately, not as historical user content. */
-export function acpContext(messages: readonly Message[], isReused = false): ContentBlock[] {
-  return formatContextBlocks({ messages: messages.filter((message) => message.role !== "system") }, isReused, 0);
+export function serializeAcpContent(messages: readonly BridgeMessage[]): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+
+  for (const message of messages) {
+    if (message.role === "system") continue;
+
+    if (typeof message.content === "string") {
+      if (message.content) {
+        blocks.push({ type: "text", text: message.content });
+      }
+      continue;
+    }
+
+    for (const part of message.content) {
+      if (part.type === "text") {
+        if (part.text) {
+          for (const extracted of extractImagesFromText(part.text)) {
+            blocks.push(typeof extracted === "string" ? { type: "text", text: extracted } : extracted);
+          }
+        }
+      } else if (part.type === "image") {
+        blocks.push(part);
+      }
+    }
+  }
+
+  return blocks;
 }
 
-export function rawAcpContent(messages: readonly Message[]): ContentBlock[] {
-  return messages.filter((message) => message.role !== "system").flatMap((message): ContentBlock[] => {
-    if (typeof message.content === "string") return [{ type: "text", text: message.content }];
-    return message.content.flatMap((block): ContentBlock[] => {
-      if (block.type === "text") return [{ type: "text", text: block.text }];
-      if (block.type === "image") return [{ type: "image", data: block.data, mimeType: block.mimeType }];
-      return [];
-    });
-  });
-}
-
-export class AcpRuntimeSession implements DriverSession {
+export class RuntimeSession implements DriverSession {
   readonly driver = "acp" as const;
-  readonly session: AcpSession;
+  readonly session: Session;
   readonly compatibilityKey: string | undefined;
   private eventProcessor: EventProcessor | undefined;
-  private permissions: AcpMcpPermissions | undefined;
+  private permissions: McpPermissions | undefined;
   private readonly allowedToolNames: ReadonlySet<string>;
   private listeners = new Set<(event: RuntimeEvent) => void>();
   private submitting = false;
   private completion: Promise<void> | undefined;
   private failure: Promise<void> | undefined;
   private userPrompt = "";
-  private readonly reader: AcpArtifactReader;
+  private readonly reader: ArtifactReader;
   readonly options: Omit<AcpSessionOptions, "onUpdate" | "onRead">;
-  private readonly formatPrompt: (context: Context, reconstruct: boolean, synced: number) => ContentBlock[];
   constructor(
     options: Omit<AcpSessionOptions, "onUpdate" | "onRead">,
     allowedToolNames: ReadonlySet<string> = new Set(),
-    formatPrompt?: (context: Context, reconstruct: boolean, synced: number) => ContentBlock[],
   ) {
     this.options = options;
-    this.formatPrompt = formatPrompt ?? ((context, reconstruct, synced) => acpContext(context.messages.slice(reconstruct ? 0 : synced), !reconstruct));
     this.compatibilityKey = options.systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
     this.allowedToolNames = allowedToolNames;
-    this.reader = new AcpArtifactReader({
+    this.reader = new ArtifactReader({
       home: resolve(expandHome(process.env.GEMINI_HOME ?? `${homedir()}/.gemini`)),
       sessionId: () => this.session.id,
       allowedToolNames,
@@ -64,7 +74,7 @@ export class AcpRuntimeSession implements DriverSession {
         image, userPrompt: this.userPrompt, signal,
       }),
     });
-    this.session = new AcpSession({ ...options,
+    this.session = new Session({ ...options,
       onRead: (request, signal) => this.reader.read(request, signal),
       onPermission: (request) => this.permissions?.reply(request) ?? { outcome: { outcome: "cancelled" } },
       onClose: (error) => {
@@ -84,7 +94,7 @@ export class AcpRuntimeSession implements DriverSession {
   async prepare(signal?: AbortSignal): Promise<void> {
     await this.session.prepare(signal);
     this.eventProcessor = new EventProcessor(this.session.id, this.allowedToolNames);
-    this.permissions = new AcpMcpPermissions(this.session.id, this.allowedToolNames);
+    this.permissions = new McpPermissions(this.session.id, this.allowedToolNames);
   }
   private fail(error: unknown): Promise<void> {
     // Claim failure ownership before cleanup can synchronously trigger onClose.
@@ -112,15 +122,15 @@ export class AcpRuntimeSession implements DriverSession {
     this.listeners.add(handler);
     return () => { this.listeners.delete(handler); };
   }
-  formatContextUpdate(messages: readonly Message[]): string {
-    return formatContextUpdate(messages.filter((message) => message.role !== "system"), "pending_tool_continuation");
+  serializeContextUpdate(messages: readonly Message[]): string {
+    return serializeContextUpdate(messages.filter((message) => message.role !== "system"), "pending_tool_continuation");
   }
   async submit(input: DriverSubmission): Promise<void> {
     if (this.submitting || this.completion || this.session.hasActivePrompt) throw new Error("ACP prompt already active");
     if (!this.isRunning || this.failure) throw new Error("ACP session is not running");
     this.submitting = true;
     try {
-      const content = this.formatPrompt(input.context, input.reconstructContext, input.syncedMessageCount);
+      const content = serializeAcpContent(input.messages);
       if (content.length === 0) content.push({ type: "text", text: "Continue from the current conversation state without repeating completed work." });
       let payload: unknown = { sessionId: this.session.id, prompt: content };
       if (input.options?.onPayload) {
@@ -139,9 +149,16 @@ export class AcpRuntimeSession implements DriverSession {
         throw new Error("ACP payload supports text and image content blocks");
       });
       if (!input.beforeInput()) return;
-      const user = [...input.context.messages].reverse().find((message) => message.role === "user");
-      this.userPrompt = typeof user?.content === "string" ? user.content :
-        user?.content.filter((part) => part.type === "text").map((part) => part.text).join("\n") ?? "";
+      const userMessage = [...input.messages].reverse().find((m) => m.role === "user");
+      let userPrompt = "";
+      if (userMessage) {
+        if (typeof userMessage.content === "string") {
+          userPrompt = userMessage.content;
+        } else {
+          userPrompt = userMessage.content.filter((p) => p.type === "text").map((p) => p.text).join("\n");
+        }
+      }
+      this.userPrompt = userPrompt;
       this.reader.beginPrompt();
       this.emit({ type: "start" });
       this.emit({ type: "session-reference", reference: this.session.id });

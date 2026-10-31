@@ -7,7 +7,7 @@ import { BridgeIPC } from "../bridge/ipc.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
 import type { DriverSession, PrepareDriverInput, RuntimeEvent } from "../drivers/types.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamProvider } from "./provider.ts";
 
 test("turn persists its captured session version rather than a later driver selection", async (t) => {
   const bridge = new Bridge({ getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI);
@@ -22,7 +22,7 @@ test("turn persists its captured session version rather than a later driver sele
   const proc: DriverSession = {
     driver: "acp", isRunning: true, compatibilityKey: "c".repeat(64),
     onRuntimeEvent: (handler) => { emit = handler; return () => {}; },
-    formatContextUpdate: () => "",
+    serializeContextUpdate: () => "",
     submit: async ({ beforeInput }) => {
       assert.equal(beforeInput(), true);
       emit({ type: "start" });
@@ -38,7 +38,7 @@ test("turn persists its captured session version rather than a later driver sele
   });
   const context: Context = { tools: [], messages: [{ role: "user", content: "question", timestamp: 1 }] };
   const model = parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)")[0]!;
-  const stream = streamAgyProvider(model, context, { sessionId }, bridge);
+  const stream = streamProvider(model, context, { sessionId }, bridge);
   const collecting = (async () => {
     const events: AssistantMessageEvent[] = [];
     for await (const event of stream) events.push(event);
