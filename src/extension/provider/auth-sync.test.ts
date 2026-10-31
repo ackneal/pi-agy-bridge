@@ -15,7 +15,15 @@ const unrelated = { type: "api_key", key: "unrelated" };
 
 async function fixture(t: TestContext, original?: Credential) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-auth-sync-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const refresh = t.mock.method(ModelRuntime.prototype, "refresh");
+  t.after(async () => {
+    // Provider registration starts a refresh that can outlive synchronization.
+    const results = await Promise.allSettled(refresh.mock.calls.map((call) => call.result));
+    await rm(directory, { recursive: true, force: true });
+    for (const result of results) {
+      if (result.status === "rejected") throw result.reason;
+    }
+  });
   const authPath = path.join(directory, "auth.json");
   await writeFile(authPath, JSON.stringify({ ...(original ? { agy: original } : {}), unrelated }));
   const authentication = new AgyAuthentication({

@@ -1,57 +1,176 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test, { describe } from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
-import { LiveSession } from "../../session/session.ts";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { BridgeIPC } from "../../bridge/ipc.ts";
+import { LiveSession, PiContextAdapter } from "../../session/session.ts";
+import { RuntimeSessionStore, RuntimeSessionSync } from "../../session/state.ts";
+import { AgyRuntime } from "../../runtime/process.ts";
+import { Driver } from "./driver.ts";
+import { RuntimeSession } from "./runtime.ts";
+import { SessionMode } from "../types.ts";
+import { prepareSystemMessages } from "../../provider/context-prompt.ts";
 import { prepareRuntime, resolveModelAndEffort } from "./session.ts";
 
-for (const stage of ["before lookup", "after lookup"] as const) {
-  for (const reason of ["abort", "supersede"] as const) {
-    test(`preparation rejects ${reason} ${stage} before sync or installation`, async () => {
-      const session = new LiveSession("cli-preparation");
-      const preparationId = session.beginPreparation();
-      const controller = new AbortController();
-      const cancellation = new Error("test cancellation");
-      const calls: string[] = [];
-      const invalidate = () => {
-        if (reason === "abort") controller.abort(cancellation);
-        else session.beginPreparation();
-      };
-      if (stage === "before lookup") invalidate();
+describe("prepareRuntime cancellation and lifecycle", () => {
+  for (const stage of ["before lookup", "after lookup"] as const) {
+    for (const reason of ["abort", "supersede"] as const) {
+      test(`preparation rejects ${reason} ${stage} before sync or installation`, async () => {
+        const session = new LiveSession("cli-preparation");
+        const preparationId = session.beginPreparation();
+        const controller = new AbortController();
+        const cancellation = new Error("test cancellation");
+        const calls: string[] = [];
+        const invalidate = () => {
+          if (reason === "abort") controller.abort(cancellation);
+          else session.beginPreparation();
+        };
+        if (stage === "before lookup") invalidate();
 
-      try {
-        await assert.rejects(prepareRuntime(
-          { id: "test-model" } as Model<any>,
-          { messages: [] },
-          [],
-          { signal: controller.signal },
-          process.cwd(),
-          {
-            store: {
-              get: async () => {
-                calls.push("get");
-                invalidate();
-                return undefined;
+        try {
+          await assert.rejects(prepareRuntime(
+            { id: "test-model" } as Model<any>,
+            { messages: [] },
+            [],
+            { signal: controller.signal },
+            process.cwd(),
+            {
+              store: {
+                get: async () => {
+                  calls.push("get");
+                  invalidate();
+                  return undefined;
+                },
+                delete: async () => { calls.push("delete"); },
               },
-              delete: async () => { calls.push("delete"); },
+              sync: {
+                decide: () => { throw new Error("sync must not run"); },
+              },
+              sessionVersion: "cli:v1",
+              installPlugin: async () => { calls.push("install"); },
             },
-            sync: {
-              decide: () => { throw new Error("sync must not run"); },
-            },
-            sessionVersion: "cli:v1",
-            installPlugin: async () => { calls.push("install"); },
-          },
-          session,
-          resolveModelAndEffort("test-model"),
-          preparationId,
-        ), reason === "abort" ? cancellation : {
-          message: "Antigravity CLI runtime preparation was superseded",
-        });
-        assert.deepEqual(calls, stage === "before lookup" ? [] : ["get"]);
-        assert.equal(session.activeProcess, null);
-        assert.equal(session.activeMcpServer, null);
-      } finally {
-        await session.dispose();
+            session,
+            resolveModelAndEffort("test-model"),
+            preparationId,
+          ), reason === "abort" ? cancellation : {
+            message: "Antigravity CLI runtime preparation was superseded",
+          });
+          assert.deepEqual(calls, stage === "before lookup" ? [] : ["get"]);
+          assert.equal(session.activeProcess, null);
+          assert.equal(session.activeMcpServer, null);
+        } finally {
+          await session.dispose();
+        }
+      });
+    }
+  }
+});
+
+describe("prepareRuntime workspace and session reuse", () => {
+  for (const row of [
+    { name: "default dedicated cwd", persisted: false, changed: false, legacy: false, action: "continue", home: "default" },
+    { name: "home-expanded dedicated cwd", persisted: false, changed: false, legacy: false, action: "continue", home: "tilde" },
+    { name: "same-runtime-cwd live reuse", persisted: false, changed: false, legacy: false, action: "continue" },
+    { name: "changed-runtime-cwd live rebuild", persisted: false, changed: true, legacy: false, action: "rebuild" },
+    { name: "changed-runtime-cwd checkpoint rebuild", persisted: true, changed: true, legacy: false, action: "rebuild" },
+    { name: "legacy checkpoint rebuild", persisted: true, changed: false, legacy: true, action: "rebuild" },
+    { name: "matching-runtime-cwd checkpoint resume", persisted: true, changed: false, legacy: false, action: "resume" },
+  ] as const) {
+    test(row.name, async (t) => {
+      const directory = await mkdtemp(path.join(os.tmpdir(), "agy-cli-workspace-"));
+      const sessions: LiveSession[] = [];
+      t.mock.method(os, "homedir", () => directory);
+      const home = "home" in row ? row.home : "custom";
+      const geminiHome = path.join(directory, home === "default" ? ".gemini" : "gemini");
+      const previousHome = process.env.GEMINI_HOME;
+      t.after(() => {
+        if (previousHome === undefined) delete process.env.GEMINI_HOME;
+        else process.env.GEMINI_HOME = previousHome;
+      });
+      if (home === "default") delete process.env.GEMINI_HOME;
+      else process.env.GEMINI_HOME = home === "tilde" ? "~/gemini" : geminiHome;
+      t.after(async () => {
+        try {
+          await Promise.all(sessions.map((session) => session.dispose()));
+        } finally {
+          t.mock.restoreAll();
+          await rm(directory, { recursive: true, force: true });
+        }
+      });
+      const executable = path.join(directory, "agy");
+      await writeFile(executable, '#!/bin/sh\n[ "$1" = "--version" ] || exit 1\necho 1.2.14\n', { mode: 0o755 });
+      const driver = new Driver();
+      t.mock.method(driver, "detectExecutable", () => executable);
+      t.mock.method(driver, "installPlugin", async () => {});
+      t.mock.method(BridgeIPC.prototype, "start", async function (this: BridgeIPC) {
+        (this as unknown as { socketPath: string }).socketPath = path.join(directory, "bridge.sock");
+      });
+      const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
+      const abort = t.mock.method(AgyRuntime.prototype, "abort", async function (this: AgyRuntime) {
+        Object.defineProperty(this, "isRunning", { configurable: true, value: false });
+      });
+      const start = t.mock.method(AgyRuntime.prototype, "start", async function (this: AgyRuntime) {
+        Object.defineProperty(this, "isRunning", { configurable: true, value: true });
+        return { event: "init", conversation_id: this.options.conversationId ?? `new-${start.mock.callCount() + 1}` } as Awaited<ReturnType<AgyRuntime["start"]>>;
+      });
+      const adapter = new PiContextAdapter();
+      const id = adapter.bind(SessionManager.inMemory(directory));
+      const store = new RuntimeSessionStore(adapter);
+      const sync = new RuntimeSessionSync();
+      const original = new LiveSession(id);
+      sessions.push(original);
+      const model = { id: "test-model" } as Model<any>;
+      const context = { messages: [] };
+      const prepare = (session: LiveSession) => driver.prepareSession({
+        model, context, messages: prepareSystemMessages(context), tools: [], options: undefined,
+        session, store, sync, preparationId: session.beginPreparation(),
+        mode: SessionMode.Conversation,
+      });
+      const first = await prepare(original);
+      assert.ok(first.proc instanceof RuntimeSession);
+      assert.equal(first.proc.options.cwd, path.join(geminiHome, "antigravity-cli"));
+      assert.ok((await stat(first.proc.options.cwd!)).isDirectory());
+      assert.equal(first.reconstructContext, true);
+      sync.record(original, []);
+      let target = original;
+      if (row.persisted) {
+        await store.set(id, {
+          sessionId: original.conversationId!,
+          ...(!row.legacy ? { compatibilityKey: first.proc.compatibilityKey! } : {}),
+        }, [], driver.sessionVersion);
+        await original.dispose();
+        target = new LiveSession(id);
+        sessions.push(target);
       }
+      const startsBefore = start.mock.callCount();
+      const abortsBefore = abort.mock.callCount();
+      const closesBefore = close.mock.callCount();
+      const requestedHome = row.changed ? path.join(directory, "other", "..", "other-gemini") : geminiHome;
+      process.env.GEMINI_HOME = requestedHome;
+
+      const result = await prepare(target);
+
+      assert.equal(result.proc.options.cwd, path.resolve(requestedHome, "antigravity-cli"));
+      assert.equal(target.activeProcess, result.proc);
+      assert.equal(target.activeMcpServer, result.mcpServer);
+      assert.equal(target.compatibilityKey, result.proc.compatibilityKey);
+      assert.equal(result.reconstructContext, row.action === "rebuild");
+      assert.equal(start.mock.callCount() - startsBefore, row.action === "continue" ? 0 : 1);
+      if (row.action === "continue") {
+        assert.equal(result.proc, first.proc);
+        assert.equal(result.mcpServer, first.mcpServer);
+      } else {
+        assert.notEqual(result.proc, first.proc);
+        assert.notEqual(result.mcpServer, first.mcpServer);
+        assert.equal(result.proc.options.conversationId, row.action === "resume" ? "new-1" : undefined);
+        assert.equal(target.conversationId, row.action === "resume" ? "new-1" : "new-2");
+      }
+      assert.equal(abort.mock.callCount() - abortsBefore, !row.persisted && row.changed ? 1 : 0);
+      assert.equal(close.mock.callCount() - closesBefore, !row.persisted && row.changed ? 1 : 0);
+      if (!row.persisted && row.changed) assert.equal(first.proc.isRunning, false);
     });
   }
-}
+});

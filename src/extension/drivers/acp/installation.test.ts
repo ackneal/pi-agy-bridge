@@ -1,3 +1,4 @@
+import { prepareSystemMessages } from "../../provider/context-prompt.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -6,7 +7,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { test, type TestContext } from "node:test";
+import { test, describe, type TestContext } from "node:test";
+import type { Model } from "@earendil-works/pi-ai";
+import { Driver } from "./driver.ts";
+import { Connection } from "./connection.ts";
+import { LiveSession } from "../../session/session.ts";
+import { RuntimeSessionSync } from "../../session/state.ts";
+import { SessionMode, type PrepareDriverInput } from "../types.ts";
 import { writeZipFixture, type ZipFixtureEntry } from "./archive-fixture.ts";
 import { ensureInstallation } from "./installation.ts";
 import type { DriverInstallationProgress } from "../types.ts";
@@ -422,4 +429,198 @@ test("a killed installer leaves no published partial install and the next Pi pro
   const next = await launchFixture(f.home, release, archivePath);
   const recovered = await next.result;
   assert.equal(await fs.readFile(recovered.executable, "utf8"), contents[0]!.data);
+});
+
+describe("ACP download recovery", () => {
+  for (const scenario of ["interrupted body", "stalled headers", "cancelled download"] as const) {
+    test(`ACP download recovery: ${scenario}`, async (t) => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "acp-download-"));
+      t.after(() => fs.rm(home, { recursive: true, force: true }));
+      const archive = path.join(home, "fixture.zip");
+      await writeZipFixture(archive, [
+        { name: "agy_acp_server.par", data: "fixture", mode: 0o100755 },
+        { name: "localharness_external", data: "companion", mode: 0o100555 },
+      ]);
+      const bytes = await fs.readFile(archive);
+      const release = { ...resolveRelease(), sha256: createHash("sha256").update(bytes).digest("hex"), url: "https://fixture.invalid/agy-acp-server-1.4.3-linux-x86_64.zip" };
+      const root = path.join(await fs.realpath(home), "pi-agy-bridge", "acp");
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      const controller = new AbortController();
+      const events: DriverInstallationProgress[] = [];
+      const fetcher: typeof fetch = async (_url, options) => {
+        assert.equal(options?.redirect, "error");
+        entered();
+        if (scenario === "interrupted body") return new Response(new ReadableStream({ start(stream) {
+          stream.enqueue(bytes.subarray(0, 8));
+          stream.error(new Error("connection interrupted"));
+        } }));
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+        });
+      };
+      if (scenario === "stalled headers") t.mock.timers.enable({ apis: ["setTimeout"] });
+      const attempt = ensureInstallation({ agentHome: home, release, fetch: fetcher, signal: controller.signal, onProgress: (event) => events.push(event) });
+      const rejected = assert.rejects(attempt, scenario === "interrupted body" ? /connection interrupted/ : scenario === "stalled headers" ? /stalled for 60 seconds/ : /cancel download/);
+      await started;
+      if (scenario === "stalled headers") t.mock.timers.tick(60_000);
+      if (scenario === "cancelled download") controller.abort(new Error("cancel download"));
+      await rejected;
+      if (scenario === "stalled headers") t.mock.timers.reset();
+      assert.equal(events.at(-1)?.phase, scenario === "cancelled download" ? "cancelled" : "error");
+      assert.ok(!events.some((event) => event.phase === "extract"));
+      await assert.rejects(fs.access(path.join(root, distributionName(release))));
+      const next = await ensureInstallation({ agentHome: home, release, fetch: async () => new Response(bytes) });
+      assert.equal(await fs.readFile(next.executable, "utf8"), "fixture");
+    });
+  }
+});
+
+describe("ACP driver installation resolution integration", () => {
+  async function isolate(t: TestContext): Promise<string> {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "acp-resolution-"));
+    const variables = ["AGY_ACP_BIN", "PI_CODING_AGENT_DIR", "GEMINI_HOME"] as const;
+    const previous = variables.map((name) => process.env[name]);
+    delete process.env.AGY_ACP_BIN;
+    process.env.PI_CODING_AGENT_DIR = home;
+    process.env.GEMINI_HOME = home;
+    t.after(async () => {
+      for (const [index, name] of variables.entries()) {
+        if (previous[index] === undefined) delete process.env[name];
+        else process.env[name] = previous[index];
+      }
+      await fs.rm(home, { recursive: true, force: true });
+    });
+    return home;
+  }
+
+  function login(driver: Driver): Promise<void> {
+    return driver.authentication.login({
+      signal: new AbortController().signal, notify: () => {},
+      prompt: async () => { throw new Error("Unexpected authentication prompt"); },
+    }, () => {});
+  }
+
+  function preparation(signal: AbortSignal, checkpoint?: Error): PrepareDriverInput {
+    const session = new LiveSession("resolver-test");
+    return {
+      model: { id: "raw" } as Model<any>, context: { messages: [] }, messages: prepareSystemMessages({ messages: [] }), mode: SessionMode.Conversation, tools: [], options: { signal }, session,
+      preparationId: session.beginPreparation(), sync: new RuntimeSessionSync(),
+      store: { get: async () => { if (checkpoint) throw checkpoint; return undefined; }, delete: async () => {} },
+    };
+  }
+
+  for (const entry of ["login", "prepare"] as const) {
+    test(`ACP ${entry} resolves installation and progress before opening a connection`, async (t) => {
+      await isolate(t);
+      const signal = new AbortController().signal;
+      const failure = new Error("stop after resolver progress");
+      const event: DriverInstallationProgress = { phase: "download", message: "Downloading fixture", version: "1.4.3", platform: "test" };
+      const progress: DriverInstallationProgress[] = [];
+      const loginProgress: string[] = [];
+      let resolutions = 0;
+      const driver = new Driver(async (options) => {
+        resolutions++;
+        assert.equal(options?.signal, signal);
+        options?.onProgress?.(event);
+        throw failure;
+      });
+      driver.onInstallationProgress = (value) => progress.push(value);
+      const start = t.mock.method(Connection.prototype, "start", async () => { throw new Error("Unexpected ACP launch"); });
+      assert.equal(driver.detectExecutable(), undefined);
+      assert.equal(resolutions, 0);
+      const attempt = entry === "login" ? driver.authentication.login({ signal, notify: (value) => { if (value.type === "progress") loginProgress.push(value.message); },
+          prompt: async () => { throw new Error("Unexpected authentication prompt"); } }, () => {}) : driver.prepareSession(preparation(signal));
+      await assert.rejects(attempt, (error) => error === failure);
+      assert.equal(resolutions, 1);
+      assert.deepEqual(progress, [event]);
+      assert.deepEqual(loginProgress, entry === "login" ? [event.message] : []);
+      assert.equal(start.mock.callCount(), 0);
+    });
+  }
+
+  for (const entry of ["probe", "models"] as const) {
+    test(`ACP ${entry} resolves installation before opening a connection`, async (t) => {
+      await isolate(t);
+      let resolutions = 0;
+      const driver = new Driver(async () => { resolutions++; throw new Error("Unexpected installation"); });
+      const start = t.mock.method(Connection.prototype, "start", async () => { throw new Error("Unexpected ACP launch"); });
+      const operation = entry === "probe"
+        ? driver.authentication.probe(new AbortController().signal, () => {})
+        : driver.discoverModels(new AbortController().signal);
+      await assert.rejects(operation, /Unexpected installation/);
+      assert.equal(resolutions, 1);
+      assert.equal(start.mock.callCount(), 0);
+    });
+  }
+
+  for (const kind of ["missing", "directory", "non-executable"] as const) {
+    test(`invalid ${kind} AGY_ACP_BIN never triggers a managed download`, async (t) => {
+      const home = await isolate(t);
+      const override = path.join(home, "override");
+      if (kind === "directory") await fs.mkdir(override);
+      if (kind === "non-executable") await fs.writeFile(override, "not executable", { mode: 0o600 });
+      process.env.AGY_ACP_BIN = override;
+      let resolutions = 0;
+      const driver = new Driver(async () => { resolutions++; throw new Error("Unexpected managed download"); });
+      await assert.rejects(login(driver), /AGY_ACP_BIN is not an executable file/);
+      assert.equal(resolutions, 0);
+    });
+  }
+
+  test("explicit executable bypasses installation before opening a connection", async (t) => {
+    const home = await isolate(t);
+    process.env.AGY_ACP_BIN = path.join(home, "custom");
+    await fs.writeFile(process.env.AGY_ACP_BIN, "not a real ACP server", { mode: 0o700 });
+    let resolutions = 0;
+    const driver = new Driver(async () => { resolutions++; throw new Error("Unexpected managed download"); });
+    const stopped = new Error("Reached explicit ACP connection");
+    const start = t.mock.method(Connection.prototype, "start", async () => { throw stopped; });
+    await assert.rejects(login(driver), (error) => error === stopped);
+    assert.equal(resolutions, 0);
+    assert.equal(start.mock.callCount(), 1);
+  });
+
+  for (const kind of ["aborted", "superseded"] as const) {
+    test(`${kind} ACP preparation does not start installation`, async (t) => {
+      await isolate(t);
+      let resolutions = 0;
+      const driver = new Driver(async () => { resolutions++; throw new Error("Unexpected installation"); });
+      const controller = new AbortController();
+      const input = preparation(controller.signal, new Error("Unexpected checkpoint"));
+      if (kind === "aborted") controller.abort(new Error("cancel preparation"));
+      else input.session.beginPreparation();
+      await assert.rejects(driver.prepareSession(input), kind === "aborted" ? /cancel preparation/ : /superseded/);
+      assert.equal(resolutions, 0);
+    });
+  }
+
+  for (const stale of [false, true]) {
+    test(`managed cache passes integrity resolution with ${stale ? "a stale" : "a current"} status hint`, async (t) => {
+      const home = await isolate(t);
+      const release = resolveRelease();
+      const root = path.join(home, "pi-agy-bridge", "acp");
+      const directory = path.join(root, distributionName(release));
+      await fs.mkdir(directory, { recursive: true });
+      const data = "synthetic executable, never launched";
+      const files = [];
+      for (const name of ["agy_acp_server.par", "localharness_external"]) {
+        await fs.writeFile(path.join(directory, name), data, { mode: 0o700 });
+        files.push({ path: name, type: "file", mode: 0o700, size: Buffer.byteLength(data), sha256: createHash("sha256").update(data).digest("hex") });
+      }
+      await fs.writeFile(path.join(directory, ".pi-agy-installation.json"), JSON.stringify({ schema: 1, version: release.version, platform: release.platform, sha256: release.sha256, files }));
+      const failure = new Error("Managed integrity resolver invoked");
+      let resolutions = 0;
+      const driver = new Driver(async () => { resolutions++; throw failure; });
+      t.mock.method(driver, "detectExecutable", () => path.join(directory, release.executable));
+      assert.equal(driver.detectExecutable(), path.join(directory, release.executable));
+      assert.equal(resolutions, 0);
+      const start = t.mock.method(Connection.prototype, "start", async () => { throw new Error("Unexpected launch without integrity resolution"); });
+
+      await assert.rejects(login(driver), (error) => error === failure);
+
+      assert.equal(resolutions, 1);
+      assert.equal(start.mock.callCount(), 0);
+    });
+  }
 });

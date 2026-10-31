@@ -7,16 +7,20 @@ import test, { afterEach, beforeEach } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
+import type { DriverSession, DriverSubmission, RuntimeEvent } from "../drivers/types.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { buildCliProcessEnvironment } from "../discovery/plugin-install.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { RuntimeSession as CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";
-import { calculateSyncKey } from "../session/session.ts";
-import type { RuntimeSessionDecision } from "../session/state.ts";
+import { calculateSyncKey, LiveSession, PiContextAdapter } from "../session/session.ts";
+import { RuntimeSessionStore, RuntimeSessionSync, type RuntimeSessionDecision } from "../session/state.ts";
+import { Turn } from "./turn.ts";
 import type { AgyInput, AgyResultEvent } from "../shared/types.ts";
 import { serializeContextUpdate } from "./context-prompt.ts";
+import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge, streamProvider } from "./provider.ts";
+import { PiRuntimeOutput } from "./output.ts";
 
 let home: string;
 let previousHome: string | undefined;
@@ -875,3 +879,102 @@ for (const conversionException of [false, true]) {
     assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, "replacement-conversation");
   });
 }
+
+test("delayed submission failure terminates the next turn reusing the same runtime", { timeout: 5000 }, async (t) => {
+  const context = new PiContextAdapter();
+  const id = context.bind(SessionManager.inMemory(process.cwd()));
+  const session = new LiveSession(id);
+  const store = new RuntimeSessionStore(context);
+  const sync = new RuntimeSessionSync();
+  const mcpServer = new BridgeIPC([], session.id, session.resources);
+  const invalidate = t.mock.method(store, "delete", store.delete.bind(store));
+  const dispose = t.mock.method(session, "dispose", session.dispose.bind(session));
+  let handler: ((event: RuntimeEvent) => void) | undefined;
+  let rejectOld!: (error: Error) => void;
+  let settledOld = false;
+  const oldSubmission = new Promise<void>((_resolve, reject) => {
+    rejectOld = (err) => {
+      if (!settledOld) {
+        settledOld = true;
+        reject(err);
+      }
+    };
+  });
+  let finishNext!: () => void;
+  const nextSubmission = new Promise<void>((resolve) => { finishNext = resolve; });
+  let running = true;
+  const abort = t.mock.fn(async () => { running = false; });
+  let submissions = 0;
+  const proc: DriverSession = {
+    driver: "cli",
+    get isRunning() { return running; },
+    onRuntimeEvent: (next) => {
+      handler = next;
+      return () => { if (handler === next) handler = undefined; };
+    },
+    serializeContextUpdate: () => "",
+    submit: async (input: DriverSubmission) => {
+      assert.equal(input.beforeInput(), true);
+      submissions++;
+      if (submissions === 1) {
+        handler!({ type: "complete", reason: "stop", resumable: true });
+        await oldSubmission;
+      } else {
+        await nextSubmission;
+      }
+    },
+    abort,
+  };
+  session.setSession(proc, "settings", mcpServer, "native-conversation");
+  const adapters: PiRuntimeOutput[] = [];
+  const sending: Promise<void>[] = [];
+  t.after(async () => {
+    if (!settledOld) rejectOld(new Error("test cleanup"));
+    finishNext();
+    for (const adapter of adapters) {
+      if (!adapter.isCompleted()) adapter.handleTermination("aborted", "test cleanup");
+    }
+    await Promise.all(sending);
+    await session.dispose();
+  });
+  const model = parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)")[0]!;
+  const beginTurn = (messages: Context["messages"]) => {
+    const preparationId = session.beginPreparation();
+    const adapter = new PiRuntimeOutput({ model: model.id, provider: "agy" });
+    adapters.push(adapter);
+    const turn = new Turn({
+      session, adapter, context: { messages }, sync, store, preparationId,
+      signal: undefined, sessionVersion: "cli:v1",
+    });
+    turn.attach({ proc, mcpServer });
+    const submitted = turn.send({ model, options: undefined,
+      messages: [{ role: "user", content: "test" }] }).catch((error) => turn.fail(error));
+    sending.push(submitted);
+    return { adapter, submitted };
+  };
+  const old = beginTurn([]);
+  const completed = await old.adapter.stream.result();
+  assert.equal(completed.stopReason, "stop");
+  const next = beginTurn([completed, { role: "user", content: "next request", timestamp: 1 }]);
+  assert.equal(submissions, 2);
+  assert.equal(session.activeProcess, proc);
+  assert.equal(next.adapter.isCompleted(), false);
+  const failure = new Error("old submission failed after runtime handoff");
+
+  rejectOld(failure);
+  await old.submitted;
+
+  assert.equal(next.adapter.isCompleted(), true, "current output must terminate before its runtime is detached");
+  const result = await next.adapter.stream.result();
+  assert.equal(result.stopReason, "error");
+  assert.equal(result.errorMessage, failure.message);
+  assert.equal(completed.stopReason, "stop");
+  assert.equal(session.activeProcess, null);
+  assert.equal(session.activeMcpServer, null);
+  assert.equal(handler, undefined);
+  assert.equal(invalidate.mock.callCount(), 1);
+  assert.equal(dispose.mock.callCount(), 1);
+  await dispose.mock.calls[0]!.result;
+  assert.equal(abort.mock.callCount(), 1);
+  assert.equal(await store.get(id, "cli:v1"), undefined);
+});
