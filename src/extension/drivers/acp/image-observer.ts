@@ -45,17 +45,18 @@ export async function observeImage(options: ImageObserverOptions): Promise<strin
         return;
       }
       if (update.sessionUpdate !== "agent_message_chunk" || update.content.type !== "text") return;
-      const chunkBytes = Buffer.byteLength(update.content.text, "utf8");
-      if (bytes + chunkBytes > MAX_OBSERVER_BYTES) {
-        const remaining = Math.max(0, MAX_OBSERVER_BYTES - bytes);
+      const chunk = Buffer.from(update.content.text, "utf8");
+      if (bytes + chunk.length > MAX_OBSERVER_BYTES) {
+        let remaining = Math.max(0, MAX_OBSERVER_BYTES - bytes);
+        while (remaining > 0 && (chunk[remaining]! & 0xc0) === 0x80) remaining--;
         if (remaining > 0) {
-          text += Buffer.from(update.content.text, "utf8").subarray(0, remaining).toString("utf8");
+          text += chunk.subarray(0, remaining).toString("utf8");
         }
         truncated = true;
         lifetime.abort(new Error("ACP image observer output exceeds 64KiB"));
         return;
       }
-      bytes += chunkBytes;
+      bytes += chunk.length;
       text += update.content.text;
     },
   });

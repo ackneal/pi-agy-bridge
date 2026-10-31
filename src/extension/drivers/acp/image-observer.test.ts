@@ -58,7 +58,7 @@ for (const scenario of rows) {
           toolCallId: "unexpected", title: "run_command", kind: "execute", status: "in_progress",
         } });
       }
-      for (const text of scenario === "empty" ? [" "] : scenario === "overflow" ? ["é".repeat(32768), "x"] : scenario === "exact-limit" ? ["é".repeat(32768)] : ["Description. ", "OCR and answer."]) {
+      for (const text of scenario === "empty" ? [" "] : scenario === "overflow" ? ["é".repeat(32767) + "a", "中x"] : scenario === "exact-limit" ? ["é".repeat(32768)] : ["Description. ", "OCR and answer."]) {
         await boundary.onUpdate?.({ sessionId: "observer", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
       }
       return { stopReason: scenario === "stop" ? "max_tokens" : "end_turn" };
@@ -83,7 +83,7 @@ for (const scenario of rows) {
     if (errors[scenario]) await assert.rejects(result, errors[scenario]);
     else {
       const expected = scenario === "exact-limit" ? "é".repeat(32768) :
-        scenario === "overflow" ? `${"é".repeat(32768)}\n\n[Observation truncated at 64KiB limit]` :
+        scenario === "overflow" ? `${"é".repeat(32767)}a\n\n[Observation truncated at 64KiB limit]` :
         scenario === "timeout-partial" ? `Partial OCR\n\n[Observation interrupted: timed out after ${OBSERVER_TIMEOUT_MS}ms]` :
         "Description. OCR and answer.";
       assert.equal(await result, expected);
