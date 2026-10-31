@@ -1,13 +1,13 @@
 import { prepareBridgeMessages } from "../../provider/context-prompt.ts";
-import { fingerprintAcpSystemPrompt } from "./instructions.ts";
+import { fingerprintSystemPrompt } from "./instructions.ts";
 import type { BridgeMessage } from "../types.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { serializeAcpContent, RuntimeSession } from "./runtime.ts";
+import { serializeContent, RuntimeSession } from "./runtime.ts";
 
 test("ACP context preserves images and does not filter artifact text", () => {
-  const blocks = serializeAcpContent(prepareBridgeMessages({ messages: [{ role: "user", content: [{ type: "text", text: "artifact /tmp/example" }, { type: "image", data: "YWJj", mimeType: "image/png" }], timestamp: 0 }] }, true));
+  const blocks = serializeContent(prepareBridgeMessages({ messages: [{ role: "user", content: [{ type: "text", text: "artifact /tmp/example" }, { type: "image", data: "YWJj", mimeType: "image/png" }], timestamp: 0 }] }, true));
   assert.deepEqual(blocks.filter((block) => block.type === "image"), [{ type: "image", data: "YWJj", mimeType: "image/png" }]);
   const text = blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n\n");
   assert.ok(text.includes("artifact /tmp/example"));
@@ -21,7 +21,7 @@ for (const row of [
   ] }], expected: [{ type: "text", text: " \n\t" }, { type: "image", data: "YWJj", mimeType: "image/png" }, { type: "text", text: "\n " }] },
 ] satisfies { name: string; messages: BridgeMessage[]; expected: unknown[] }[]) {
   test(`ACP serializer preserves whitespace: ${row.name}`, () => {
-    assert.deepEqual(serializeAcpContent(row.messages), row.expected);
+    assert.deepEqual(serializeContent(row.messages), row.expected);
   });
 }
 
@@ -35,7 +35,7 @@ test("ACP runtime exposes native identity and starts stopped", async () => {
 for (const systemPrompt of [undefined, "", "Pi instructions"]) {
   test(`ACP runtime compatibility identity: ${JSON.stringify(systemPrompt)}`, async () => {
     const runtime = new RuntimeSession({ executable: "unused", cwd: process.cwd(), model: "raw-model-id", ...(systemPrompt === undefined ? {} : { systemPrompt }), mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
-    assert.equal(runtime.compatibilityKey, systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([process.cwd(), systemPrompt])));
+    assert.equal(runtime.compatibilityKey, systemPrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([process.cwd(), systemPrompt])));
     await runtime.abort();
   });
 }
@@ -43,10 +43,10 @@ for (const systemPrompt of [undefined, "", "Pi instructions"]) {
 test("ACP context omits all system updates but preserves history", () => {
   const user = { role: "user" as const, content: "historical input", timestamp: 0 };
   const result = { role: "toolResult" as const, toolCallId: "call", toolName: "read", content: [{ type: "text" as const, text: "untrusted result" }], isError: false, timestamp: 1 };
-  assert.deepEqual(serializeAcpContent(prepareBridgeMessages({ messages: [
+  assert.deepEqual(serializeContent(prepareBridgeMessages({ messages: [
     { role: "system", content: "base", timestamp: 0 }, user,
     { role: "system", content: "update", timestamp: 1 }, result,
-  ] }, true)), serializeAcpContent(prepareBridgeMessages({ messages: [user, result] }, true)));
+  ] }, true)), serializeContent(prepareBridgeMessages({ messages: [user, result] }, true)));
 });
 
 test("ACP persisted identity distinguishes workspaces with identical instructions", async (t) => {

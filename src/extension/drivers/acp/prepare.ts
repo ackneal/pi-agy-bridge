@@ -4,17 +4,17 @@ import { BridgeIPC } from "../../bridge/ipc.ts";
 import { createMcpLaunchDescriptor } from "../../bridge/mcp-launch.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/state.ts";
-import type { AcpConnectionOptions } from "./connection.ts";
-import { resolveAcpEffort } from "./options.ts";
+import type { ConnectionOptions } from "./connection.ts";
+import { resolveEffort } from "./options.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { RuntimeSession } from "./runtime.ts";
-import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructions.ts";
+import { composeSystemPrompt, fingerprintSystemPrompt } from "./instructions.ts";
 
 class PreparationCleanupError extends AggregateError {}
 
-export async function prepareAcpRuntime(
+export async function prepareRuntime(
   model: Model<any>, context: Context, messages: readonly BridgeMessage[], tools: readonly Tool[], options: SimpleStreamOptions | undefined,
-  connection: { cwd: string; resolve: () => Promise<AcpConnectionOptions> },
+  connection: { cwd: string; resolve: () => Promise<ConnectionOptions> },
   dependencies: { store: Pick<RuntimeSessionStore, "get" | "delete">; sync: Pick<RuntimeSessionSync, "decide">; sessionVersion: string },
   liveSession: LiveSession, preparationId: symbol,
   standalone = false,
@@ -24,13 +24,13 @@ export async function prepareAcpRuntime(
     if (!liveSession.ownsPreparation(preparationId)) throw new Error("ACP preparation superseded");
   };
   check();
-  const requested = resolveAcpEffort(model, options);
+  const requested = resolveEffort(model, options);
   const systemPrompt = standalone
     ? messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n") || undefined
-    : composeAcpSystemPrompt(messages);
-  const compatibilityKey = fingerprintAcpSystemPrompt(JSON.stringify([connection.cwd, systemPrompt]));
+    : composeSystemPrompt(messages);
+  const compatibilityKey = fingerprintSystemPrompt(JSON.stringify([connection.cwd, systemPrompt]));
   const syncKey = calculateSyncKey(systemPrompt, tools.map((tool) => JSON.stringify(tool)), model.id, requested, "acp");
-  let resolvedConnection: AcpConnectionOptions | undefined;
+  let resolvedConnection: ConnectionOptions | undefined;
   if (liveSession.driverId !== undefined && liveSession.driverId !== "acp") {
     resolvedConnection = await connection.resolve();
     check();

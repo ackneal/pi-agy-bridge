@@ -1,28 +1,28 @@
 import * as acp from "@agentclientprotocol/sdk";
 import type { McpLaunchDescriptor } from "../../bridge/mcp-launch.ts";
-import { Connection, type AcpConnectionOptions } from "./connection.ts";
+import { Connection, type ConnectionOptions } from "./connection.ts";
 
-export interface AcpSessionOptions extends Omit<AcpConnectionOptions, "onUpdate" | "onPermission"> {
+export interface SessionOptions extends Omit<ConnectionOptions, "onUpdate" | "onPermission"> {
   mcp?: McpLaunchDescriptor;
   model: string;
   effort?: string;
   sessionId?: string;
   systemPrompt?: string;
   onUpdate: (notification: acp.SessionNotification) => void | Promise<void>;
-  onPermission?: AcpConnectionOptions["onPermission"];
+  onPermission?: ConnectionOptions["onPermission"];
 }
 
 /** Owns one native prompt across any number of Pi tool handoffs. */
 export class Session {
   private readonly connection: Connection;
-  private readonly options: AcpSessionOptions;
+  private readonly options: SessionOptions;
   private sessionId: string | undefined;
   private preparing = true;
   private preparation: Promise<void> | undefined;
   private activePrompt: Promise<acp.PromptResponse> | undefined;
   private configOptions: acp.SessionConfigOption[] = [];
 
-  constructor(options: AcpSessionOptions) {
+  constructor(options: SessionOptions) {
     this.options = options;
     const onRead = options.onRead;
     this.connection = new Connection({

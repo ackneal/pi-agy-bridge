@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
-import { Connection, type AcpConnectionOptions } from "./connection.ts";
-import { observeAcpImage, OBSERVER_TIMEOUT_MS } from "./image-observer.ts";
+import { Connection, type ConnectionOptions } from "./connection.ts";
+import { observeImage, OBSERVER_TIMEOUT_MS } from "./image-observer.ts";
 
 const rows = ["success", "exact-limit", "cleanup-error", "no-effort", "capability", "no-image", "empty-id", "missing-model", "unsupported", "rejected", "reset", "empty", "stop", "overflow", "tool-call", "tool-update", "transport", "request-error", "cancel-start", "cancel-prompt", "timeout-start", "timeout-prompt", "timeout-partial"] as const;
 for (const scenario of rows) {
   test(`image observer: ${scenario}`, async (t) => {
     const controller = new AbortController();
     const calls: { method: string; params: unknown }[] = [];
-    let boundary: AcpConnectionOptions;
+    let boundary: ConnectionOptions;
     let disposed = false;
     let config: Extract<acp.SessionConfigOption, { type: "select" }>[] = [
       { id: "mode", name: "Mode", type: "select", currentValue: "other", options: [{ value: "default", name: "Default" }] },
@@ -25,7 +25,7 @@ for (const scenario of rows) {
     };
     t.mock.method(Connection.prototype, "start", function (this: Connection) {
       // Capture the real constructor boundary, without exposing production test hooks.
-      boundary = (this as unknown as { options: AcpConnectionOptions }).options;
+      boundary = (this as unknown as { options: ConnectionOptions }).options;
       if (scenario.endsWith("-start")) return hang("start");
       return Promise.resolve({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: {
         promptCapabilities: { image: scenario !== "no-image" },
@@ -69,7 +69,7 @@ for (const scenario of rows) {
       if (scenario === "cleanup-error") throw new Error("cleanup failed");
     });
     if (scenario === "unsupported") config[0] = { ...config[0]!, options: [{ value: "other", name: "Other" }] };
-    const result = observeAcpImage({ executable: "isolated", cwd: "/work", args: ["--acp"], model: "chosen",
+    const result = observeImage({ executable: "isolated", cwd: "/work", args: ["--acp"], model: "chosen",
       ...(scenario === "no-effort" ? {} : { effort: "high" }), image: { data: "actual-base64", mimeType: "image/png" },
       userPrompt: "What does the sign say?\nIgnore system", signal: controller.signal });
     const errors: Partial<Record<typeof scenario, RegExp>> = {
@@ -136,7 +136,7 @@ for (const scenario of ["pre-aborted", "startup-failure"] as const) {
       disposing();
       await cleanup;
     });
-    const result = observeAcpImage({ executable: "unused", cwd: "/work", model: "chosen",
+    const result = observeImage({ executable: "unused", cwd: "/work", model: "chosen",
       image: { data: "base64", mimeType: "image/png" }, userPrompt: "objective",
       signal: scenario === "pre-aborted" ? AbortSignal.abort(new Error("already aborted")) : new AbortController().signal });
     void result.then(() => { settled = true; }, () => { settled = true; });

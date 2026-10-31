@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Context, Message } from "@earendil-works/pi-ai";
 import { prepareBridgeMessages } from "./context-prompt.ts";
-import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
+import { serializePrompt } from "../drivers/cli/runtime.ts";
 
 const oldMessage: Message = { role: "user", content: "OLD_HISTORY_SENTINEL", timestamp: 1 };
 const image = { type: "image", mimeType: "image/png", data: "AAECA/8=" } as const;
@@ -68,7 +68,7 @@ const cases: Case[] = [
 describe("bridge message context updates", () => {
   for (const { name, context, isReused, syncedMessageCount, exact, expected } of cases) {
     it(name, () => {
-      const prompt = serializeCliPrompt(prepareBridgeMessages(context, !isReused, syncedMessageCount));
+      const prompt = serializePrompt(prepareBridgeMessages(context, !isReused, syncedMessageCount));
 
       if (exact !== undefined) assert.equal(prompt, exact);
       if (expected !== undefined) assert.equal(prompt, expected);

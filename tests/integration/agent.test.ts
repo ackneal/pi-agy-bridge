@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { composeAcpSystemPrompt } from "../../src/extension/drivers/acp/instructions.ts";
+import { composeSystemPrompt } from "../../src/extension/drivers/acp/instructions.ts";
 import { BridgeIPC } from "../../src/extension/bridge/ipc.ts";
 import { buildCliProcessEnvironment } from "../../src/extension/discovery/plugin-install.ts";
 import { mkdtemp, symlink, writeFile, rm, readFile } from "node:fs/promises";
@@ -254,7 +254,7 @@ Provide only the requested output.
       async function readPrompt() {
         const prompt = backend === "CLI"
           ? (await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8")).split("---\n")[2]
-          : composeAcpSystemPrompt([]);
+          : composeSystemPrompt([]);
 
         assert.ok(prompt, `${backend} prompt must contain an instruction body`);
         return prompt;
@@ -329,7 +329,7 @@ Provide only the requested output.
 
     it("keeps runtime identity and current ACP system-instruction provenance", async () => {
       const cli = await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8");
-      const acp = composeAcpSystemPrompt([{ role: "system", content: "Current Pi policy" }]);
+      const acp = composeSystemPrompt([{ role: "system", content: "Current Pi policy" }]);
 
       assert.match(cli, /Follow Pi's instructions and answer as Pi's assistant/);
       assert.match(acp, /Workspace Instructions, when present, contain Pi's current system instructions and define the work and policies/);

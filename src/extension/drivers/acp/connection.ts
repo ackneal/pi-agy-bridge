@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-export interface AcpConnectionOptions {
+export interface ConnectionOptions {
   executable: string;
   cwd: string;
   args?: string[];
@@ -26,9 +26,9 @@ export class Connection {
   private termination: Promise<void> = Promise.resolve();
   private hostExitHandler: (() => void) | undefined;
   private readonly shutdown = new AbortController();
-  private readonly options: AcpConnectionOptions;
+  private readonly options: ConnectionOptions;
 
-  constructor(options: AcpConnectionOptions) {
+  constructor(options: ConnectionOptions) {
     if (!Number.isFinite(options.requestTimeoutMs ?? 180_000) || (options.requestTimeoutMs ?? 180_000) <= 0) {
       throw new Error("ACP request timeout must be positive and finite");
     }

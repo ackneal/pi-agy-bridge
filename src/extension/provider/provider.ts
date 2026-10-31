@@ -30,7 +30,7 @@ import { AcpInstallationProgress } from "./installation-progress.ts";
 import { ProgressStatus } from "./progress.ts";
 import { prepareBridgeMessages, prepareSystemMessages } from "./context-prompt.ts";
 import { SessionMode, type ContentPart } from "../drivers/types.ts";
-import { resolveAcpRelease } from "../drivers/acp/release.ts";
+import { resolveRelease } from "../drivers/acp/release.ts";
 
 export function streamProvider(
   model: Model<any>,
@@ -379,7 +379,7 @@ export class Bridge {
           if (!acpPath) {
             if (process.env.AGY_ACP_BIN?.trim()) acpStatus = "✗ Invalid AGY_ACP_BIN — fix its path/permissions or unset it";
             else {
-              try { resolveAcpRelease(); }
+              try { resolveRelease(); }
               catch (error) { acpStatus = error instanceof Error ? error.message : String(error); }
             }
           }

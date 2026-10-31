@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { prepareBridgeMessages } from "./context-prompt.ts";
-import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
+import { serializePrompt } from "../drivers/cli/runtime.ts";
 
 const assistantMetadata: Pick<AssistantMessage, "api" | "provider" | "model" | "usage"> = {
   api: "agy",
@@ -68,7 +68,7 @@ const completed: AssistantMessage = { ...assistantMetadata, role: "assistant", c
 
 describe("bridge message reconstruction", () => {
   it("quotes history, preserves images and omits completed result bodies", () => {
-    assert.equal(serializeCliPrompt(prepareBridgeMessages(context, true)), [
+    assert.equal(serializePrompt(prepareBridgeMessages(context, true)), [
       "[System]: Follow <policy> & safety.",
       "[User]: old <question>",
       "[Assistant tool calls]:\n- read(path=\"README.md\")",
@@ -78,7 +78,7 @@ describe("bridge message reconstruction", () => {
   });
 
   it("serializes calls and preserves user request without result bodies", () => {
-    const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [call("old", "old"), result("old", "OLD_BODY"), completed,
+    const prompt = serializePrompt(prepareBridgeMessages({ messages: [call("old", "old"), result("old", "OLD_BODY"), completed,
       call("current", "current"), result("current", "CURRENT_BODY"), { role: "user", content: "appended", timestamp: 4 }] }, true));
 
     assert.ok(prompt.includes("- read(path=\"old\")"));
@@ -90,7 +90,7 @@ describe("bridge message reconstruction", () => {
 
   for (const stopReason of ["pending", "deferred"] as const) {
     it(`serializes ${stopReason} runs`, () => {
-      const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [call("active", "active-path"),
+      const prompt = serializePrompt(prepareBridgeMessages({ messages: [call("active", "active-path"),
         result("active", "ACTIVE_BODY"), { ...completed, stopReason }] }, true));
       assert.ok(prompt.includes("- read(path=\"active-path\")"));
       assert.ok(!prompt.includes("ACTIVE_BODY"));
@@ -112,7 +112,7 @@ describe("bridge message reconstruction", () => {
         const hidden = call("hidden", path);
         const mixed: AssistantMessage = { ...hidden, content: [{ type: "text", text: "retained explanation" }, ...hidden.content,
           ...call("chunk", path).content, ...call("visible", "README.md").content] };
-        const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [mixed, result("hidden", "SECRET_ONE"), result("chunk", "SECRET_TWO"),
+        const prompt = serializePrompt(prepareBridgeMessages({ messages: [mixed, result("hidden", "SECRET_ONE"), result("chunk", "SECRET_TWO"),
           result("visible", "VISIBLE_BODY"), ...(old ? [completed] : [])] }, true));
 
         assert.equal(prompt.includes(`path=${JSON.stringify(path)}`), !removed);
@@ -179,7 +179,7 @@ describe("bridge message reconstruction", () => {
   ]) {
     it(`scopes generated-read filtering: ${name}`, () => {
       const before = structuredClone(messages);
-      const prompt = serializeCliPrompt(prepareBridgeMessages({ messages }, true));
+      const prompt = serializePrompt(prepareBridgeMessages({ messages }, true));
 
       assert.equal(prompt.match(/- read\(path=/g)?.length ?? 0, calls);
       for (const value of kept) assert.ok(prompt.includes(value), value);
@@ -190,7 +190,7 @@ describe("bridge message reconstruction", () => {
 
   it("truncates long arguments exceeding 300 characters with ellipsis", () => {
     const args = "x".repeat(500);
-    const prompt = serializeCliPrompt(prepareBridgeMessages({ messages: [call("args", args), completed] }, true));
+    const prompt = serializePrompt(prepareBridgeMessages({ messages: [call("args", args), completed] }, true));
     assert.ok(prompt.includes("…"));
     assert.ok(!prompt.includes("x".repeat(350)));
   });
@@ -206,7 +206,7 @@ for (const { name, messages, expected, absent } of [
 ]) {
   it(name, () => {
     const before = structuredClone(messages);
-    const prompt = serializeCliPrompt(prepareBridgeMessages({ messages }, true));
+    const prompt = serializePrompt(prepareBridgeMessages({ messages }, true));
     let position = -1;
     for (const value of expected) {
       const next = prompt.indexOf(value, position + 1);

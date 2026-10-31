@@ -6,7 +6,7 @@ import { fetchAgyUsage } from "../../runtime/usage.ts";
 import { detectCliExecutable } from "../../runtime/version.ts";
 import { loginAgyAuthentication, probeAgyAuthentication } from "../../runtime/auth.ts";
 import { prepareDriverCwd } from "../cwd.ts";
-import { prepareCliRuntime, resolveModelAndEffort } from "./session.ts";
+import { prepareRuntime, resolveModelAndEffort } from "./session.ts";
 import { SessionMode } from "../types.ts";
 
 export class Driver implements BridgeDriver {
@@ -45,7 +45,7 @@ export class Driver implements BridgeDriver {
     };
     const selection = resolveModelAndEffort(input.model.id, input.options, input.model.thinkingLevelMap);
     const cwd = prepareDriverCwd(this.id);
-    return prepareCliRuntime(input.model, input.context, input.tools, input.options, cwd, dependencies, input.session, selection, input.preparationId, input.mode === SessionMode.Standalone);
+    return prepareRuntime(input.model, input.context, input.tools, input.options, cwd, dependencies, input.session, selection, input.preparationId, input.mode === SessionMode.Standalone);
   }
 
   discoverModels(signal: AbortSignal) {

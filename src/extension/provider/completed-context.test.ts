@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import type { AssistantMessage, Context, Message } from "@earendil-works/pi-ai";
 import { prepareBridgeMessages, serializeConversation } from "./context-prompt.ts";
-import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
+import { serializePrompt } from "../drivers/cli/runtime.ts";
 
 type Call = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 type Result = Extract<Message, { role: "toolResult" }>;
@@ -182,7 +182,7 @@ for (const mode of ["completed", "user", "incremental"] as const) {
       ? [{ role: "user", content: [{ type: "text", text: "IMAGE_REQUEST" }, image], timestamp: 1 }]
       : [assistant([call("id-image", "picture.png")]), imageResult, terminal()];
     const context: Context = { messages };
-    const prompt = serializeCliPrompt(prepareBridgeMessages(context, mode !== "incremental", 0));
+    const prompt = serializePrompt(prepareBridgeMessages(context, mode !== "incremental", 0));
 
     assert.ok(prompt.length < 5000, `image payload expanded output to ${prompt.length}`);
     assert.doesNotMatch(prompt, /PRIVATE_BASE64|AAAA|data:image/);

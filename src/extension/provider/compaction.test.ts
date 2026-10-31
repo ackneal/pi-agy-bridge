@@ -6,8 +6,8 @@ import { test } from "node:test";
 import { compact, generateSummaryWithUsage, ModelRuntime, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { normalizeContext, type Model, type Provider } from "@earendil-works/pi-ai";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import { serializeAcpContent } from "../drivers/acp/runtime.ts";
-import { serializeCliPrompt } from "../drivers/cli/runtime.ts";
+import { serializeContent } from "../drivers/acp/runtime.ts";
+import { serializePrompt } from "../drivers/cli/runtime.ts";
 import { prepareBridgeMessages } from "./context-prompt.ts";
 import { type BridgeDriver, type DriverId, type DriverSession, type RuntimeEvent, SessionMode } from "../drivers/types.ts";
 import { Bridge, streamProvider } from "./provider.ts";
@@ -190,11 +190,11 @@ test("standalone raw content bypasses markdown transcript wrapping", () => {
   };
 
   const bridgeMessages = prepareBridgeMessages(context, true);
-  const acpBlocks = serializeAcpContent(bridgeMessages);
+  const acpBlocks = serializeContent(bridgeMessages);
   assert.deepEqual(acpBlocks, [{ type: "text", text: "<conversation>detail</conversation>" }]);
   assert.ok(!acpBlocks.some((b) => b.type === "text" && (b.text.includes("## User") || b.text.startsWith("> ") || b.text.includes("\n> "))));
 
-  const cliPrompt = serializeCliPrompt(bridgeMessages);
+  const cliPrompt = serializePrompt(bridgeMessages);
   assert.equal(cliPrompt, "[System]: Summarize directly\n\n<conversation>detail</conversation>");
   assert.ok(!cliPrompt.includes("# System prompt"));
   assert.ok(!cliPrompt.includes("## User"));

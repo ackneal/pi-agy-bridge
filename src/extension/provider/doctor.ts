@@ -4,7 +4,7 @@ import path from "node:path";
 import { DEFAULT_AGY_PLUGIN_DIR, readPluginManifest, resolveMcpEntrypoint } from "../discovery/plugin-install.ts";
 import { formatDoctorQuotaLines, type AgyUsage } from "../runtime/usage.ts";
 import { validateAgyVersion } from "../runtime/version.ts";
-import { readAcpVersion } from "../drivers/acp/version.ts";
+import { readVersion } from "../drivers/acp/version.ts";
 import type { DriverFailure, DriverId } from "../drivers/types.ts";
 
 export interface DoctorOptions {
@@ -33,7 +33,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
     if (!options.executable?.trim()) throw new Error("Executable not found");
     const version = options.driver === "cli"
       ? (await validateAgyVersion(options.executable)).version
-      : await readAcpVersion(options.executable);
+      : await readVersion(options.executable);
     runtimeLine = `  ✓ ${label}${version ? ` ${version}` : ""}`;
   } catch (error) {
     runtimeLine = `  ✗ ${label} error${options.executable ? ` (${options.executable})` : ""}: ${message(error)}`;

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
-import { createAcpAuthenticationBackend } from "./auth.ts";
+import { createAuthenticationBackend } from "./auth.ts";
 import { Connection } from "./connection.ts";
 
 for (const row of [
@@ -19,7 +19,7 @@ for (const row of [
 ]) {
   test(`ACP auth ${row.mode} login=${row.login}`, async () => {
     const listeners = process.listenerCount("exit");
-    const backend = createAcpAuthenticationBackend({ executable: process.execPath, cwd: process.cwd(), args: ["--experimental-strip-types", fileURLToPath(new URL("./discovery-fixture.ts", import.meta.url)), row.mode], requestTimeoutMs: 1500 });
+    const backend = createAuthenticationBackend({ executable: process.execPath, cwd: process.cwd(), args: ["--experimental-strip-types", fileURLToPath(new URL("./discovery-fixture.ts", import.meta.url)), row.mode], requestTimeoutMs: 1500 });
     const signal = new AbortController().signal;
     const operation = row.login ? backend.login({ signal, notify() {}, async prompt(request) {
       assert.equal(request.type, "select");
@@ -40,7 +40,7 @@ test("ACP probe cancellation takes precedence over an authentication-required re
     controller.abort(cancelled);
     throw acp.RequestError.authRequired();
   });
-  const backend = createAcpAuthenticationBackend({ executable: process.execPath, cwd: process.cwd() });
+  const backend = createAuthenticationBackend({ executable: process.execPath, cwd: process.cwd() });
 
   await assert.rejects(backend.probe(controller.signal), (error) => error === cancelled);
 });

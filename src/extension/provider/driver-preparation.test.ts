@@ -10,7 +10,7 @@ import { BridgeIPC } from "../bridge/ipc.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import { Connection as AcpConnection } from "../drivers/acp/connection.ts";
 import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
-import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
+import { useExecutable } from "../drivers/acp/executable-fixture.ts";
 import { RuntimeSession as AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { RuntimeSession as CliRuntimeSession } from "../drivers/cli/runtime.ts";
@@ -38,7 +38,7 @@ async function preparationFixture(t: TestContext, id: "cli" | "acp", onPrompt?: 
     else process.env.GEMINI_HOME = previousHome;
     await rm(directory, { recursive: true, force: true });
   });
-  useAcpExecutable(t, process.execPath);
+  useExecutable(t, process.execPath);
 
   // Reuse the version-only executable pattern from runtime-start.test.ts.
   const executable = path.join(directory, "agy");

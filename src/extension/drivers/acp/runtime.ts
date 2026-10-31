@@ -3,17 +3,17 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { BridgeMessage, DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
-import { Session, type AcpSessionOptions } from "./session.ts";
+import { Session, type SessionOptions } from "./session.ts";
 import { EventProcessor } from "./events.ts";
 import { McpPermissions } from "./permissions.ts";
 import { debugLog } from "../../shared/debug.ts";
-import { fingerprintAcpSystemPrompt } from "./instructions.ts";
+import { fingerprintSystemPrompt } from "./instructions.ts";
 import { extractImagesFromText, serializeContextUpdate } from "../../provider/context-prompt.ts";
 import { expandHome } from "../../shared/paths.ts";
 import { ArtifactReader } from "./artifact-reader.ts";
-import { observeAcpImage } from "./image-observer.ts";
+import { observeImage } from "./image-observer.ts";
 
-export function serializeAcpContent(messages: readonly BridgeMessage[]): ContentBlock[] {
+export function serializeContent(messages: readonly BridgeMessage[]): ContentBlock[] {
   const blocks: ContentBlock[] = [];
 
   for (const message of messages) {
@@ -55,19 +55,19 @@ export class RuntimeSession implements DriverSession {
   private failure: Promise<void> | undefined;
   private userPrompt = "";
   private readonly reader: ArtifactReader;
-  readonly options: Omit<AcpSessionOptions, "onUpdate" | "onRead">;
+  readonly options: Omit<SessionOptions, "onUpdate" | "onRead">;
   constructor(
-    options: Omit<AcpSessionOptions, "onUpdate" | "onRead">,
+    options: Omit<SessionOptions, "onUpdate" | "onRead">,
     allowedToolNames: ReadonlySet<string> = new Set(),
   ) {
     this.options = options;
-    this.compatibilityKey = options.systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
+    this.compatibilityKey = options.systemPrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
     this.allowedToolNames = allowedToolNames;
     this.reader = new ArtifactReader({
       home: resolve(expandHome(process.env.GEMINI_HOME ?? `${homedir()}/.gemini`)),
       sessionId: () => this.session.id,
       allowedToolNames,
-      observeImage: (image, signal) => observeAcpImage({
+      observeImage: (image, signal) => observeImage({
         executable: options.executable, cwd: options.cwd, model: options.model,
         ...(options.args !== undefined ? { args: options.args } : {}),
         ...(options.effort !== undefined ? { effort: "low" } : {}),
@@ -130,7 +130,7 @@ export class RuntimeSession implements DriverSession {
     if (!this.isRunning || this.failure) throw new Error("ACP session is not running");
     this.submitting = true;
     try {
-      const content = serializeAcpContent(input.messages);
+      const content = serializeContent(input.messages);
       if (content.length === 0) content.push({ type: "text", text: "Continue from the current conversation state without repeating completed work." });
       let payload: unknown = { sessionId: this.session.id, prompt: content };
       if (input.options?.onPayload) {

@@ -54,7 +54,7 @@ export function resolveModelAndEffort(
   return { baseModel, effort };
 }
 
-export async function prepareCliRuntime(
+export async function prepareRuntime(
   model: Model<any>,
   context: Context,
   tools: readonly Tool[],

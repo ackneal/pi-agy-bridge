@@ -8,7 +8,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { Driver } from "./driver.ts";
 import { Connection } from "./connection.ts";
 import type { DriverInstallationProgress } from "../types.ts";
-import { acpDistributionName, resolveAcpRelease } from "./release.ts";
+import { distributionName, resolveRelease } from "./release.ts";
 import { LiveSession } from "../../session/session.ts";
 import { RuntimeSessionSync } from "../../session/state.ts";
 import { SessionMode, type PrepareDriverInput } from "../types.ts";
@@ -137,9 +137,9 @@ for (const kind of ["aborted", "superseded"] as const) {
 for (const stale of [false, true]) {
   test(`managed cache passes integrity resolution with ${stale ? "a stale" : "a current"} status hint`, async (t) => {
     const home = await isolate(t);
-    const release = resolveAcpRelease();
+    const release = resolveRelease();
     const root = path.join(home, "pi-agy-bridge", "acp");
-    const directory = path.join(root, acpDistributionName(release));
+    const directory = path.join(root, distributionName(release));
     await mkdir(directory, { recursive: true });
     const data = "synthetic executable, never launched";
     const files = [];

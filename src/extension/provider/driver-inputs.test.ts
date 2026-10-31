@@ -8,7 +8,7 @@ import type { AssistantMessage, Context, ImageContent, Model, Tool } from "@eare
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
-import { composeAcpSystemPrompt } from "../drivers/acp/instructions.ts";
+import { composeSystemPrompt } from "../drivers/acp/instructions.ts";
 import { RuntimeSession as AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { Session as AcpSession } from "../drivers/acp/session.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
@@ -91,7 +91,7 @@ for (const id of ["cli", "acp"] as const) {
         const proc = id === "cli"
           ? new CliRuntimeSession({ agentName: standalone ? "pi-standalone" : "pi-bridge", model: model.id }, new Set(input.tools.map(tool => tool.name)), {})
           : new AcpRuntimeSession({ executable: "unused", cwd: directory, model: model.id,
-            systemPrompt: standalone ? "rule" : composeAcpSystemPrompt(input.messages),
+            systemPrompt: standalone ? "rule" : composeSystemPrompt(input.messages),
             ...(standalone ? {} : { mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] as [string, "--endpoint", string] } }) }, new Set(input.tools.map(tool => tool.name)));
         runtimes.push(proc);
         const submit = proc.submit.bind(proc);
@@ -154,7 +154,7 @@ for (const id of ["cli", "acp"] as const) {
           ].join("\n\n") : currentText);
       } else {
         assert.ok(runtimes[0] instanceof AcpRuntimeSession);
-        assert.equal(runtimes[0].options.systemPrompt, standalone ? "rule" : composeAcpSystemPrompt(prepareSystemMessages(context)));
+        assert.equal(runtimes[0].options.systemPrompt, standalone ? "rule" : composeSystemPrompt(prepareSystemMessages(context)));
         assert.deepEqual(payload, [
           ...(scenario === "rebuild" || scenario === "system-tail" ? [{ type: "text", text: historyText }] : []),
           ...(standalone ? [{ type: "text", text: "old question" }, { type: "text", text: "old answer" }] : []),

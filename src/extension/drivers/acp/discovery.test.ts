@@ -3,7 +3,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import { Connection } from "./connection.ts";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { discoverAcpModels, newDiscoverySession, withAcpDiscovery } from "./discovery.ts";
+import { discoverModels, newDiscoverySession, withDiscovery } from "./discovery.ts";
 
 for (const mode of ["catalog", "missing", "empty", "required", "browser", "fragmented-browser", "failure", "hang", "cancel"]) {
   test(`ACP discovery ${mode}`, async () => {
@@ -11,14 +11,14 @@ for (const mode of ["catalog", "missing", "empty", "required", "browser", "fragm
     const start = Date.now();
     const listeners = process.listenerCount("exit");
     if (mode === "catalog") {
-      const models = await discoverAcpModels(options);
+      const models = await discoverModels(options);
       assert.equal(models?.[0]?.id, "novel");
       assert.equal(models?.[0]?.thinkingLevelMap?.high, "high");
       assert.equal(models?.[0]?.thinkingLevelMap?.low, null);
     } else if (["required", "browser", "fragmented-browser"].includes(mode)) {
-      assert.equal(await discoverAcpModels(options), undefined, "login must not replace the cached catalog");
+      assert.equal(await discoverModels(options), undefined, "login must not replace the cached catalog");
     } else {
-      await assert.rejects(discoverAcpModels(options, mode === "cancel" ? AbortSignal.timeout(600) : undefined),
+      await assert.rejects(discoverModels(options, mode === "cancel" ? AbortSignal.timeout(600) : undefined),
         mode === "missing" ? /configuration/ : mode === "empty" ? /empty/ : mode === "failure" ? /synthetic failure/ : /timeout|disposed|aborted/i);
     }
     assert.equal(process.listenerCount("exit"), listeners);
@@ -38,7 +38,7 @@ for (const grouped of [false, true]) {
       sessionId: "synthetic", configOptions: [{ id: "model", name: "Model", type: "select", currentValue: values[0]!.value,
         options: grouped ? [{ group: "available", name: "Available models", options: values }] : values }],
     }));
-    const models = await discoverAcpModels({ executable: "unused", cwd: process.cwd() });
+    const models = await discoverModels({ executable: "unused", cwd: process.cwd() });
     assert.deepEqual(models?.map(({ id, name }) => ({ id, name })), values.map(({ value, name }) => ({ id: value, name })));
   });
 }
@@ -64,7 +64,7 @@ for (const scenario of [
       if (scenario.cancel) controller.abort(new Error("cancelled"));
       throw scenario.error;
     });
-    const result = discoverAcpModels({ executable: "unused", cwd: process.cwd() }, controller.signal);
+    const result = discoverModels({ executable: "unused", cwd: process.cwd() }, controller.signal);
     if (scenario.fallback) assert.equal(await result, undefined);
     else await assert.rejects(result, (error) => error === (scenario.cancel ? controller.signal.reason : scenario.error));
     assert.equal(request.mock.callCount(), scenario.initialize ? 0 : 1);
@@ -75,7 +75,7 @@ test("ACP explicit session verification still creates a session", async (t) => {
   t.mock.method(Connection.prototype, "start", async () => ({ protocolVersion: acp.PROTOCOL_VERSION }));
   t.mock.method(Connection.prototype, "dispose", async () => {});
   const request = t.mock.method(Connection.prototype, "request", async () => ({ sessionId: "verified" } as never));
-  const session = await withAcpDiscovery({ executable: "unused", cwd: process.cwd() }, undefined,
+  const session = await withDiscovery({ executable: "unused", cwd: process.cwd() }, undefined,
     (connection) => newDiscoverySession(connection, process.cwd()));
   assert.equal(session.sessionId, "verified");
   assert.equal(request.mock.callCount(), 1);

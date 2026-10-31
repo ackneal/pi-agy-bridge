@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { prepareAcpRuntime } from "./prepare.ts";
+import { prepareRuntime } from "./prepare.ts";
 import { Driver } from "./driver.ts";
 import { SessionMode } from "../types.ts";
-import { useAcpExecutable } from "./executable-fixture.ts";
+import { useExecutable } from "./executable-fixture.ts";
 import { RuntimeSession as CliRuntimeSession } from "../cli/runtime.ts";
 import { LiveSession } from "../../session/session.ts";
 import { RuntimeSessionSync } from "../../session/state.ts";
@@ -27,7 +27,7 @@ test("ACP clears the previous driver once before checkpoint lookup", async (t) =
   live.setSession(previous, "previous-sync");
   const abort = t.mock.method(previous, "abort", async () => {});
   const driver = new Driver();
-  useAcpExecutable(t, process.execPath);
+  useExecutable(t, process.execPath);
   const dispose = t.mock.method(live, "dispose", live.dispose.bind(live));
   const stopped = new Error("Stopped at checkpoint lookup");
   const get = t.mock.fn(async () => {
@@ -39,7 +39,7 @@ test("ACP clears the previous driver once before checkpoint lookup", async (t) =
   const context = { messages: [] };
 
   await assert.rejects(driver.prepareSession({
-    model: { id: "raw" } as Parameters<typeof prepareAcpRuntime>[0],
+    model: { id: "raw" } as Parameters<typeof prepareRuntime>[0],
     context, messages: prepareSystemMessages(context), tools: [], options: undefined, session: live,
     store: { get, delete: async () => {} }, sync: new RuntimeSessionSync(),
     preparationId: live.beginPreparation(),
@@ -56,7 +56,7 @@ test("superseded ACP preparation stops before checkpoint or resource acquisition
   const stale = live.beginPreparation();
   live.beginPreparation();
   let reads = 0;
-  await assert.rejects(prepareAcpRuntime({ id: "raw" } as Parameters<typeof prepareAcpRuntime>[0], { messages: [] }, [], [], undefined, { cwd: process.cwd(), resolve: async () => { throw new Error("Superseded preparation must not resolve installation"); } }, {
+  await assert.rejects(prepareRuntime({ id: "raw" } as Parameters<typeof prepareRuntime>[0], { messages: [] }, [], [], undefined, { cwd: process.cwd(), resolve: async () => { throw new Error("Superseded preparation must not resolve installation"); } }, {
     store: { get: async () => { reads++; return undefined; }, delete: async () => {} }, sync: new RuntimeSessionSync(), sessionVersion: "acp:v1",
   }, live, stale), /superseded/);
   assert.equal(reads, 0);

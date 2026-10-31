@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
-import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "./instructions.ts";
+import { composeSystemPrompt, fingerprintSystemPrompt } from "./instructions.ts";
 import { prepareSystemMessages } from "../../provider/context-prompt.ts";
 
 const cases: { name: string; context: Context; expected: string }[] = [
@@ -15,7 +15,7 @@ const cases: { name: string; context: Context; expected: string }[] = [
 ];
 for (const row of cases) {
   test(`ACP instructions: ${row.name}`, () => {
-    const prompt = composeAcpSystemPrompt(prepareSystemMessages(row.context));
+    const prompt = composeSystemPrompt(prepareSystemMessages(row.context));
 
     assert.ok(prompt.startsWith("# Bridge Integration Instructions\n\n"));
     assert.equal(prompt.split("# Bridge Integration Instructions").length, 2);
@@ -26,8 +26,8 @@ for (const row of cases) {
       assert.ok(!prompt.includes("# Workspace Instructions\n"));
     }
     assert.ok(!prompt.includes("old section") && !prompt.includes("removed section"));
-    assert.equal(fingerprintAcpSystemPrompt(prompt), createHash("sha256").update(prompt).digest("hex"));
-    assert.equal(composeAcpSystemPrompt(prepareSystemMessages(row.context)), prompt);
+    assert.equal(fingerprintSystemPrompt(prompt), createHash("sha256").update(prompt).digest("hex"));
+    assert.equal(composeSystemPrompt(prepareSystemMessages(row.context)), prompt);
   });
 }
 
@@ -112,7 +112,7 @@ for (const row of [
   },
 ]) {
   test(`ACP prompt rule ownership: ${row.name}`, () => {
-    const prompt = composeAcpSystemPrompt([]);
+    const prompt = composeSystemPrompt([]);
     const sections = prompt.split(`${row.heading}\n`);
 
     assert.equal(sections.length, 2, `expected one ${row.heading} section`);
@@ -125,7 +125,7 @@ for (const row of [
 }
 
 test("ACP integration instructions exclude obsolete envelopes and CLI-specific calls", () => {
-  const prompt = composeAcpSystemPrompt([]);
+  const prompt = composeSystemPrompt([]);
 
   for (const text of [
     "## User", "## Assistant", "## Tool result", "## Tools (completed)", "Client reads return JSON", "nextLine", "until eof is true",

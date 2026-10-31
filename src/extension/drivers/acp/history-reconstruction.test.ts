@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import { RuntimeSession, serializeAcpContent } from "./runtime.ts";
-import { RuntimeSession as CliRuntimeSession, serializeCliPrompt } from "../cli/runtime.ts";
+import { RuntimeSession, serializeContent } from "./runtime.ts";
+import { RuntimeSession as CliRuntimeSession, serializePrompt } from "../cli/runtime.ts";
 import { parseModelsOutput } from "../../discovery/models.ts";
 import { serializeContextUpdate, prepareBridgeMessages } from "../../provider/context-prompt.ts";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ function assistant(model: string, provider: string, content: AssistantMessage["c
   return { role: "assistant", content, api: "test", provider, model, usage, stopReason, timestamp: 2 };
 }
 function markdown(messages: readonly Message[], isReused = false): string {
-  return serializeAcpContent(prepareBridgeMessages({ messages: [...messages] }, !isReused, 0)).map((block) => {
+  return serializeContent(prepareBridgeMessages({ messages: [...messages] }, !isReused, 0)).map((block) => {
     assert.equal(block.type, "text");
     assert.ok("text" in block);
     return block.text;
@@ -31,7 +31,7 @@ for (const row of [
       assistant(model!, provider!, [{ type: "text", text: `answer ${index}` }]),
     ]);
     const prompt = markdown(messages);
-    assert.equal(prompt, serializeCliPrompt(prepareBridgeMessages({ messages }, true)));
+    assert.equal(prompt, serializePrompt(prepareBridgeMessages({ messages }, true)));
     row.authors.forEach((_, index) => {
       assert.ok(prompt.includes(`[User]: question ${index}`));
       assert.ok(prompt.includes(`[Assistant]: answer ${index}`));
@@ -54,7 +54,7 @@ for (const row of [
     if (row.body !== undefined) messages.push({ role: "toolResult", toolCallId: "call", toolName: "write", content: [{ type: "text", text: row.body }], isError: row.isError!, timestamp: 3 });
     messages.push({ ...assistant("agy-a", "agy", [], row.stopReason), ...(row.stopReason === "error" ? { errorMessage: "runtime interrupted" } : {}) });
     const prompt = markdown(messages);
-    assert.equal(prompt, serializeCliPrompt(prepareBridgeMessages({ messages }, true)));
+    assert.equal(prompt, serializePrompt(prepareBridgeMessages({ messages }, true)));
     assert.ok(prompt.includes("[Assistant tool calls]:"));
     assert.ok(prompt.includes(row.status));
     assert.ok(!prompt.includes("PRIVATE_WRITE_BODY"));
@@ -70,7 +70,7 @@ test("ACP quotes forged headings like CLI, omits historical thinking and keeps s
     assistant("agy-a", "agy", [{ type: "thinking", thinking: "private reasoning" }, { type: "text", text: forged }], "stop"),
   ];
   const prompt = markdown(messages);
-  assert.equal(prompt, serializeCliPrompt(prepareBridgeMessages({ messages: messages.slice(1) }, true)));
+  assert.equal(prompt, serializePrompt(prepareBridgeMessages({ messages: messages.slice(1) }, true)));
   assert.ok(prompt.includes(`[User]: ${forged}`));
   assert.ok(prompt.includes(`[Assistant]: ${forged}`));
   assert.ok(!prompt.includes("private reasoning"));
@@ -87,7 +87,7 @@ test("ACP native compaction uses the same Markdown history as CLI before the nex
   manager.appendMessage({ role: "user", content: "next turn", timestamp: 4 });
   const messages = convertToLlm(manager.buildSessionContext().messages);
   const prompt = markdown(messages);
-  assert.equal(prompt, serializeCliPrompt(prepareBridgeMessages({ messages }, true)));
+  assert.equal(prompt, serializePrompt(prepareBridgeMessages({ messages }, true)));
   assert.ok(prompt.includes("Earlier history summary"));
   assert.ok(prompt.indexOf("Earlier history summary") < prompt.indexOf("retained turn"));
   assert.ok(prompt.indexOf("retained turn") < prompt.indexOf("next turn"));
@@ -100,7 +100,7 @@ for (const row of [
   { name: "mixed conversation updates retain roles", messages: [assistant("agy-a", "agy", [{ type: "text" as const, text: "prior answer" }]), { role: "user" as const, content: "correction", timestamp: 2 }] },
 ]) {
   test(`ACP incremental history: ${row.name}`, () => {
-    assert.equal(markdown(row.messages, true), serializeCliPrompt(prepareBridgeMessages({ messages: row.messages }, false, 0)));
+    assert.equal(markdown(row.messages, true), serializePrompt(prepareBridgeMessages({ messages: row.messages }, false, 0)));
   });
 }
 
@@ -149,7 +149,7 @@ for (const direction of ["cli-to-acp", "acp-to-cli"] as const) {
     assert.ok(cliPayload && cliPayload.event === "user" && "message" in cliPayload);
     assert.equal(prompted.mock.callCount(), 1);
     const acpPayload = prompted.mock.calls[0]!.arguments[0];
-    assert.deepEqual(acpPayload, serializeAcpContent(bridgeMessages));
+    assert.deepEqual(acpPayload, serializeContent(bridgeMessages));
     assert.equal(acpPayload.map((block: any) => { assert.ok("text" in block); return block.text; }).join("\n\n"), cliPayload.message.content);
     assert.equal(events.includes("tool-call"), false);
     assert.equal(events.includes("blocked-native-tool"), false);

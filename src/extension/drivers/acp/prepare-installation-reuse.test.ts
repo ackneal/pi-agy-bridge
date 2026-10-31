@@ -13,8 +13,8 @@ import { SessionMode, type PrepareDriverInput } from "../types.ts";
 import { RuntimeSession as CliRuntimeSession } from "../cli/runtime.ts";
 import { Connection } from "./connection.ts";
 import { Driver } from "./driver.ts";
-import { composeAcpSystemPrompt } from "./instructions.ts";
-import type { AcpLaunch } from "./installation.ts";
+import { composeSystemPrompt } from "./instructions.ts";
+import type { Launch } from "./installation.ts";
 import { RuntimeSession } from "./runtime.ts";
 import { prepareSystemMessages } from "../../provider/context-prompt.ts";
 
@@ -39,7 +39,7 @@ async function liveRuntime(t: TestContext, action: "continue" | "resume" | "rebu
   const model = defaultModelCatalog()[0]!;
   const context = { messages: [] };
   const messages = prepareSystemMessages(context);
-  const systemPrompt = composeAcpSystemPrompt(messages);
+  const systemPrompt = composeSystemPrompt(messages);
   const runtime = backend === "cli"
     ? new CliRuntimeSession({ agentName: "pi-bridge", model: model.id }, new Set(), {})
     : new RuntimeSession({
@@ -102,9 +102,9 @@ for (const outcome of ["aborted", "superseded"] as const) {
     const f = await liveRuntime(t, "rebuild");
     const controller = new AbortController();
     f.input.options = { signal: controller.signal };
-    let release!: (launch: AcpLaunch) => void;
+    let release!: (launch: Launch) => void;
     let entered!: () => void;
-    const gate = new Promise<AcpLaunch>((resolve) => { release = resolve; });
+    const gate = new Promise<Launch>((resolve) => { release = resolve; });
     const resolving = new Promise<void>((resolve) => { entered = resolve; });
     const driver = new Driver(async () => { entered(); return gate; });
     const settled = driver.prepareSession(f.input).then(value => ({ value }), error => ({ error }));
@@ -132,10 +132,10 @@ for (const outcome of ["failed", "aborted", "superseded"] as const) {
     f.input.options = { signal: controller.signal };
     const checkpoint = t.mock.method(f.input.store, "get", async () => undefined);
     const failure = new Error("offline installation failure");
-    let release!: (launch: AcpLaunch) => void;
+    let release!: (launch: Launch) => void;
     let reject!: (error: Error) => void;
     let entered!: () => void;
-    const gate = new Promise<AcpLaunch>((resolve, rejectPromise) => { release = resolve; reject = rejectPromise; });
+    const gate = new Promise<Launch>((resolve, rejectPromise) => { release = resolve; reject = rejectPromise; });
     const resolving = new Promise<void>((resolve) => { entered = resolve; });
     const driver = new Driver(async () => { entered(); return gate; });
     const settled = driver.prepareSession(f.input).then(value => ({ value }), error => ({ error }));

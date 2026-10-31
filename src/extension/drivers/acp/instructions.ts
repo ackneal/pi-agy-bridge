@@ -51,11 +51,11 @@ Workspace Instructions, when present, contain Pi's current system instructions a
 ## Use skills
 When a Pi-advertised skill applies, read its referenced SKILL.md with an available Pi file-reading tool before following it. If no suitable tool is available, do not assume the skill's contents.`;
 
-export function composeAcpSystemPrompt(messages: readonly BridgeMessage[]): string {
+export function composeSystemPrompt(messages: readonly BridgeMessage[]): string {
   const prompt = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
   return prompt ? `${integrationInstructions}\n\n# Workspace Instructions\n\n${prompt}` : integrationInstructions;
 }
 
-export function fingerprintAcpSystemPrompt(prompt: string): string {
+export function fingerprintSystemPrompt(prompt: string): string {
   return createHash("sha256").update(prompt).digest("hex");
 }

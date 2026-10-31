@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BridgeIPC } from "../../bridge/ipc.ts";
 import { LiveSession } from "../../session/session.ts";
-import { prepareAcpRuntime } from "./prepare.ts";
+import { prepareRuntime } from "./prepare.ts";
 import { RuntimeSession } from "./runtime.ts";
 
 function barrier() {
@@ -75,7 +75,7 @@ for (const scenario of ["rebuild", "cleanup failure", "cancel"] as const) {
       }
       await abort.call(this);
     });
-    const pending = prepareAcpRuntime({ id: "selected" } as Parameters<typeof prepareAcpRuntime>[0],
+    const pending = prepareRuntime({ id: "selected" } as Parameters<typeof prepareRuntime>[0],
       { messages: [] }, [], [], { signal: controller.signal }, {
         cwd: process.cwd(),
         resolve: async () => ({

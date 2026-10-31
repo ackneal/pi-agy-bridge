@@ -5,7 +5,7 @@ import { debugArtifact, debugLog } from "../../shared/debug.ts";
 import { EventTranslator, type ConversationErrorState } from "./events.ts";
 import type { BridgeMessage, DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
 
-export function serializeCliPrompt(messages: readonly BridgeMessage[]): string {
+export function serializePrompt(messages: readonly BridgeMessage[]): string {
   const parts: string[] = [];
 
   for (const message of messages) {
@@ -63,7 +63,7 @@ export class RuntimeSession extends AgyRuntime implements DriverSession {
   }
 
   async submit(input: DriverSubmission): Promise<void> {
-    let prompt = serializeCliPrompt(input.messages);
+    let prompt = serializePrompt(input.messages);
     if (!prompt.trim()) prompt = "Continue from the current conversation state without repeating completed work.";
 
     if (input.options?.onPayload) {

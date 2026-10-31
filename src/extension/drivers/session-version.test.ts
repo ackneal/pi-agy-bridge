@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { prepareCliRuntime, resolveModelAndEffort } from "./cli/session.ts";
-import { prepareAcpRuntime } from "./acp/prepare.ts";
+import { prepareRuntime as prepareCliRuntime, resolveModelAndEffort } from "./cli/session.ts";
+import { prepareRuntime as prepareAcpRuntime } from "./acp/prepare.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { LiveSession } from "../session/session.ts";
 
