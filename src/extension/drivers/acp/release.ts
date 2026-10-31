@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-export interface AcpRelease {
+export interface Release {
   version: string;
   platform: string;
   url: string;
@@ -16,7 +16,7 @@ const registry = JSON.parse(readFileSync(new URL("./registry.json", import.meta.
   distribution: { binary: Record<string, { archive: string; cmd: string; sha256: string; args?: string[] }> };
 };
 
-export function acpDistributionName(release: Pick<AcpRelease, "url">): string {
+export function distributionName(release: Pick<Release, "url">): string {
   const filename = path.posix.basename(new URL(release.url).pathname);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.zip$/.test(filename)) {
     throw new Error(`Unsafe or invalid ACP archive filename '${filename}'.`);
@@ -25,7 +25,7 @@ export function acpDistributionName(release: Pick<AcpRelease, "url">): string {
   return filename.slice(0, -".zip".length);
 }
 
-export function resolveAcpRelease(platform: NodeJS.Platform = process.platform, arch: string = process.arch): AcpRelease {
+export function resolveRelease(platform: NodeJS.Platform = process.platform, arch: string = process.arch): Release {
   if (platform !== "darwin" && platform !== "linux") {
     throw new Error(`Unsupported ACP platform '${platform}'; the bridge supports macOS and Linux only (AGY_ACP_BIN cannot enable unsupported platforms).`);
   }
@@ -45,7 +45,7 @@ export function resolveAcpRelease(platform: NodeJS.Platform = process.platform, 
   if (url.protocol !== "https:" || url.hostname !== "dl.google.com" || url.port || url.username || url.password) {
     throw new Error("ACP registry archive must use an official HTTPS Google download URL");
   }
-  acpDistributionName({ url: entry.archive });
+  distributionName({ url: entry.archive });
   const executable = entry.cmd.replace(/^\.\//, "");
   if (executable.includes("\\") || executable.includes("\0") ||
     executable.split("/").some((part) => part === "" || part === "." || part === "..")) {

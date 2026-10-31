@@ -3,7 +3,7 @@ import test from "node:test";
 import { SessionManager, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { BridgeDriver } from "../drivers/types.ts";
-import { AcpDriver } from "../drivers/acp/driver.ts";
+import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
 import { registerAuthHomeFixture } from "./auth-home-fixture.ts";
 import { Bridge } from "./provider.ts";
 

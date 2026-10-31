@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { prepareCliRuntime, resolveModelAndEffort } from "./cli/session.ts";
-import { prepareAcpRuntime } from "./acp/prepare.ts";
+import { prepareRuntime as prepareCliRuntime, resolveModelAndEffort } from "./cli/session.ts";
+import { prepareRuntime as prepareAcpRuntime } from "./acp/prepare.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { LiveSession } from "../session/session.ts";
 
@@ -32,7 +32,7 @@ for (const driver of ["cli", "acp"] as const) {
 
     const preparing = driver === "cli"
       ? prepareCliRuntime(model, { messages: [] }, [], options, process.cwd(), dependencies, session, resolveModelAndEffort(model.id), preparationId)
-      : prepareAcpRuntime(model, { messages: [] }, [], options, { cwd: process.cwd(), resolve: async () => { throw new Error("Preparation must stop at lookup"); } }, dependencies, session, preparationId);
+      : prepareAcpRuntime(model, { messages: [] }, [], [], options, { cwd: process.cwd(), resolve: async () => { throw new Error("Preparation must stop at lookup"); } }, dependencies, session, preparationId);
     await assert.rejects(preparing, stopAfterRead);
 
     assert.deepEqual(reads, [[session.piSessionId, version]]);

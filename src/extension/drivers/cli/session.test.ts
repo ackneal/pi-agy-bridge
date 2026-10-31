@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { LiveSession } from "../../session/session.ts";
-import { prepareCliRuntime, resolveModelAndEffort } from "./session.ts";
+import { prepareRuntime, resolveModelAndEffort } from "./session.ts";
 
 for (const stage of ["before lookup", "after lookup"] as const) {
   for (const reason of ["abort", "supersede"] as const) {
@@ -19,7 +19,7 @@ for (const stage of ["before lookup", "after lookup"] as const) {
       if (stage === "before lookup") invalidate();
 
       try {
-        await assert.rejects(prepareCliRuntime(
+        await assert.rejects(prepareRuntime(
           { id: "test-model" } as Model<any>,
           { messages: [] },
           [],

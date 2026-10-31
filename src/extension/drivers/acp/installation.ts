@@ -5,18 +5,18 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { extractAcpArchive } from "./archive.ts";
-import { acpDistributionName, resolveAcpRelease, type AcpRelease } from "./release.ts";
+import { extractArchive } from "./archive.ts";
+import { distributionName, resolveRelease, type Release } from "./release.ts";
 import { debugLog } from "../../shared/debug.ts";
 import type { DriverInstallationProgress } from "../types.ts";
 
-export interface AcpLaunch { executable: string; args: string[] }
+export interface Launch { executable: string; args: string[] }
 
 interface InstallationOptions {
   signal?: AbortSignal;
   onProgress?: (progress: DriverInstallationProgress) => void;
   agentHome?: string;
-  release?: AcpRelease;
+  release?: Release;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -33,7 +33,7 @@ interface InstallationManifest {
 }
 interface Job {
   controller: AbortController;
-  promise: Promise<AcpLaunch>;
+  promise: Promise<Launch>;
   listeners: Set<(progress: DriverInstallationProgress) => void>;
   consumers: Set<symbol>;
   last?: DriverInstallationProgress;
@@ -48,8 +48,8 @@ function installationRoot(agentHome: string): string {
   return path.join(path.resolve(agentHome), "pi-agy-bridge", "acp");
 }
 
-function installationDirectory(agentHome: string, release: AcpRelease): string {
-  return path.join(installationRoot(agentHome), acpDistributionName(release));
+function installationDirectory(agentHome: string, release: Release): string {
+  return path.join(installationRoot(agentHome), distributionName(release));
 }
 
 function safeRelative(value: unknown): value is string {
@@ -57,7 +57,7 @@ function safeRelative(value: unknown): value is string {
     value.split("/").every((component) => component !== "" && component !== "." && component !== "..");
 }
 
-function matchesRelease(manifest: InstallationManifest, release: AcpRelease): boolean {
+function matchesRelease(manifest: InstallationManifest, release: Release): boolean {
   return manifest.schema === 1 && manifest.version === release.version && manifest.platform === release.platform &&
     manifest.sha256 === release.sha256 && Array.isArray(manifest.files) && manifest.files.length > 0;
 }
@@ -106,7 +106,7 @@ async function inventory(directory: string, signal: AbortSignal, hash: boolean):
   return { files, stamp: JSON.stringify(stamps) };
 }
 
-async function validateInstallation(directory: string, release: AcpRelease, signal: AbortSignal, onValidate: () => void): Promise<boolean> {
+async function validateInstallation(directory: string, release: Release, signal: AbortSignal, onValidate: () => void): Promise<boolean> {
   signal.throwIfAborted();
   try {
     if (!(await fsp.lstat(directory)).isDirectory() || !(await fsp.lstat(path.join(directory, MANIFEST))).isFile()) return false;
@@ -141,9 +141,9 @@ async function validateInstallation(directory: string, release: AcpRelease, sign
 }
 
 /** A read-only status hint. Launch resolution separately checks complete installation integrity. */
-export function findAcpInstallation(): string | undefined {
+export function findInstallation(): string | undefined {
   try {
-    const release = resolveAcpRelease();
+    const release = resolveRelease();
     const directory = installationDirectory(getAgentDir(), release);
     if (!fs.lstatSync(directory).isDirectory()) return undefined;
     const manifest: InstallationManifest = JSON.parse(fs.readFileSync(path.join(directory, MANIFEST), "utf8"));
@@ -168,7 +168,7 @@ async function prepareInstallationRoot(agentHome: string): Promise<string> {
   return current;
 }
 
-async function publishDistribution(source: string, directory: string, manifest: InstallationManifest, release: AcpRelease,
+async function publishDistribution(source: string, directory: string, manifest: InstallationManifest, release: Release,
   signal: AbortSignal, onValidate: () => void): Promise<void> {
   signal.throwIfAborted();
   const existing = await fsp.lstat(directory).catch((error: NodeJS.ErrnoException) => {
@@ -245,13 +245,13 @@ async function removeStaging(directory: string): Promise<void> {
   await fsp.rm(directory, { recursive: true, force: true });
 }
 
-function downloadMessage(release: AcpRelease, bytes: number, total?: number): string {
+function downloadMessage(release: Release, bytes: number, total?: number): string {
   const size = `${(bytes / 1048576).toFixed(1)} MiB`;
   const amount = total ? `${size} / ${(total / 1048576).toFixed(1)} MiB (${Math.min(100, Math.floor(bytes * 100 / total))}%)` : size;
   return `Downloading Antigravity ACP ${release.version} (${release.platform}): ${amount}`;
 }
 
-async function downloadArchive(filename: string, release: AcpRelease, fetcher: typeof fetch, signal: AbortSignal,
+async function downloadArchive(filename: string, release: Release, fetcher: typeof fetch, signal: AbortSignal,
   progress: (progress: DriverInstallationProgress) => void): Promise<void> {
   const idle = new AbortController();
   const reset = () => {
@@ -297,15 +297,15 @@ async function downloadArchive(filename: string, release: AcpRelease, fetcher: t
   } finally { clearTimeout(timer!); }
 }
 
-async function install(options: InstallationOptions, signal: AbortSignal, emit: (progress: DriverInstallationProgress) => void): Promise<AcpLaunch> {
-  const release = options.release ?? resolveAcpRelease();
+async function install(options: InstallationOptions, signal: AbortSignal, emit: (progress: DriverInstallationProgress) => void): Promise<Launch> {
+  const release = options.release ?? resolveRelease();
   const agentHome = path.resolve(options.agentHome ?? getAgentDir());
   let staging: string | undefined;
   const progress = (phase: DriverInstallationProgress["phase"], message: string) => emit({ phase, message, version: release.version, platform: release.platform });
   try {
     signal.throwIfAborted();
     const root = await prepareInstallationRoot(agentHome);
-    const directory = path.join(root, acpDistributionName(release));
+    const directory = path.join(root, distributionName(release));
     let checking = false;
     const onValidate = () => {
       checking = true;
@@ -323,7 +323,7 @@ async function install(options: InstallationOptions, signal: AbortSignal, emit: 
     const distribution = path.join(staging, "distribution");
     await fsp.mkdir(distribution, { mode: 0o700 });
     progress("extract", `Extracting ACP ${release.version}; this may take a moment`);
-    await extractAcpArchive(archive, distribution, signal);
+    await extractArchive(archive, distribution, signal);
     signal.throwIfAborted();
     progress("validate", `Checking ACP ${release.version} files and executable permissions`);
     const { files } = await inventory(distribution, signal, true);
@@ -358,9 +358,9 @@ async function install(options: InstallationOptions, signal: AbortSignal, emit: 
 }
 
 /** Share work in this process. Other processes publish to the same manifest-derived path without locks. */
-export function ensureAcpInstallation(options: InstallationOptions = {}): Promise<AcpLaunch> {
+export function ensureInstallation(options: InstallationOptions = {}): Promise<Launch> {
   options.signal?.throwIfAborted();
-  const release = options.release ?? resolveAcpRelease();
+  const release = options.release ?? resolveRelease();
   const key = `${installationDirectory(options.agentHome ?? getAgentDir(), release)}:${release.sha256}`;
   let job = jobs.get(key);
   if (!job) {

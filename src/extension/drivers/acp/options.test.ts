@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { detectAcpExecutable, resolveAcpConnectionOptions } from "./options.ts";
+import { detectExecutable, resolveConnectionOptions } from "./options.ts";
 
 const local = ".local/bin/agy_acp_server";
 const par = ".local/opt/agy-acp/v1/agy_acp_server.par";
@@ -34,7 +34,7 @@ const rows: { name: string; files: Fixture[]; custom?: string; env?: string; exp
 ];
 
 for (const row of rows) {
-  test(`detectAcpExecutable: ${row.name}`, (t) => {
+  test(`detectExecutable: ${row.name}`, (t) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "acp-options-"));
     t.after(() => fs.rmSync(home, { recursive: true, force: true }));
     t.mock.method(os, "homedir", () => home);
@@ -59,7 +59,7 @@ for (const row of rows) {
     }
     if (row.env) process.env.AGY_ACP_BIN = `~/${row.env}`;
 
-    const result = detectAcpExecutable(row.custom ? `~/${row.custom}` : undefined);
+    const result = detectExecutable(row.custom ? `~/${row.custom}` : undefined);
 
     assert.equal(result, row.expected ? path.join(home, row.expected) : undefined);
   });
@@ -79,7 +79,7 @@ for (const source of ["explicit", "environment"] as const) {
     });
     if (source === "environment") process.env.AGY_ACP_BIN = relative;
 
-    assert.equal(detectAcpExecutable(source === "explicit" ? relative : undefined), executable);
+    assert.equal(detectExecutable(source === "explicit" ? relative : undefined), executable);
   });
 }
 
@@ -111,17 +111,17 @@ for (const row of connectionRows) {
       // An unusable home must not obscure executable validation or create directories.
       process.env.GEMINI_HOME = path.join(home, "invalid");
       fs.writeFileSync(process.env.GEMINI_HOME, "not a directory");
-      assert.throws(() => resolveAcpConnectionOptions(row.executable), /executable not found/);
+      assert.throws(() => resolveConnectionOptions(row.executable), /executable not found/);
       assert.deepEqual(fs.readdirSync(home), ["invalid"]);
       return;
     }
 
-    const result = resolveAcpConnectionOptions(row.executable);
+    const result = resolveConnectionOptions(row.executable);
 
     const root = override === "~/custom" ? path.join(home, "custom") : override || path.join(home, ".gemini");
     assert.deepEqual(result, { executable: row.executable, cwd: path.join(root, "antigravity-acp"), ...(process.platform === "linux" ? { args: ["--uid="] } : {}) });
     assert.notEqual(result.cwd, process.cwd());
     assert.ok(fs.statSync(result.cwd).isDirectory());
-    assert.deepEqual(resolveAcpConnectionOptions(row.executable), result);
+    assert.deepEqual(resolveConnectionOptions(row.executable), result);
   });
 }

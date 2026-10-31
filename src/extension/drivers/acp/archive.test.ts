@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, stat, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { extractAcpArchive } from "./archive.ts";
+import { extractArchive } from "./archive.ts";
 import { writeZipFixture, type ZipFixtureEntry } from "./archive-fixture.ts";
 
 const rejected: { name: string; entries: ZipFixtureEntry[]; error: RegExp }[] = [
@@ -26,7 +26,7 @@ for (const row of rejected) {
     t.after(() => rm(temp, { recursive: true, force: true }));
     const archive = path.join(temp, "test.zip");
     await writeZipFixture(archive, row.entries);
-    await assert.rejects(extractAcpArchive(archive, path.join(temp, "out")), row.error);
+    await assert.rejects(extractArchive(archive, path.join(temp, "out")), row.error);
   });
 }
 
@@ -42,7 +42,7 @@ test("ZIP extraction preserves full layout and Unix modes without special permis
     { name: "empty/" },
     { name: "executable", data: "not a real executable", mode: 0o107555 },
   ]);
-  await extractAcpArchive(archive, destination);
+  await extractArchive(archive, destination);
   assert.equal(await readFile(path.join(destination, "app/nested/.hidden"), "utf8"), "ok");
   assert.equal((await stat(path.join(destination, "app/nested/.hidden"))).mode & 0o777, 0o640);
   assert.equal((await stat(path.join(destination, "app"))).mode & 0o777, 0o750);
@@ -70,7 +70,7 @@ for (const during of [false, true]) {
       }, 1);
       t.after(() => clearInterval(timer));
     } else controller.abort(reason);
-    await assert.rejects(extractAcpArchive(archive, destination, controller.signal), (error) => error === reason);
+    await assert.rejects(extractArchive(archive, destination, controller.signal), (error) => error === reason);
     if (during) assert.ok((await stat(path.join(destination, "large"))).size < size);
   });
 }

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { acpDistributionName, resolveAcpRelease } from "./release.ts";
+import { distributionName, resolveRelease } from "./release.ts";
 
 const registry = JSON.parse(readFileSync(new URL("./registry.json", import.meta.url), "utf8")) as {
   id: string;
@@ -23,7 +23,7 @@ test("resolves pinned official ACP releases by platform and architecture", () =>
 
   for (const row of cases) {
     const entry = registry.distribution.binary[row.key]!;
-    const release = resolveAcpRelease(row.platform, row.arch);
+    const release = resolveRelease(row.platform, row.arch);
     assert.deepEqual(release, {
       version: registry.version,
       platform: `${row.platform}-${row.arch}`,
@@ -74,8 +74,8 @@ for (const row of [
     await writeFile(path.join(directory, "registry.json"), JSON.stringify(row.snapshot));
     const isolated = await import(pathToFileURL(path.join(directory, "release.ts")).href) as typeof import("./release.ts");
 
-    if ("error" in row) assert.throws(() => isolated.resolveAcpRelease("linux", "x64"), row.error);
-    else assert.deepEqual(isolated.resolveAcpRelease("linux", "x64"), row.expected);
+    if ("error" in row) assert.throws(() => isolated.resolveRelease("linux", "x64"), row.error);
+    else assert.deepEqual(isolated.resolveRelease("linux", "x64"), row.expected);
   });
 }
 
@@ -90,7 +90,7 @@ test("derives safe distribution names from archive filenames", () => {
   ];
 
   for (const row of cases) {
-    assert.equal(acpDistributionName({ url: row.url }), row.expected);
+    assert.equal(distributionName({ url: row.url }), row.expected);
   }
 });
 
@@ -102,7 +102,7 @@ test("rejects unsafe or non-ZIP archive filenames", () => {
     "https://example.test/%2e%2e.zip",
     "https://example.test/?archive.zip",
   ];
-  for (const url of cases) assert.throws(() => acpDistributionName({ url }));
+  for (const url of cases) assert.throws(() => distributionName({ url }));
 });
 
 test("rejects unsupported platform and architecture combinations", () => {
@@ -114,6 +114,6 @@ test("rejects unsupported platform and architecture combinations", () => {
   ] as const;
 
   for (const row of cases) {
-    assert.throws(() => resolveAcpRelease(row.platform, row.arch), row.message);
+    assert.throws(() => resolveRelease(row.platform, row.arch), row.message);
   }
 });

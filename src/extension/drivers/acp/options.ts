@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { prepareDriverCwd } from "../cwd.ts";
 import { expandHome } from "../../shared/paths.ts";
-import type { AcpConnectionOptions } from "./connection.ts";
+import type { ConnectionOptions } from "./connection.ts";
 
 function isExecutableFile(filepath: string): boolean {
   try {
@@ -15,7 +15,7 @@ function isExecutableFile(filepath: string): boolean {
   }
 }
 
-export function detectAcpExecutable(customPath?: string): string | undefined {
+export function detectExecutable(customPath?: string): string | undefined {
   if (customPath?.trim()) {
     const expanded = path.resolve(expandHome(customPath));
     if (isExecutableFile(expanded)) return expanded;
@@ -31,7 +31,7 @@ export function detectAcpExecutable(customPath?: string): string | undefined {
   return undefined;
 }
 
-export function resolveAcpEffort(model: Model<any>, options: SimpleStreamOptions | undefined): string | undefined {
+export function resolveEffort(model: Model<any>, options: SimpleStreamOptions | undefined): string | undefined {
   const selection = options as (SimpleStreamOptions & { reasoningEffort?: unknown; thinkingLevel?: unknown }) | undefined;
   const effort = selection?.reasoningEffort ?? selection?.reasoning ?? selection?.thinkingLevel;
   if (effort === undefined) return undefined;
@@ -40,7 +40,7 @@ export function resolveAcpEffort(model: Model<any>, options: SimpleStreamOptions
   return effort;
 }
 
-export function resolveAcpConnectionOptions(executable?: string): AcpConnectionOptions {
+export function resolveConnectionOptions(executable?: string): ConnectionOptions {
   if (!executable?.trim()) throw new Error("Antigravity ACP executable not found; retry ACP preparation or set AGY_ACP_BIN");
 
   return { executable, cwd: prepareDriverCwd("acp"), ...(process.platform === "linux" ? { args: ["--uid="] } : {}) };

@@ -1,4 +1,4 @@
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";

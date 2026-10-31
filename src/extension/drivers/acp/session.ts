@@ -1,31 +1,31 @@
 import * as acp from "@agentclientprotocol/sdk";
 import type { McpLaunchDescriptor } from "../../bridge/mcp-launch.ts";
-import { AcpConnection, type AcpConnectionOptions } from "./connection.ts";
+import { Connection, type ConnectionOptions } from "./connection.ts";
 
-export interface AcpSessionOptions extends Omit<AcpConnectionOptions, "onUpdate" | "onPermission"> {
-  mcp: McpLaunchDescriptor;
+export interface SessionOptions extends Omit<ConnectionOptions, "onUpdate" | "onPermission"> {
+  mcp?: McpLaunchDescriptor;
   model: string;
   effort?: string;
   sessionId?: string;
   systemPrompt?: string;
   onUpdate: (notification: acp.SessionNotification) => void | Promise<void>;
-  onPermission?: AcpConnectionOptions["onPermission"];
+  onPermission?: ConnectionOptions["onPermission"];
 }
 
 /** Owns one native prompt across any number of Pi tool handoffs. */
-export class AcpSession {
-  private readonly connection: AcpConnection;
-  private readonly options: AcpSessionOptions;
+export class Session {
+  private readonly connection: Connection;
+  private readonly options: SessionOptions;
   private sessionId: string | undefined;
   private preparing = true;
   private preparation: Promise<void> | undefined;
   private activePrompt: Promise<acp.PromptResponse> | undefined;
   private configOptions: acp.SessionConfigOption[] = [];
 
-  constructor(options: AcpSessionOptions) {
+  constructor(options: SessionOptions) {
     this.options = options;
     const onRead = options.onRead;
-    this.connection = new AcpConnection({
+    this.connection = new Connection({
       ...options,
       ...(onRead ? { onRead: (request: acp.ReadTextFileRequest, signal: AbortSignal) => {
         if (this.preparing || request.sessionId !== this.sessionId || !this.activePrompt) {
@@ -78,7 +78,7 @@ export class AcpSession {
       }
       const params: acp.NewSessionRequest = {
         cwd: this.options.cwd,
-        mcpServers: [{ name: "pi-agy-bridge_pi", command: this.options.mcp.command, args: this.options.mcp.args, env: [] }],
+        mcpServers: this.options.mcp ? [{ name: "pi-agy-bridge_pi", command: this.options.mcp.command, args: this.options.mcp.args, env: [] }] : [],
         _meta: { antigravity: {
           enabledTools: [],
           ...(this.options.systemPrompt !== undefined ? { systemPrompt: { append: this.options.systemPrompt } } : {}),

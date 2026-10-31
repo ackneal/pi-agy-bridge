@@ -1,17 +1,17 @@
 import * as acp from "@agentclientprotocol/sdk";
 import type { ProviderAuthInteraction } from "@earendil-works/pi-ai";
-import { newDiscoverySession, withAcpDiscovery, type AcpDiscoveryOptions } from "./discovery.ts";
+import { newDiscoverySession, withDiscovery, type DiscoveryOptions } from "./discovery.ts";
 
-export interface AcpAuthenticationBackend {
+export interface AuthenticationBackend {
   probe(signal: AbortSignal): Promise<boolean>;
   login(interaction: ProviderAuthInteraction): Promise<void>;
 }
 
-export function createAcpAuthenticationBackend(options: AcpDiscoveryOptions): AcpAuthenticationBackend {
+export function createAuthenticationBackend(options: DiscoveryOptions): AuthenticationBackend {
   return {
     async probe(signal) {
       try {
-        await withAcpDiscovery({ ...options, allowInteractiveAuthentication: false }, signal, async (connection) => {
+        await withDiscovery({ ...options, allowInteractiveAuthentication: false }, signal, async (connection) => {
           await newDiscoverySession(connection, options.cwd);
         });
         return true;
@@ -22,7 +22,7 @@ export function createAcpAuthenticationBackend(options: AcpDiscoveryOptions): Ac
       }
     },
     async login(interaction) {
-      await withAcpDiscovery({ ...options, allowInteractiveAuthentication: true }, interaction.signal, async (connection, initialized) => {
+      await withDiscovery({ ...options, allowInteractiveAuthentication: true }, interaction.signal, async (connection, initialized) => {
         const methods = initialized.authMethods ?? [];
         if (methods.length) {
           // Selection requires explicit consent, even when the server offers just one method.

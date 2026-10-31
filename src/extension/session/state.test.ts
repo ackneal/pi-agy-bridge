@@ -13,7 +13,7 @@ import type { BridgeIPC } from "../bridge/ipc.ts";
 function runtime(isRunning: boolean): DriverSession {
   return {
     driver: "cli", isRunning,
-    onRuntimeEvent: () => () => {}, formatContextUpdate: () => "",
+    onRuntimeEvent: () => () => {}, serializeContextUpdate: () => "",
     submit: async () => {}, abort: async () => {},
   };
 }

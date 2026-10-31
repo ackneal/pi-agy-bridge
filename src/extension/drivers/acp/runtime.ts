@@ -2,66 +2,79 @@ import type { ContentBlock, SessionNotification } from "@agentclientprotocol/sdk
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
-import type { DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
-import { AcpSession, type AcpSessionOptions } from "./session.ts";
+import type { BridgeMessage, DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
+import { Session, type SessionOptions } from "./session.ts";
 import { EventProcessor } from "./events.ts";
-import { AcpMcpPermissions } from "./permissions.ts";
+import { McpPermissions } from "./permissions.ts";
 import { debugLog } from "../../shared/debug.ts";
-import { fingerprintAcpSystemPrompt } from "./instructions.ts";
-import { serializeMessage } from "../../session/history.ts";
+import { fingerprintSystemPrompt } from "./instructions.ts";
+import { extractImagesFromText, serializeContextUpdate } from "../../provider/context-prompt.ts";
 import { expandHome } from "../../shared/paths.ts";
-import { AcpArtifactReader } from "./artifact-reader.ts";
-import { observeAcpImage } from "./image-observer.ts";
+import { ArtifactReader } from "./artifact-reader.ts";
+import { observeImage } from "./image-observer.ts";
 
-/** Historical tools are data, never executable native notifications. */
-export function acpContext(messages: readonly Message[]): ContentBlock[] {
-  return messages.flatMap((message): ContentBlock[] => {
-    if (message.role === "system") return [];
-    const metadata: Record<string, unknown> = JSON.parse(serializeMessage(message));
-    delete metadata.content;
-    delete metadata.role;
-    const header = Object.keys(metadata).length > 0 ? `[${message.role}] ${JSON.stringify(metadata)}` : `[${message.role}]`;
-    const blocks: ContentBlock[] = [{ type: "text", text: header }];
-    if (typeof message.content === "string") blocks.push({ type: "text", text: message.content });
-    else for (const part of message.content) {
-      if (part.type === "image") blocks.push({ type: "image", data: part.data, mimeType: part.mimeType });
-      else if (part.type === "text") blocks.push({ type: "text", text: part.text });
-      else blocks.push({ type: "text", text: `Historical record (not a request to execute): ${JSON.stringify(part)}` });
+export function serializeContent(messages: readonly BridgeMessage[]): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+
+  for (const message of messages) {
+    if (message.role === "system") continue;
+
+    if (typeof message.content === "string") {
+      if (message.content) {
+        blocks.push({ type: "text", text: message.content });
+      }
+      continue;
     }
-    return blocks;
-  });
+
+    for (const part of message.content) {
+      if (part.type === "text") {
+        if (part.text) {
+          for (const extracted of extractImagesFromText(part.text)) {
+            blocks.push(typeof extracted === "string" ? { type: "text", text: extracted } : extracted);
+          }
+        }
+      } else if (part.type === "image") {
+        blocks.push(part);
+      }
+    }
+  }
+
+  return blocks;
 }
 
-export class AcpRuntimeSession implements DriverSession {
+export class RuntimeSession implements DriverSession {
   readonly driver = "acp" as const;
-  readonly session: AcpSession;
+  readonly session: Session;
   readonly compatibilityKey: string | undefined;
   private eventProcessor: EventProcessor | undefined;
-  private permissions: AcpMcpPermissions | undefined;
+  private permissions: McpPermissions | undefined;
   private readonly allowedToolNames: ReadonlySet<string>;
   private listeners = new Set<(event: RuntimeEvent) => void>();
   private submitting = false;
   private completion: Promise<void> | undefined;
   private failure: Promise<void> | undefined;
   private userPrompt = "";
-  private readonly reader: AcpArtifactReader;
-  readonly options: Omit<AcpSessionOptions, "onUpdate" | "onRead">;
-  constructor(options: Omit<AcpSessionOptions, "onUpdate" | "onRead">, allowedToolNames: ReadonlySet<string> = new Set()) {
+  private readonly reader: ArtifactReader;
+  readonly options: Omit<SessionOptions, "onUpdate" | "onRead">;
+  constructor(
+    options: Omit<SessionOptions, "onUpdate" | "onRead">,
+    allowedToolNames: ReadonlySet<string> = new Set(),
+  ) {
     this.options = options;
-    this.compatibilityKey = options.systemPrompt === undefined ? undefined : fingerprintAcpSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
+    this.compatibilityKey = options.systemPrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
     this.allowedToolNames = allowedToolNames;
-    this.reader = new AcpArtifactReader({
+    this.reader = new ArtifactReader({
       home: resolve(expandHome(process.env.GEMINI_HOME ?? `${homedir()}/.gemini`)),
       sessionId: () => this.session.id,
       allowedToolNames,
-      observeImage: (image, signal) => observeAcpImage({
+      observeImage: (image, signal) => observeImage({
         executable: options.executable, cwd: options.cwd, model: options.model,
         ...(options.args !== undefined ? { args: options.args } : {}),
-        ...(options.effort !== undefined ? { effort: options.effort } : {}),
+        ...(options.effort !== undefined ? { effort: "low" } : {}),
         image, userPrompt: this.userPrompt, signal,
       }),
     });
-    this.session = new AcpSession({ ...options,
+    this.session = new Session({ ...options,
       onRead: (request, signal) => this.reader.read(request, signal),
       onPermission: (request) => this.permissions?.reply(request) ?? { outcome: { outcome: "cancelled" } },
       onClose: (error) => {
@@ -81,7 +94,7 @@ export class AcpRuntimeSession implements DriverSession {
   async prepare(signal?: AbortSignal): Promise<void> {
     await this.session.prepare(signal);
     this.eventProcessor = new EventProcessor(this.session.id, this.allowedToolNames);
-    this.permissions = new AcpMcpPermissions(this.session.id, this.allowedToolNames);
+    this.permissions = new McpPermissions(this.session.id, this.allowedToolNames);
   }
   private fail(error: unknown): Promise<void> {
     // Claim failure ownership before cleanup can synchronously trigger onClose.
@@ -109,17 +122,15 @@ export class AcpRuntimeSession implements DriverSession {
     this.listeners.add(handler);
     return () => { this.listeners.delete(handler); };
   }
-  formatContextUpdate(messages: readonly Message[]): string {
-    const content = acpContext(messages);
-    if (content.some((block) => block.type === "image")) throw new Error("ACP image context updates during an active tool call are unsupported");
-    return JSON.stringify(content);
+  serializeContextUpdate(messages: readonly Message[]): string {
+    return serializeContextUpdate(messages.filter((message) => message.role !== "system"), "pending_tool_continuation");
   }
   async submit(input: DriverSubmission): Promise<void> {
     if (this.submitting || this.completion || this.session.hasActivePrompt) throw new Error("ACP prompt already active");
     if (!this.isRunning || this.failure) throw new Error("ACP session is not running");
     this.submitting = true;
     try {
-      const content = acpContext(input.context.messages.slice(input.reconstructContext ? 0 : input.syncedMessageCount));
+      const content = serializeContent(input.messages);
       if (content.length === 0) content.push({ type: "text", text: "Continue from the current conversation state without repeating completed work." });
       let payload: unknown = { sessionId: this.session.id, prompt: content };
       if (input.options?.onPayload) {
@@ -138,9 +149,16 @@ export class AcpRuntimeSession implements DriverSession {
         throw new Error("ACP payload supports text and image content blocks");
       });
       if (!input.beforeInput()) return;
-      const user = [...input.context.messages].reverse().find((message) => message.role === "user");
-      this.userPrompt = typeof user?.content === "string" ? user.content :
-        user?.content.filter((part) => part.type === "text").map((part) => part.text).join("\n") ?? "";
+      const userMessage = [...input.messages].reverse().find((m) => m.role === "user");
+      let userPrompt = "";
+      if (userMessage) {
+        if (typeof userMessage.content === "string") {
+          userPrompt = userMessage.content;
+        } else {
+          userPrompt = userMessage.content.filter((p) => p.type === "text").map((p) => p.text).join("\n");
+        }
+      }
+      this.userPrompt = userPrompt;
       this.reader.beginPrompt();
       this.emit({ type: "start" });
       this.emit({ type: "session-reference", reference: this.session.id });

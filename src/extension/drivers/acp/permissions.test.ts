@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { RequestPermissionRequest, SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
-import { AcpMcpPermissions } from "./permissions.ts";
+import { McpPermissions } from "./permissions.ts";
 
 function call(patch: Partial<ToolCallUpdate> = {}): ToolCallUpdate {
   return { toolCallId: "id", title: "pi-agy-bridge_pi_custom", kind: "other", status: "pending",
     _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "custom" } },
     rawInput: { arguments: { arbitrary: [null, 17, { nested: true }], unrestricted: "anything" } }, ...patch };
 }
-function observe(gate: AcpMcpPermissions, update = call(), sessionId = "session"): void {
+function observe(gate: McpPermissions, update = call(), sessionId = "session"): void {
   const notification: SessionNotification = { sessionId, update: { ...update, sessionUpdate: "tool_call_update" } };
   gate.observe(notification);
 }
@@ -16,7 +16,7 @@ function request(patch: Partial<RequestPermissionRequest> = {}): RequestPermissi
   return { sessionId: "session", toolCall: call(), options: [{ kind: "allow_once", optionId: "once", name: "Once" }], ...patch };
 }
 
-type Case = { name: string; arrange?: (gate: AcpMcpPermissions) => void; request?: RequestPermissionRequest; allowed?: boolean };
+type Case = { name: string; arrange?: (gate: McpPermissions) => void; request?: RequestPermissionRequest; allowed?: boolean };
 const cases: Case[] = [
   { name: "arbitrary declared MCP args", allowed: true },
   { name: "undefined kind", request: request({ toolCall: { toolCallId: "id", rawInput: call().rawInput } }), allowed: true },
@@ -106,7 +106,7 @@ const cases: Case[] = [
   } })),
 ];
 for (const row of cases) test(row.name, () => {
-  const gate = new AcpMcpPermissions("session", new Set(["custom"]));
+  const gate = new McpPermissions("session", new Set(["custom"]));
   if (row.arrange) row.arrange(gate); else observe(gate);
   assert.deepEqual(gate.reply(row.request ?? request()), { outcome: row.allowed
     ? { outcome: "selected", optionId: "once" } : { outcome: "cancelled" } });

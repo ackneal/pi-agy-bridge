@@ -4,9 +4,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ensureAcpInstallation } from "./installation.ts";
+import { ensureInstallation } from "./installation.ts";
 import type { DriverInstallationProgress } from "../types.ts";
-import { acpDistributionName, resolveAcpRelease } from "./release.ts";
+import { distributionName, resolveRelease } from "./release.ts";
 import { writeZipFixture } from "./archive-fixture.ts";
 
 for (const scenario of ["interrupted body", "stalled headers", "cancelled download"] as const) {
@@ -19,7 +19,7 @@ for (const scenario of ["interrupted body", "stalled headers", "cancelled downlo
       { name: "localharness_external", data: "companion", mode: 0o100555 },
     ]);
     const bytes = await fs.readFile(archive);
-    const release = { ...resolveAcpRelease(), sha256: createHash("sha256").update(bytes).digest("hex"), url: "https://fixture.invalid/agy-acp-server-1.4.3-linux-x86_64.zip" };
+    const release = { ...resolveRelease(), sha256: createHash("sha256").update(bytes).digest("hex"), url: "https://fixture.invalid/agy-acp-server-1.4.3-linux-x86_64.zip" };
     const root = path.join(await fs.realpath(home), "pi-agy-bridge", "acp");
     let entered!: () => void;
     const started = new Promise<void>((resolve) => { entered = resolve; });
@@ -37,7 +37,7 @@ for (const scenario of ["interrupted body", "stalled headers", "cancelled downlo
       });
     };
     if (scenario === "stalled headers") t.mock.timers.enable({ apis: ["setTimeout"] });
-    const attempt = ensureAcpInstallation({ agentHome: home, release, fetch: fetcher, signal: controller.signal, onProgress: (event) => events.push(event) });
+    const attempt = ensureInstallation({ agentHome: home, release, fetch: fetcher, signal: controller.signal, onProgress: (event) => events.push(event) });
     const rejected = assert.rejects(attempt, scenario === "interrupted body" ? /connection interrupted/ : scenario === "stalled headers" ? /stalled for 60 seconds/ : /cancel download/);
     await started;
     if (scenario === "stalled headers") t.mock.timers.tick(60_000);
@@ -46,8 +46,8 @@ for (const scenario of ["interrupted body", "stalled headers", "cancelled downlo
     if (scenario === "stalled headers") t.mock.timers.reset();
     assert.equal(events.at(-1)?.phase, scenario === "cancelled download" ? "cancelled" : "error");
     assert.ok(!events.some((event) => event.phase === "extract"));
-    await assert.rejects(fs.access(path.join(root, acpDistributionName(release))));
-    const next = await ensureAcpInstallation({ agentHome: home, release, fetch: async () => new Response(bytes) });
+    await assert.rejects(fs.access(path.join(root, distributionName(release))));
+    const next = await ensureInstallation({ agentHome: home, release, fetch: async () => new Response(bytes) });
     assert.equal(await fs.readFile(next.executable, "utf8"), "fixture");
   });
 }

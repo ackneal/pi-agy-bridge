@@ -61,7 +61,7 @@ describe("RuntimeSessionSync history regression", () => {
       const live = new LiveSession("pi-session-history");
       const runtime: DriverSession = {
         driver: "cli", isRunning: true, onRuntimeEvent: () => () => {},
-        formatContextUpdate: () => "", submit: async () => {}, abort: async () => {},
+        serializeContextUpdate: () => "", submit: async () => {}, abort: async () => {},
       };
       live.setSession(runtime, "sync-key", undefined, "conversation");
       const sync = new RuntimeSessionSync();

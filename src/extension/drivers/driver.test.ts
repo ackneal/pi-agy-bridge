@@ -4,8 +4,8 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import test from "node:test";
 import type { DriverId } from "./types.ts";
-import { AcpDriver } from "./acp/driver.ts";
-import { CliDriver } from "./cli/driver.ts";
+import { Driver as AcpDriver } from "./acp/driver.ts";
+import { Driver as CliDriver } from "./cli/driver.ts";
 import { createBridgeDriver } from "./driver.ts";
 
 for (const scenario of [

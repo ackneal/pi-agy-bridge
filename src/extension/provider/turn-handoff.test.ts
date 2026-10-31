@@ -34,7 +34,7 @@ test("delayed submission failure terminates the next turn reusing the same runti
       handler = next;
       return () => { if (handler === next) handler = undefined; };
     },
-    formatContextUpdate: () => "",
+    serializeContextUpdate: () => "",
     submit: async (input: DriverSubmission) => {
       assert.equal(input.beforeInput(), true);
       submissions++;
@@ -67,8 +67,8 @@ test("delayed submission failure terminates the next turn reusing the same runti
       signal: undefined, sessionVersion: "cli:v1",
     });
     turn.attach({ proc, mcpServer });
-    const submitted = turn.send({ model, context: { messages }, options: undefined,
-      reconstructContext: false, syncedMessageCount: messages.length }).catch((error) => turn.fail(error));
+    const submitted = turn.send({ model, options: undefined,
+      messages: [{ role: "user", content: "test" }] }).catch((error) => turn.fail(error));
     sending.push(submitted);
     return { adapter, submitted };
   };

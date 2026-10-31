@@ -11,7 +11,7 @@ import { defaultProviderAuthContext, type ApiKeyCredential } from "@earendil-wor
 import { parseModelsOutput } from "../discovery/models.ts";
 import { AgyAuthentication, createAgyBridgeCredential, isAgyBridgeEnabled } from "./auth.ts";
 import { Bridge } from "./provider.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 
 const noProbeBackend: DriverAuthentication = {
   label: "Antigravity CLI",

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, realpath, mkdir, writeFile, rm, symlink, link, truncate, open, rename, type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { AcpArtifactReader } from "./artifact-reader.ts";
+import { ArtifactReader } from "./artifact-reader.ts";
 
 async function fixture() {
   const home = await realpath(await mkdtemp(path.join(os.tmpdir(), "acp-reader-")));
@@ -13,7 +13,7 @@ async function fixture() {
   await mkdir(steps, { recursive: true });
   await mkdir(metadata, { recursive: true });
   const observed: Array<{ data: string; mimeType: string }> = [];
-  const reader = new AcpArtifactReader({ home, sessionId: () => "session", allowedToolNames: new Set(["read"]), observeImage: async image => { observed.push(image); return "visible text"; } });
+  const reader = new ArtifactReader({ home, sessionId: () => "session", allowedToolNames: new Set(["read"]), observeImage: async image => { observed.push(image); return "visible text"; } });
   reader.beginPrompt();
   const read = (file: string, line?: number, limit?: number, signal = new AbortController().signal) => reader.read({ sessionId: "session", path: file, line: line ?? null, limit: limit ?? null }, signal);
   return { home, root, steps, metadata, reader, read, observed, cleanup: async () => { await reader.endPrompt(); await rm(home, { recursive: true, force: true }); } };
@@ -61,7 +61,7 @@ for (const row of [
 
 test("session callback identity and invalid segments", async () => {
   for (const session of ["../session", "", "other"]) {
-    const reader = new AcpArtifactReader({ home: "/tmp", sessionId: () => session, allowedToolNames: new Set(), observeImage: async () => "" });
+    const reader = new ArtifactReader({ home: "/tmp", sessionId: () => session, allowedToolNames: new Set(), observeImage: async () => "" });
     reader.beginPrompt();
     await assert.rejects(reader.read({ sessionId: "session", path: "/tmp/file" }, new AbortController().signal), /Invalid artifact session/);
     await reader.endPrompt();
@@ -119,7 +119,7 @@ test("metadata stays text and validates only JSON object", async () => {
 test("registered tool schemas do not consume artifact file slots", async () => {
   const f = await fixture();
   const tools = Array.from({ length: 10 }, (_, index) => `tool${index}`);
-  const reader = new AcpArtifactReader({
+  const reader = new ArtifactReader({
     home: f.home, sessionId: () => "session", allowedToolNames: new Set(tools),
     observeImage: async () => { throw new Error("Metadata must not invoke the observer"); },
   });
@@ -166,7 +166,7 @@ test("a new prompt cannot take ownership before the old observer cleanup settles
   let started!: () => void;
   const observing = new Promise<void>(resolve => { started = resolve; });
   let cleaned = false;
-  const reader = new AcpArtifactReader({
+  const reader = new ArtifactReader({
     home: f.home, sessionId: () => "session", allowedToolNames: new Set(),
     observeImage: async (_, signal) => {
       started();
@@ -218,7 +218,7 @@ test("cancellation aborts observer and denies new work; errors propagate without
       let observedSignal: AbortSignal | undefined;
       let calls = 0;
       let cleaned = false;
-      const reader = new AcpArtifactReader({ home: f.home, sessionId: () => "session", allowedToolNames: new Set(), observeImage: async (_, signal) => {
+      const reader = new ArtifactReader({ home: f.home, sessionId: () => "session", allowedToolNames: new Set(), observeImage: async (_, signal) => {
         calls++;
         observedSignal = signal;
         started();

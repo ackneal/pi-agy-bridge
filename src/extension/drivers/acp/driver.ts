@@ -3,33 +3,34 @@ import type { AgyUsage } from "../../runtime/usage.ts";
 import type { BridgeDriver, DriverAuthentication, DriverInstallationProgress, PrepareDriverInput } from "../types.ts";
 import { defaultModelCatalog } from "../../discovery/model-metadata.ts";
 import { prepareDriverCwd } from "../cwd.ts";
-import { createAcpAuthenticationBackend } from "./auth.ts";
-import { discoverAcpModels } from "./discovery.ts";
-import { detectAcpExecutable, resolveAcpConnectionOptions, resolveAcpEffort } from "./options.ts";
-import { prepareAcpRuntime } from "./prepare.ts";
-import { ensureAcpInstallation, findAcpInstallation } from "./installation.ts";
+import { createAuthenticationBackend } from "./auth.ts";
+import { discoverModels } from "./discovery.ts";
+import { detectExecutable, resolveConnectionOptions, resolveEffort } from "./options.ts";
+import { prepareRuntime } from "./prepare.ts";
+import { SessionMode } from "../types.ts";
+import { ensureInstallation, findInstallation } from "./installation.ts";
 
-export class AcpDriver implements BridgeDriver {
+export class Driver implements BridgeDriver {
   readonly id = "acp";
   readonly label = "Antigravity ACP";
   readonly sessionVersion = "acp:v1";
   readonly initialModels = defaultModelCatalog();
   readonly authentication: DriverAuthentication;
   onInstallationProgress: ((progress: DriverInstallationProgress) => void) | undefined;
-  private readonly resolveInstallation: typeof ensureAcpInstallation;
+  private readonly resolveInstallation: typeof ensureInstallation;
 
-  constructor(resolveInstallation: typeof ensureAcpInstallation = ensureAcpInstallation) {
+  constructor(resolveInstallation: typeof ensureInstallation = ensureInstallation) {
     this.resolveInstallation = resolveInstallation;
     this.authentication = {
       label: this.label,
       probe: async (signal) => {
         const options = await this.connectionOptions(signal);
-        return createAcpAuthenticationBackend(options).probe(signal);
+        return createAuthenticationBackend(options).probe(signal);
       },
       login: async (interaction) => {
         const options = await this.connectionOptions(interaction.signal,
           (progress) => interaction.notify({ type: "progress", message: progress.message }));
-        return createAcpAuthenticationBackend(options).login(interaction);
+        return createAuthenticationBackend(options).login(interaction);
       },
     };
   }
@@ -39,9 +40,9 @@ export class AcpDriver implements BridgeDriver {
     if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("Antigravity ACP requires macOS or Linux; native Windows is not supported");
     const override = process.env.AGY_ACP_BIN?.trim();
     if (override) {
-      const executable = detectAcpExecutable();
+      const executable = detectExecutable();
       if (!executable) throw new Error(`AGY_ACP_BIN is not an executable file: ${override}. Fix its path and permissions, or unset it to use the managed ACP installation.`);
-      return resolveAcpConnectionOptions(executable);
+      return resolveConnectionOptions(executable);
     }
 
     const launch = await this.resolveInstallation({
@@ -52,15 +53,15 @@ export class AcpDriver implements BridgeDriver {
       },
     });
     signal?.throwIfAborted();
-    return { ...resolveAcpConnectionOptions(launch.executable), args: launch.args };
+    return { ...resolveConnectionOptions(launch.executable), args: launch.args };
   }
 
   detectExecutable(): string | undefined {
-    return detectAcpExecutable() ?? (process.env.AGY_ACP_BIN?.trim() ? undefined : findAcpInstallation());
+    return detectExecutable() ?? (process.env.AGY_ACP_BIN?.trim() ? undefined : findInstallation());
   }
 
   validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void {
-    resolveAcpEffort(model, options);
+    resolveEffort(model, options);
   }
 
   async prepareSession(input: PrepareDriverInput) {
@@ -71,11 +72,11 @@ export class AcpDriver implements BridgeDriver {
       resolve: () => this.connectionOptions(input.options?.signal),
     };
     const dependencies = { store: input.store, sync: input.sync, sessionVersion: this.sessionVersion };
-    return prepareAcpRuntime(input.model, input.context, input.tools, input.options, connection, dependencies, input.session, input.preparationId);
+    return prepareRuntime(input.model, input.context, input.messages, input.tools, input.options, connection, dependencies, input.session, input.preparationId, input.mode === SessionMode.Standalone);
   }
 
   async discoverModels(signal: AbortSignal) {
-    return discoverAcpModels(await this.connectionOptions(signal), signal);
+    return discoverModels(await this.connectionOptions(signal), signal);
   }
 
   usage(_signal: AbortSignal): Promise<AgyUsage | undefined> {

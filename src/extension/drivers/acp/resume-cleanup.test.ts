@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BridgeIPC } from "../../bridge/ipc.ts";
 import { LiveSession } from "../../session/session.ts";
-import { prepareAcpRuntime } from "./prepare.ts";
-import { AcpRuntimeSession } from "./runtime.ts";
+import { prepareRuntime } from "./prepare.ts";
+import { RuntimeSession } from "./runtime.ts";
 
 function barrier() {
   let release!: () => void;
@@ -35,11 +35,11 @@ for (const scenario of ["rebuild", "cleanup failure", "cancel"] as const) {
     const events = async (): Promise<{ event: string; pid: number }[]> =>
       (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
     let bridge: BridgeIPC | undefined;
-    let failed: AcpRuntimeSession | undefined;
+    let failed: RuntimeSession | undefined;
     let starts = 0;
     let deletes = 0;
     const close = BridgeIPC.prototype.close;
-    const abort = AcpRuntimeSession.prototype.abort;
+    const abort = RuntimeSession.prototype.abort;
     t.mock.method(BridgeIPC.prototype, "start", async function (this: BridgeIPC) {
       starts++;
       if (starts === 2) {
@@ -67,7 +67,7 @@ for (const scenario of ["rebuild", "cleanup failure", "cancel"] as const) {
       }
       return close.call(this);
     });
-    t.mock.method(AcpRuntimeSession.prototype, "abort", async function (this: AcpRuntimeSession) {
+    t.mock.method(RuntimeSession.prototype, "abort", async function (this: RuntimeSession) {
       if (!failed) {
         failed = this;
         abortEntered.release();
@@ -75,8 +75,8 @@ for (const scenario of ["rebuild", "cleanup failure", "cancel"] as const) {
       }
       await abort.call(this);
     });
-    const pending = prepareAcpRuntime({ id: "selected" } as Parameters<typeof prepareAcpRuntime>[0],
-      { messages: [] }, [], { signal: controller.signal }, {
+    const pending = prepareRuntime({ id: "selected" } as Parameters<typeof prepareRuntime>[0],
+      { messages: [] }, [], [], { signal: controller.signal }, {
         cwd: process.cwd(),
         resolve: async () => ({
           executable: process.execPath, cwd: process.cwd(),

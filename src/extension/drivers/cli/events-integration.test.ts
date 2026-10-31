@@ -3,14 +3,14 @@ import test, { describe, it } from "node:test";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { AgyEvent, AgyResultEvent } from "../../shared/types.ts";
 import { PiRuntimeOutput, type PiRuntimeOutputOptions } from "../../provider/output.ts";
-import { CliEventTranslator, type ConversationErrorState } from "./events.ts";
+import { EventTranslator, type ConversationErrorState } from "./events.ts";
 
 class TranslatorOutput extends PiRuntimeOutput {
-  private readonly translator: CliEventTranslator;
+  private readonly translator: EventTranslator;
 
   constructor(options: PiRuntimeOutputOptions & { errorState?: ConversationErrorState }) {
     super(options);
-    this.translator = new CliEventTranslator(options);
+    this.translator = new EventTranslator(options);
   }
 
   handleEvent(event: AgyEvent, source: "agy" | "runtime" = "agy"): void {

@@ -31,7 +31,7 @@ function mime(bytes: Buffer): string | undefined {
 
 /** Best-effort identity checks under a trusted local directory owner, not a
  * race-free sandbox against hostile same-UID directory replacement. */
-export class AcpArtifactReader {
+export class ArtifactReader {
   private readonly options: Options;
   private prompt: Prompt | undefined;
 

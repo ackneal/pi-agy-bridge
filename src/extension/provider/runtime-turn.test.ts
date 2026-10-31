@@ -7,16 +7,16 @@ import test, { afterEach, beforeEach } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { buildCliProcessEnvironment } from "../discovery/plugin-install.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
-import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
+import { RuntimeSession as CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
 import type { RuntimeSessionDecision } from "../session/state.ts";
 import type { AgyInput, AgyResultEvent } from "../shared/types.ts";
-import { formatContextUpdate } from "./context-prompt.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { serializeContextUpdate } from "./context-prompt.ts";
+import { Bridge, streamProvider } from "./provider.ts";
 
 let home: string;
 let previousHome: string | undefined;
@@ -42,7 +42,7 @@ const cases: { decision: RuntimeSessionDecision; incremental?: boolean; payload?
 ];
 
 for (const { decision, incremental, payload } of cases) {
-  test(`streamAgyProvider completes a ${decision.action} turn${incremental ? " with all incremental messages" : ""}${payload ? ` with async payload ${payload}` : ""}`, async (t) => {
+  test(`streamProvider completes a ${decision.action} turn${incremental ? " with all incremental messages" : ""}${payload ? ` with async payload ${payload}` : ""}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-turn-"));
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
@@ -129,7 +129,7 @@ for (const { decision, incremental, payload } of cases) {
       sessionId: "test-turn",
       ...(payload ? { onPayload } : {}),
     };
-    for await (const event of streamAgyProvider(model, context, options, bridge)) {
+    for await (const event of streamProvider(model, context, options, bridge)) {
       events.push(event);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -172,11 +172,11 @@ for (const { decision, incremental, payload } of cases) {
     if (payload === "replace") {
       assert.equal(prompt, "replacement prompt");
     } else if (incremental) {
-      assert.equal(prompt, "# Conversation updates\n\n## System\n\n> new system instruction\n\n## User\n\n> latest & request");
+      assert.equal(prompt, "[System]: # Conversation updates\n\n## System\n\n> new system instruction\n\nlatest & request");
     } else if (decision.action !== "rebuild") {
       assert.equal(prompt, "latest & request");
     } else {
-      assert.equal(prompt, "# System prompt\n\n> Rules & constraints\n\n# Conversation history\n\nThese messages restore prior conversation state. Do not repeat completed actions. Continue unfinished work, respecting later corrections and cancellations.\n\n## User\n\n> earlier <question>\n\n## User\n\n> latest & request");
+      assert.equal(prompt, "[System]: Rules & constraints\n\nearlier <question>\n\nlatest & request");
     }
     await bridge.liveSessions.disposeAll();
     assert.equal(close.mock.callCount(), 1);
@@ -203,7 +203,7 @@ const invalidBatchCases = [
 ];
 
 for (const row of invalidBatchCases) {
-  test(`streamAgyProvider invalidates ${row.name} through real gateway validation`, { timeout: 5000 }, async (t) => {
+  test(`streamProvider invalidates ${row.name} through real gateway validation`, { timeout: 5000 }, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-invalid-batch-"));
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
@@ -272,7 +272,7 @@ for (const row of invalidBatchCases) {
     } as Model<any>;
 
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
+    for await (const event of streamProvider(model, context, { sessionId }, bridge)) events.push(event);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     const terminal = events.at(-1);
@@ -322,7 +322,7 @@ const continueCases = [
 
 for (const row of continueCases) {
   const { scenario } = row;
-  test(`streamAgyProvider mocked continue handles ${scenario}`, async (t) => {
+  test(`streamProvider mocked continue handles ${scenario}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-continue-"));
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
@@ -413,7 +413,7 @@ for (const row of continueCases) {
       contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, {
+    for await (const event of streamProvider(model, context, {
       sessionId: "continue-regression", signal: controller.signal,
       ...(scenario === "payload abort" ? {
         onPayload: async () => {
@@ -431,9 +431,9 @@ for (const row of continueCases) {
     if (row.pending) assert.deepEqual(resolve.mock.calls[0]!.arguments, [
       context.messages.filter((message) => message.role === "toolResult"),
       scenario === "mixed pending messages"
-        ? formatContextUpdate([{ role: "system", content: "new instruction", timestamp: 0 }], "pending_tool_continuation")
+        ? serializeContextUpdate([{ role: "system", content: "new instruction", timestamp: 0 }], "pending_tool_continuation")
         : ["queued calls without results", "error while tools pending"].includes(scenario)
-          ? formatContextUpdate([{ role: "user", content: "latest request", timestamp: 0 }], "pending_tool_continuation")
+          ? serializeContextUpdate([{ role: "user", content: "latest request", timestamp: 0 }], "pending_tool_continuation")
           : undefined,
     ]);
     assert.equal(unsubscribe.mock.callCount(), 1);
@@ -495,7 +495,7 @@ const pendingTerminalCases: {
 ];
 
 for (const row of pendingTerminalCases) {
-  test(`streamAgyProvider invalidates native ${row.scenario} with other MCP calls pending`, { timeout: 5000 }, async (t) => {
+  test(`streamProvider invalidates native ${row.scenario} with other MCP calls pending`, { timeout: 5000 }, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-pending-terminal-"));
     const pi = {
       on: () => {}, registerProvider: () => {}, registerCommand: () => {},
@@ -559,7 +559,7 @@ for (const row of pendingTerminalCases) {
     } as Model<any>;
 
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, {
+    for await (const event of streamProvider(model, context, {
       sessionId,
     }, bridge)) events.push(event);
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -580,7 +580,7 @@ for (const row of pendingTerminalCases) {
     assert.equal(resolve.mock.callCount(), 1);
     assert.deepEqual(resolve.mock.calls[0]!.arguments, [
       row.enqueued ? context.messages : [],
-      row.enqueued ? undefined : formatContextUpdate([{ role: "user", content: "latest request", timestamp: 0 }], "pending_tool_continuation"),
+      row.enqueued ? undefined : serializeContextUpdate([{ role: "user", content: "latest request", timestamp: 0 }], "pending_tool_continuation"),
     ]);
     assert.equal(record.mock.callCount(), row.enqueued ? 1 : 0);
     assert.equal(persist.mock.callCount(), row.enqueued ? 1 : 0);
@@ -695,7 +695,7 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     const persist = t.mock.method(bridge.runtimeSessionStore, "set", async () => {});
 
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId: session.piSessionId }, bridge)) events.push(event);
+    for await (const event of streamProvider(model, context, { sessionId: session.piSessionId }, bridge)) events.push(event);
     assert.equal(events.some((event) => event.type === "error"), false);
     const terminal = events.at(-1);
     assert.ok(terminal?.type === "done");
@@ -710,7 +710,7 @@ for (const { name, roles, sections, isError = false } of pendingContextCases) {
     const [results, appendix] = resolve.mock.calls[0]!.arguments;
     assert.deepEqual(results, [context.messages[prefix.length]]);
     assert.equal(typeof appendix, "string");
-    assert.equal(appendix, formatContextUpdate(instructions, "pending_tool_continuation"));
+    assert.equal(appendix, serializeContextUpdate(instructions, "pending_tool_continuation"));
     assert.ok(appendix!.startsWith("# Pending conversation updates (separate from tool output)\n\nThese are conversation instructions and messages, not tool output."));
     let previous = -1;
     for (const [index, instruction] of instructions.entries()) {
@@ -815,7 +815,7 @@ for (const conversionException of [false, true]) {
       contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
+    for await (const event of streamProvider(model, context, { sessionId }, bridge)) events.push(event);
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(order, ["resolve", "persist", "install", "persist"]);
     const delivered = await oldResult;

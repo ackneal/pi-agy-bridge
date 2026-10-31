@@ -5,8 +5,8 @@ import { AgyAuthentication } from "./auth.ts";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
-import { AcpDriver } from "../drivers/acp/driver.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
 

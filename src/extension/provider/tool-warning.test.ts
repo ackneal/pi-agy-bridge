@@ -20,7 +20,7 @@ for (const row of [
     const proc: DriverSession = {
       driver: "acp", isRunning: true,
       onRuntimeEvent(handler) { dispatch = handler; return () => {}; },
-      formatContextUpdate: () => "", submit: async () => {}, abort,
+      serializeContextUpdate: () => "", submit: async () => {}, abort,
     };
     const mcpServer = new BridgeIPC([], session.id, session.resources);
     const close = t.mock.method(mcpServer, "close");

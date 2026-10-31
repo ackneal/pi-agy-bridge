@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
-import { AcpConnection } from "./connection.ts";
+import { Connection } from "./connection.ts";
 
 const [mode, childPidFile, agentPidFile] = process.argv.slice(2);
 if (!mode || !childPidFile || !agentPidFile) throw new Error("Expected host-exit scenario and synthetic PID files");
-const connection = new AcpConnection({
+const connection = new Connection({
   executable: process.execPath,
   cwd: process.cwd(),
   args: ["--experimental-strip-types", fileURLToPath(new URL("./connection-fixture.ts", import.meta.url)),

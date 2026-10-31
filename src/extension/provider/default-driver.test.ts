@@ -1,14 +1,14 @@
 import { beforeEach } from "node:test";
 import { useAuthHomeFixture } from "./auth-home-fixture.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
-import { AcpDriver } from "../drivers/acp/driver.ts";
-import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
+import { useExecutable } from "../drivers/acp/executable-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
-import { AcpConnection } from "../drivers/acp/connection.ts";
+import { Connection as AcpConnection } from "../drivers/acp/connection.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
 
@@ -21,7 +21,7 @@ for (const failure of ["installation", "initialization", "session", "authenticat
       on: () => {}, registerCommand: () => {},
       registerProvider: (registered: Provider) => { provider = registered; },
     } as unknown as ExtensionAPI, new AcpDriver(async () => { throw new Error("synthetic installation failure"); }));
-    useAcpExecutable(t, failure === "installation" ? undefined : process.execPath);
+    useExecutable(t, failure === "installation" ? undefined : process.execPath);
     const start = t.mock.method(AcpConnection.prototype, "start", async () => {
       if (failure === "initialization") throw new Error("synthetic initialization failure");
       return { protocolVersion: acp.PROTOCOL_VERSION };

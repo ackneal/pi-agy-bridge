@@ -41,6 +41,7 @@ describe("Antigravity CLI MCP package", () => {
         "plugin/plugin.json",
         "plugin/mcp_config.json",
         "plugin/agents/pi-bridge.md",
+        "plugin/agents/pi-standalone.md",
       ]) {
         assert.ok(files.includes(required), `missing packed file: ${required}`);
       }

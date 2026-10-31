@@ -11,7 +11,7 @@ export function isRegisteredPiMcpTool(mcp: unknown, allowedToolNames: ReadonlySe
 /** Permits only MCP transport; the Pi gateway still owns execution and policy.
  * Callers must not feed replay notifications into this gate.
  */
-export class AcpMcpPermissions {
+export class McpPermissions {
   private readonly calls = new Map<string, ToolCallUpdate | null>();
   private overflow = false;
 

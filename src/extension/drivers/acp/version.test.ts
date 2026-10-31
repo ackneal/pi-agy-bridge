@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { readAcpVersion } from "./version.ts";
+import { readVersion } from "./version.ts";
 
 type Case = {
   name: string;
@@ -29,7 +29,7 @@ const cases: Case[] = [
 ];
 
 for (const row of cases) {
-  test(`readAcpVersion: ${row.name}`, async (t) => {
+  test(`readVersion: ${row.name}`, async (t) => {
     const directory = await mkdtemp(path.join(tmpdir(), "acp-version-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp server");
@@ -39,9 +39,9 @@ for (const row of cases) {
     }
 
     if (row.errorCode !== undefined) {
-      await assert.rejects(readAcpVersion(executable, row.args ?? []), { code: row.errorCode });
+      await assert.rejects(readVersion(executable, row.args ?? []), { code: row.errorCode });
     } else {
-      assert.equal(await readAcpVersion(executable, row.args ?? []), row.expected);
+      assert.equal(await readVersion(executable, row.args ?? []), row.expected);
     }
   });
 }

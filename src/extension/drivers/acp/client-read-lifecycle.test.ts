@@ -3,9 +3,9 @@ import test from "node:test";
 import { mkdtemp, realpath, mkdir, writeFile, readFile, open, rm, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AcpRuntimeSession } from "./runtime.ts";
-import { AcpSession } from "./session.ts";
-import { AcpConnection } from "./connection.ts";
+import { RuntimeSession } from "./runtime.ts";
+import { Session } from "./session.ts";
+import { Connection } from "./connection.ts";
 import type { DriverSubmission } from "../types.ts";
 
 for (const mode of ["abort", "connection close", "prompt rejection", "payload close"] as const) {
@@ -13,7 +13,7 @@ for (const mode of ["abort", "connection close", "prompt rejection", "payload cl
     const home = await realpath(await mkdtemp(join(tmpdir(), "acp-read-lifecycle-")));
     const previousHome = process.env.GEMINI_HOME;
     process.env.GEMINI_HOME = home;
-    let runtime: AcpRuntimeSession | undefined;
+    let runtime: RuntimeSession | undefined;
     let probe: FileHandle | undefined;
     let release!: () => void;
     const released = new Promise<void>(resolve => { release = resolve; });
@@ -37,7 +37,7 @@ for (const mode of ["abort", "connection close", "prompt rejection", "payload cl
         await released;
         return read.call(this, { buffer, offset, length, position });
       });
-      runtime = new AcpRuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
+      runtime = new RuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
         args: ["--experimental-strip-types", "--input-type=module-typescript", "-e", script],
         mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
       const completions: { reason: string }[] = [];
@@ -50,15 +50,15 @@ for (const mode of ["abort", "connection close", "prompt rejection", "payload cl
       let rejectPrompt!: (error: Error) => void;
       if (mode === "prompt rejection") {
         const rejected = new Promise<never>((_, reject) => { rejectPrompt = reject; });
-        const request = AcpConnection.prototype.request;
-        t.mock.method(AcpConnection.prototype, "request", function (this: AcpConnection,
-          method: Parameters<AcpConnection["request"]>[0], params: Parameters<AcpConnection["request"]>[1]) {
+        const request = Connection.prototype.request;
+        t.mock.method(Connection.prototype, "request", function (this: Connection,
+          method: Parameters<Connection["request"]>[0], params: Parameters<Connection["request"]>[1]) {
           const pending = request.call(this, method, params);
           // An RPC error can reject the prompt while its transport remains open.
           return method === "session/prompt" ? Promise.race([pending, rejected]) : pending;
         });
       }
-      const disposal = t.mock.method(AcpSession.prototype, "dispose");
+      const disposal = t.mock.method(Session.prototype, "dispose");
       const proc = runtime;
       let closing: Promise<void> | undefined;
       let accepted = 0;
@@ -67,12 +67,12 @@ for (const mode of ["abort", "connection close", "prompt rejection", "payload cl
           baseUrl: "https://example.invalid", input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           reasoning: false, contextWindow: 1000, maxTokens: 100 },
-        context: { messages: [{ role: "user", content: "Read the result", timestamp: 0 }] },
+        messages: [{ role: "user", content: "Read the result" }],
         options: mode === "payload close" ? { onPayload: payload => {
           closing = proc.session.dispose();
           return payload;
         } } : undefined,
-        reconstructContext: true, syncedMessageCount: 0, beforeInput: () => { accepted++; return true; },
+        beforeInput: () => { accepted++; return true; },
       };
       if (mode === "payload close") {
         const rejection = await runtime.submit(input).then(() => undefined, error => error);
@@ -99,8 +99,8 @@ for (const mode of ["abort", "connection close", "prompt rejection", "payload cl
       } else {
         let transportClosed!: () => void;
         const closed = new Promise<void>(resolve => { transportClosed = resolve; });
-        const cancel = AcpSession.prototype.cancel;
-        t.mock.method(AcpSession.prototype, "cancel", async function (this: AcpSession) {
+        const cancel = Session.prototype.cancel;
+        t.mock.method(Session.prototype, "cancel", async function (this: Session) {
           try { await cancel.call(this); }
           finally { transportClosed(); }
         });

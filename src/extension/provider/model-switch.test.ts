@@ -7,13 +7,13 @@ import test from "node:test";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { prepareDriverCwd } from "../drivers/cwd.ts";
-import { CliRuntimeSession } from "../drivers/cli/runtime.ts";
+import { RuntimeSession as CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { calculateSyncKey } from "../session/session.ts";
 import type { AgyInput } from "../shared/types.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamProvider } from "./provider.ts";
 
 type ModelSwitchCase = {
   name: string;
@@ -334,7 +334,7 @@ for (const { name, arrange, expected } of cases) {
     });
     const run = async (selected: Model<any>) => {
       const events: AssistantMessageEvent[] = [];
-      for await (const event of streamAgyProvider(selected, context, { sessionId, signal: controller.signal }, bridge)) events.push(event);
+      for await (const event of streamProvider(selected, context, { sessionId, signal: controller.signal }, bridge)) events.push(event);
       await new Promise<void>((resolve) => setImmediate(resolve));
       return events.at(-1);
     };
@@ -390,13 +390,12 @@ for (const { name, arrange, expected } of cases) {
 
     const prompt = send.mock.calls[0]!.arguments[0].message.content;
     if (expected.continuation.reconstructed) {
-      assert.ok(prompt.startsWith("# System prompt\n\n> Rules\n\n# Conversation history\n\n"));
-      assert.equal(prompt.match(/^## /gm)?.length, prefix.length + 1);
-      assert.ok(prompt.endsWith("## User\n\n> new request"));
-      assert.ok(prompt.indexOf("> original request") < prompt.lastIndexOf("> new request"));
-      if (arrange.foreignHistory) assert.ok(prompt.includes(`## Assistant (status: ${assistant.stopReason})\n\n> foreign answer`));
+      assert.ok(prompt.startsWith("[System]: Rules"));
+      assert.ok(prompt.endsWith("new request"));
+      assert.ok(prompt.indexOf("[User]: original request") < prompt.lastIndexOf("new request"));
+      if (arrange.foreignHistory) assert.ok(prompt.includes("[Assistant]: foreign answer"));
       if (arrange.omitPriorError) assert.equal(prompt.includes(arrange.priorError!), false);
-      else if (arrange.priorError) assert.ok(prompt.includes(`## Assistant (status: error)\n\n> previous answer\n\nError:\n\n> ${arrange.priorError}`));
+      else if (arrange.priorError) assert.ok(prompt.includes(arrange.priorError));
     } else assert.equal(prompt, "new request");
     if (expected.continuation.fallback) assert.deepEqual(lifecycle.slice(0, 6), ["close", "abort", "start:same-conversation", "close", "abort", "start:fresh"]);
   });

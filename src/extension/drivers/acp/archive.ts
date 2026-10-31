@@ -48,7 +48,7 @@ function safePath(root: string, name: string): string {
   return target;
 }
 
-export async function extractAcpArchive(archivePath: string, destination: string, signal?: AbortSignal): Promise<void> {
+export async function extractArchive(archivePath: string, destination: string, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
   const root = path.resolve(destination);
   await mkdir(root, { recursive: true });
