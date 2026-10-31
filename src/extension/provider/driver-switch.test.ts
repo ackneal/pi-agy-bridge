@@ -1,12 +1,12 @@
 import { beforeEach } from "node:test";
 import { useAuthHomeFixture } from "./auth-home-fixture.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
-import { AcpDriver } from "../drivers/acp/driver.ts";
-import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
+import { useExecutable } from "../drivers/acp/executable-fixture.ts";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
-import { AcpConnection } from "../drivers/acp/connection.ts";
+import { Connection as AcpConnection } from "../drivers/acp/connection.ts";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +19,7 @@ useAuthHomeFixture();
 
 for (const result of ["success", "installation failure"] as const) {
   test(`switch to uninstalled ACP attempts preparation: ${result}`, async (t) => {
-    useAcpExecutable(t, undefined);
+    useExecutable(t, undefined);
     const discovery = t.mock.method(AcpDriver.prototype, "discoverModels", async function(this: AcpDriver) {
       assert.equal(typeof this.onInstallationProgress, "function");
       if (result === "installation failure") throw new Error("synthetic ACP installation failure");
@@ -58,7 +58,7 @@ async function mockExecutables(t: TestContext) {
     };
   });
   t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
-  useAcpExecutable(t, process.execPath);
+  useExecutable(t, process.execPath);
 }
 
 for (const scenario of [
@@ -179,7 +179,7 @@ for (const outcome of ["success", "failure"] as const) {
 }
 
 test("shutdown during driver disposal cannot register a new provider", async (t) => {
-  useAcpExecutable(t, process.execPath);
+  useExecutable(t, process.execPath);
   t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
   let shutdown!: () => Promise<void>;
   let registrations = 0;

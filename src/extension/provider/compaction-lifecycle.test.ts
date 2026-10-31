@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { ModelRuntime, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Model, Provider } from "@earendil-works/pi-ai";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import type { BridgeDriver, DriverSession, RuntimeEvent } from "../drivers/types.ts";
 import { Bridge } from "./provider.ts";
 import { registerAuthHomeFixture } from "./auth-home-fixture.ts";
@@ -37,7 +37,7 @@ for (const action of ["shutdown", "switch", "login"] as const) {
         const proc: DriverSession = {
           driver: "acp", get isRunning() { return running; },
           onRuntimeEvent(callback) { handler = callback; return () => { handler = undefined; }; },
-          formatContextUpdate: () => "",
+          serializeContextUpdate: () => "",
           abort: async () => { aborts++; running = false; },
           async submit(submission) {
             assert.equal(submission.beforeInput(), true);

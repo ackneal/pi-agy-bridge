@@ -8,12 +8,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
-import { AcpConnection } from "./connection.ts";
+import { Connection } from "./connection.ts";
 
 const execFileAsync = promisify(execFile);
 const fixture = fileURLToPath(new URL("./connection-fixture.ts", import.meta.url));
-function create(mode = "normal", extra: Partial<ConstructorParameters<typeof AcpConnection>[0]> = {}) {
-  return new AcpConnection({ executable: process.execPath, cwd: process.cwd(),
+function create(mode = "normal", extra: Partial<ConstructorParameters<typeof Connection>[0]> = {}) {
+  return new Connection({ executable: process.execPath, cwd: process.cwd(),
     args: ["--experimental-strip-types", fixture, mode], requestTimeoutMs: 2000, ...extra });
 }
 const prompt = { sessionId: "synthetic", prompt: [{ type: "text" as const, text: "synthetic" }] };

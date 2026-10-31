@@ -2,12 +2,12 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
-import { ensureAcpInstallation } from "./installation.ts";
-import type { AcpRelease } from "./release.ts";
+import { ensureInstallation } from "./installation.ts";
+import type { Release } from "./release.ts";
 
 const [agentHome, serialized, optionsSerialized] = process.argv.slice(2);
 if (!agentHome || !serialized || !optionsSerialized) throw new Error("Installation fixture requires agent home, release, and options");
-const release: AcpRelease = JSON.parse(serialized);
+const release: Release = JSON.parse(serialized);
 const options: { archivePath: string; mode?: "barrier" | "partial" | "offline" | "repair-file" | "repair-manifest" } = JSON.parse(optionsSerialized);
 const send = (type: string) => process.send?.({ type });
 if (options.mode === "repair-file" || options.mode === "repair-manifest") {
@@ -54,7 +54,7 @@ const fetcher: typeof fetch = async (_input, init) => {
   return new Response(Readable.toWeb(stream) as ReadableStream, { headers: { "content-length": String((await fs.promises.stat(options.archivePath)).size) } });
 };
 try {
-  const launch = await ensureAcpInstallation({ agentHome, release, fetch: fetcher });
+  const launch = await ensureInstallation({ agentHome, release, fetch: fetcher });
   process.stdout.write(JSON.stringify(launch));
 } finally {
   if (process.connected) process.disconnect?.();

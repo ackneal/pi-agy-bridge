@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CliDriver } from "./driver.ts";
+import { Driver } from "./driver.ts";
 
 for (const authenticated of [false, true]) {
   test(`CLI usage probe reports authenticated=${authenticated}`, async (t) => {
@@ -13,7 +13,7 @@ for (const authenticated of [false, true]) {
     await writeFile(executable, authenticated
       ? '#!/bin/sh\nprintf "Claude  Five hour  50%%\\n"\n'
       : '#!/bin/sh\nprintf "Authentication required. Please visit the URL to log in:\\n" >&2\nwhile :; do sleep 1; done\n', { mode: 0o700 });
-    const driver = new CliDriver();
+    const driver = new Driver();
     driver.detectExecutable = () => executable;
     const onUsage = t.mock.fn();
 

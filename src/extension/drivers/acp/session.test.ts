@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import type * as acp from "@agentclientprotocol/sdk";
-import { AcpSession } from "./session.ts";
-import { AcpConnection } from "./connection.ts";
+import { Session } from "./session.ts";
+import { Connection } from "./connection.ts";
 
 const cases = [
   { name: "missing append capability", scenario: "no-append", sessionId: undefined, error: /must advertise agentCapabilities\._meta\.antigravity\.systemPrompt\.append === true/ },
@@ -24,7 +24,7 @@ for (const row of cases) {
   test(`ACP session configuration: ${row.name}`, async (t) => {
     const updates: acp.SessionNotification[] = [];
     const mcp = { command: "/synthetic/node", args: ["/synthetic/mcp.js", "--endpoint", "unix:///synthetic.sock"] as [string, "--endpoint", string] };
-    const session = new AcpSession({
+    const session = new Session({
       executable: process.execPath,
       args: ["--experimental-strip-types", fileURLToPath(new URL("./session-fixture.ts", import.meta.url)), row.scenario],
       cwd: tmpdir(), mcp, model: "selected", effort: "high", systemPrompt: "synthetic system prompt",
@@ -68,7 +68,7 @@ for (const row of cases) {
 }
 
 test("cancellation backpressure cannot delay native process disposal", async (t) => {
-  const session = new AcpSession({
+  const session = new Session({
     executable: process.execPath,
     args: ["--experimental-strip-types", fileURLToPath(new URL("./session-fixture.ts", import.meta.url)), "hang-prompt"],
     cwd: tmpdir(), mcp: { command: "/synthetic/node", args: ["/synthetic/mcp.js", "--endpoint", "unix:///synthetic.sock"] },
@@ -76,15 +76,15 @@ test("cancellation backpressure cannot delay native process disposal", async (t)
   });
   await session.prepare();
   const rejected = assert.rejects(session.prompt([{ type: "text", text: "pending request" }]));
-  const dispose = AcpConnection.prototype.dispose;
+  const dispose = Connection.prototype.dispose;
   let disposing!: () => void;
   const disposalStarted = new Promise<void>(resolve => { disposing = resolve; });
-  t.mock.method(AcpConnection.prototype, "dispose", function (this: AcpConnection) {
+  t.mock.method(Connection.prototype, "dispose", function (this: Connection) {
     disposing();
     return dispose.call(this);
   });
   // Model transport backpressure, not a slow or unresponsive model request.
-  t.mock.method(AcpConnection.prototype, "notify", () => new Promise<void>(() => {}));
+  t.mock.method(Connection.prototype, "notify", () => new Promise<void>(() => {}));
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     const cancelled = session.cancel();
@@ -105,7 +105,7 @@ test("cancellation backpressure cannot delay native process disposal", async (t)
 
 for (const stage of ["preparation", "prompt"] as const) {
   test(`ACP session cancellation: ${stage}`, async (t) => {
-    const session = new AcpSession({
+    const session = new Session({
       executable: process.execPath,
       args: ["--experimental-strip-types", fileURLToPath(new URL("./session-fixture.ts", import.meta.url)), stage === "preparation" ? "hang-new" : "hang-prompt"],
       cwd: tmpdir(), mcp: { command: "/synthetic/node", args: ["/synthetic/mcp.js", "--endpoint", "unix:///synthetic.sock"] },
@@ -156,7 +156,7 @@ for (const phase of ["preparation", "active", "wrong-session", "idle"] as const)
     const controller = new AbortController();
     let received!: (value: unknown) => void;
     const report = new Promise<unknown>((resolve) => { received = resolve; });
-    const session = new AcpSession({
+    const session = new Session({
       executable: process.execPath, args: ["--experimental-strip-types", "--input-type=module-typescript", "-e", script],
       cwd: process.cwd(), model: "selected",
       mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] },

@@ -10,12 +10,12 @@ export interface ConversationErrorState {
   lastError?: string | undefined;
 }
 
-export interface CliEventTranslatorOptions {
+export interface EventTranslatorOptions {
   errorState?: ConversationErrorState | undefined;
   allowedToolNames?: ReadonlySet<string>;
 }
 
-export class CliEventTranslator {
+export class EventTranslator {
   private errorState: ConversationErrorState;
   private readonly allowedToolNames: ReadonlySet<string> | undefined;
   private hasStepUsage = false;
@@ -24,7 +24,7 @@ export class CliEventTranslator {
   private responseId: string | undefined;
   private emit: (event: RuntimeEvent) => void = () => {};
 
-  constructor(options: CliEventTranslatorOptions = {}) {
+  constructor(options: EventTranslatorOptions = {}) {
     this.errorState = options.errorState ?? {};
     this.allowedToolNames = options.allowedToolNames;
   }

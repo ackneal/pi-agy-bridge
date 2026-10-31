@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { writeZipFixture, type ZipFixtureEntry } from "./archive-fixture.ts";
-import { ensureAcpInstallation } from "./installation.ts";
+import { ensureInstallation } from "./installation.ts";
 import type { DriverInstallationProgress } from "../types.ts";
-import { acpDistributionName, resolveAcpRelease, type AcpRelease } from "./release.ts";
+import { distributionName, resolveRelease, type Release } from "./release.ts";
 
 const contents: ZipFixtureEntry[] = [
   { name: "agy_acp_server.par", data: "not a real ACP executable\n", mode: 0o100755 },
@@ -40,7 +40,7 @@ async function fixture(t: TestContext, entries = contents) {
   const archive = path.join(home, "fixture.zip");
   await writeZipFixture(archive, entries);
   const bytes = await fs.readFile(archive);
-  const release = { ...resolveAcpRelease("linux", "x64"), sha256: createHash("sha256").update(bytes).digest("hex"), url: archiveUrl };
+  const release = { ...resolveRelease("linux", "x64"), sha256: createHash("sha256").update(bytes).digest("hex"), url: archiveUrl };
   let downloads = 0;
   const fetcher: typeof fetch = async () => {
     downloads++;
@@ -50,7 +50,7 @@ async function fixture(t: TestContext, entries = contents) {
   return { home, bytes, release, root, fetcher, downloads: () => downloads };
 }
 
-async function launchFixture(home: string, release: AcpRelease, archivePath: string, mode?: "barrier" | "partial" | "offline" | "repair-file" | "repair-manifest") {
+async function launchFixture(home: string, release: Release, archivePath: string, mode?: "barrier" | "partial" | "offline" | "repair-file" | "repair-manifest") {
   const child = spawn(process.execPath, ["--experimental-strip-types", fileURLToPath(new URL("./installation-fixture.ts", import.meta.url)), home, JSON.stringify(release), JSON.stringify({ archivePath, mode })], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
   let downloaded!: () => void;
   let partial!: () => void;
@@ -81,8 +81,8 @@ for (const scenario of ["installation", "cache reuse", "missing metadata", "brok
   test(`ACP installation: ${scenario}`, async (t) => {
     const f = await fixture(t);
     const events: DriverInstallationProgress[] = [];
-    const initial = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher, onProgress: (event) => events.push(event) });
-    const finalDirectory = path.join(f.root, acpDistributionName(f.release));
+    const initial = await ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher, onProgress: (event) => events.push(event) });
+    const finalDirectory = path.join(f.root, distributionName(f.release));
     const inode = (await fs.stat(finalDirectory)).ino;
     assert.equal(path.dirname(initial.executable), finalDirectory);
     if (scenario === "installation") {
@@ -95,7 +95,7 @@ for (const scenario of ["installation", "cache reuse", "missing metadata", "brok
       assert.equal(f.downloads(), 1);
       await fs.mkdir(path.join(f.home, "pi-agy-bridge"), { recursive: true });
       await fs.writeFile(path.join(f.home, "pi-agy-bridge", "settings"), "preserve me");
-      await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: async () => { throw new Error("Network must not be used"); } });
+      await ensureInstallation({ agentHome: f.home, release: f.release, fetch: async () => { throw new Error("Network must not be used"); } });
       assert.equal(await fs.readFile(path.join(f.home, "pi-agy-bridge", "settings"), "utf8"), "preserve me");
       return;
     }
@@ -115,7 +115,7 @@ for (const scenario of ["installation", "cache reuse", "missing metadata", "brok
     }
     const repair = ["modified file", "missing companion", "lost permission", "lost directory permission", "missing metadata", "broken metadata", "partial published directory", "empty published directory"].includes(scenario);
     const fetcher: typeof fetch = repair ? f.fetcher : async () => { throw new Error("Network must not be used"); };
-    const recovered = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: fetcher });
+    const recovered = await ensureInstallation({ agentHome: f.home, release: f.release, fetch: fetcher });
     assert.equal(await fs.readFile(recovered.executable, "utf8"), contents[0]!.data);
     assert.equal(f.downloads(), repair ? 2 : 1);
     assert.equal(recovered.executable, initial.executable);
@@ -133,12 +133,12 @@ for (const scenario of ["install", "repair", "missing launcher"] as const) {
     const release = { ...f.release, executable: "registry-launcher" };
 
     if (scenario === "missing launcher") {
-      await assert.rejects(ensureAcpInstallation({ agentHome: f.home, release, fetch: f.fetcher }), /missing required executable registry-launcher/);
+      await assert.rejects(ensureInstallation({ agentHome: f.home, release, fetch: f.fetcher }), /missing required executable registry-launcher/);
       return;
     }
-    const initial = await ensureAcpInstallation({ agentHome: f.home, release, fetch: f.fetcher });
+    const initial = await ensureInstallation({ agentHome: f.home, release, fetch: f.fetcher });
     if (scenario === "repair") await fs.writeFile(initial.executable, "damaged launcher");
-    const launch = await ensureAcpInstallation({ agentHome: f.home, release, fetch: f.fetcher });
+    const launch = await ensureInstallation({ agentHome: f.home, release, fetch: f.fetcher });
 
     assert.equal(path.basename(launch.executable), release.executable);
     assert.equal(await fs.readFile(launch.executable, "utf8"), contents[0]!.data);
@@ -150,7 +150,7 @@ for (const scenario of ["install", "repair", "missing launcher"] as const) {
 for (const scenario of ["damaged executable", "missing nested file", "damaged nested file"] as const) {
   test(`ACP read-only archive repair: ${scenario}`, async (t) => {
     const f = await fixture(t, readOnlyDirectoryContents);
-    const initial = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
+    const initial = await ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
     const directory = path.dirname(initial.executable);
     const resources = path.join(directory, "resources");
     const nestedDirectory = path.join(resources, "nested");
@@ -170,18 +170,18 @@ for (const scenario of ["damaged executable", "missing nested file", "damaged ne
     const nestedInode = (await fs.stat(nestedDirectory)).ino;
 
     if (scenario !== "damaged executable") {
-      await assert.rejects(ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher }), /read-only directory/);
+      await assert.rejects(ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher }), /read-only directory/);
       assert.equal((await fs.stat(resources)).mode & 0o777, 0o555);
       assert.equal((await fs.stat(nestedDirectory)).mode & 0o777, 0o555);
       assert.equal(await fs.readFile(path.join(resources, ".data"), "utf8"), contents[3]!.data);
       if (scenario === "missing nested file") await assert.rejects(fs.access(nested), { code: "ENOENT" });
       else assert.equal(await fs.readFile(nested, "utf8"), "damaged nested data");
-      assert.deepEqual(await fs.readdir(f.root), [acpDistributionName(f.release)]);
+      assert.deepEqual(await fs.readdir(f.root), [distributionName(f.release)]);
       return;
     }
     const executableInode = (await fs.stat(initial.executable)).ino;
     const payloadInode = (await fs.stat(nested)).ino;
-    const repaired = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
+    const repaired = await ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
     assert.equal(await fs.readFile(repaired.executable, "utf8"), contents[0]!.data);
     assert.equal(await fs.readFile(nested, "utf8"), "nested read-only data");
     assert.equal((await fs.stat(resources)).mode & 0o777, 0o555);
@@ -190,7 +190,7 @@ for (const scenario of ["damaged executable", "missing nested file", "damaged ne
     assert.equal((await fs.stat(nestedDirectory)).ino, nestedInode);
     assert.notEqual((await fs.stat(initial.executable)).ino, executableInode);
     assert.equal((await fs.stat(nested)).ino, payloadInode);
-    assert.deepEqual(await fs.readdir(f.root), [acpDistributionName(f.release)]);
+    assert.deepEqual(await fs.readdir(f.root), [distributionName(f.release)]);
     assert.equal((await fs.stat(path.join(directory, "resources/.data"))).mode & 0o777, 0o444);
     assert.equal((await fs.stat(nested)).mode & 0o777, 0o444);
     const manifest = JSON.parse(await fs.readFile(path.join(directory, ".pi-agy-installation.json"), "utf8"));
@@ -220,7 +220,7 @@ for (const scenario of ["checksum mismatch", "invalid ZIP", "missing required fi
       await fs.symlink(elsewhere, f.root);
     }
     const events: DriverInstallationProgress[] = [];
-    await assert.rejects(ensureAcpInstallation({ agentHome: f.home, release, fetch: fetcher, onProgress: (event) => events.push(event) }), expected);
+    await assert.rejects(ensureInstallation({ agentHome: f.home, release, fetch: fetcher, onProgress: (event) => events.push(event) }), expected);
     assert.equal(events.at(-1)?.phase, "error");
     if (scenario === "checksum mismatch") assert.ok(!events.some((event) => event.phase === "extract"));
     if (scenario !== "root symlink") {
@@ -228,7 +228,7 @@ for (const scenario of ["checksum mismatch", "invalid ZIP", "missing required fi
       await writeZipFixture(goodArchive, contents);
       const goodBytes = await fs.readFile(goodArchive);
       const goodRelease = { ...f.release, sha256: createHash("sha256").update(goodBytes).digest("hex") };
-      const recovered = await ensureAcpInstallation({ agentHome: f.home, release: goodRelease, fetch: async () => new Response(goodBytes) });
+      const recovered = await ensureInstallation({ agentHome: f.home, release: goodRelease, fetch: async () => new Response(goodBytes) });
       assert.equal(await fs.readFile(recovered.executable, "utf8"), contents[0]!.data);
     }
   });
@@ -246,11 +246,11 @@ test("publication corruption is rejected and repaired on the next call", async (
     }
   };
   try {
-    await assert.rejects(ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher }), /integrity validation/);
+    await assert.rejects(ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher }), /integrity validation/);
   } finally {
     fs.rename = originalRename;
   }
-  const repaired = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
+  const repaired = await ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
   assert.equal(await fs.readFile(repaired.executable, "utf8"), contents[0]!.data);
   assert.equal(f.downloads(), 2);
 });
@@ -267,10 +267,10 @@ test("same-process ACP consumers share progress and cancellation does not cancel
   const fetcher: typeof fetch = async () => { downloads++; entered(); await gate; return new Response(f.bytes); };
   const a: DriverInstallationProgress[] = [];
   const b: DriverInstallationProgress[] = [];
-  const first = ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: fetcher, signal: cancelled.signal, onProgress: (event) => a.push(event) });
+  const first = ensureInstallation({ agentHome: f.home, release: f.release, fetch: fetcher, signal: cancelled.signal, onProgress: (event) => a.push(event) });
   const rejection = assert.rejects(first, /cancel this consumer/);
   await started;
-  const second = ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: fetcher, onProgress: (event) => b.push(event) });
+  const second = ensureInstallation({ agentHome: f.home, release: f.release, fetch: fetcher, onProgress: (event) => b.push(event) });
   cancelled.abort(new Error("cancel this consumer"));
   await rejection;
   resume();
@@ -285,7 +285,7 @@ test("same-process ACP consumers share progress and cancellation does not cancel
 for (const scenario of ["different pin", "unexpected file"] as const) {
   test(`stable installation refuses unsafe replacement: ${scenario}`, async (t) => {
     const f = await fixture(t);
-    const initial = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
+    const initial = await ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
     const directory = path.dirname(initial.executable);
     let release = f.release;
     let fetcher = f.fetcher;
@@ -299,7 +299,7 @@ for (const scenario of ["different pin", "unexpected file"] as const) {
       await fs.writeFile(path.join(directory, "unrecognized-data"), "must not be deleted");
     }
 
-    await assert.rejects(ensureAcpInstallation({ agentHome: f.home, release, fetch: fetcher }),
+    await assert.rejects(ensureInstallation({ agentHome: f.home, release, fetch: fetcher }),
       scenario === "different pin" ? /different pinned archive/ : /damaged or unexpected files/);
 
     assert.equal(await fs.readFile(initial.executable, "utf8"), contents[0]!.data);
@@ -315,9 +315,9 @@ for (const row of [
 ]) {
   test(`concurrent Pi processes reuse the same stable path: ${row.scenario}`, async (t) => {
     const f = await fixture(t, row.readOnly ? readOnlyDirectoryContents : contents);
-    const finalDirectory = path.join(f.root, acpDistributionName(f.release));
+    const finalDirectory = path.join(f.root, distributionName(f.release));
     if (row.repair) {
-      const first = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
+      const first = await ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
       await fs.rm(path.join(finalDirectory, "localharness_external"));
       assert.equal(path.dirname(first.executable), finalDirectory);
     }
@@ -331,7 +331,7 @@ for (const row of [
     if (inode !== undefined) assert.equal((await fs.stat(finalDirectory)).ino, inode);
     assert.equal(launches[0]!.executable, launches[1]!.executable);
     assert.equal(launches[0]!.executable, path.join(finalDirectory, "agy_acp_server.par"));
-    assert.deepEqual(await fs.readdir(f.root), [acpDistributionName(release)]);
+    assert.deepEqual(await fs.readdir(f.root), [distributionName(release)]);
     assert.equal((await fs.stat(path.join(finalDirectory, "resources"))).mode & 0o777, row.readOnly ? 0o555 : 0o755);
     assert.equal(await fs.readFile(path.join(finalDirectory, "resources/.data"), "utf8"), contents[3]!.data);
     const offline = await launchFixture(f.home, release, path.join(f.home, "fixture.zip"), "offline");
@@ -341,7 +341,7 @@ for (const row of [
 
 test("an interrupted repair preserves the intact resources of a read-only archive", async (t) => {
   const f = await fixture(t, readOnlyDirectoryContents);
-  const initial = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
+  const initial = await ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
   await fs.writeFile(initial.executable, "damaged executable");
 
   const repair = await launchFixture(f.home, f.release, path.join(f.home, "fixture.zip"), "repair-file");
@@ -366,7 +366,7 @@ test("an interrupted repair preserves the intact resources of a read-only archiv
 for (const mode of ["repair-file", "repair-manifest"] as const) {
   test(`a third Pi process validates an interrupted same-pin repair: ${mode}`, async (t) => {
     const f = await fixture(t, readOnlyDirectoryContents);
-    const initial = await ensureAcpInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
+    const initial = await ensureInstallation({ agentHome: f.home, release: f.release, fetch: f.fetcher });
     const directory = path.dirname(initial.executable);
     const manifest = path.join(directory, ".pi-agy-installation.json");
     const manifestInode = (await fs.stat(manifest)).ino;
@@ -418,7 +418,7 @@ test("a killed installer leaves no published partial install and the next Pi pro
   assert.ok(written, "installer wrote a partial archive before being killed");
   interrupted.child.kill("SIGKILL");
   await rejected;
-  await assert.rejects(fs.access(path.join(f.root, acpDistributionName(release))));
+  await assert.rejects(fs.access(path.join(f.root, distributionName(release))));
   const next = await launchFixture(f.home, release, archivePath);
   const recovered = await next.result;
   assert.equal(await fs.readFile(recovered.executable, "utf8"), contents[0]!.data);

@@ -1,8 +1,8 @@
 import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import { AgyAuthentication } from "./auth.ts";
-import { AcpDriver } from "../drivers/acp/driver.ts";
-import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
+import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
+import { useExecutable } from "../drivers/acp/executable-fixture.ts";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -11,12 +11,13 @@ import test, { afterEach, beforeEach, mock } from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
-import { AcpRuntimeSession } from "../drivers/acp/runtime.ts";
-import { AcpSession } from "../drivers/acp/session.ts";
-import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "../drivers/acp/instructions.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { RuntimeSession as AcpRuntimeSession } from "../drivers/acp/runtime.ts";
+import { Session as AcpSession } from "../drivers/acp/session.ts";
+import { composeSystemPrompt, fingerprintSystemPrompt } from "../drivers/acp/instructions.ts";
+import { Bridge, streamProvider } from "./provider.ts";
+import { prepareSystemMessages } from "./context-prompt.ts";
 
 useAuthHomeFixture();
 
@@ -58,7 +59,7 @@ for (const row of [
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}" ${row.scenario}\n`, { mode: 0o755 });
-    useAcpExecutable(t, executable);
+    useExecutable(t, executable);
     const bridge = new Bridge(pi);
     const sessionManager = SessionManager.inMemory(tmpdir());
     const sessionId = bridge.piContextAdapter.bind(sessionManager);
@@ -74,7 +75,7 @@ for (const row of [
     } as unknown as ExtensionContext);
 
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, {
+    for await (const event of streamProvider(model, {
       messages: [{ role: "user", content: "Use only Pi tools", timestamp: 0 }],
     }, { sessionId }, bridge)) events.push(event);
 
@@ -101,7 +102,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
-    useAcpExecutable(t, executable);
+    useExecutable(t, executable);
     assert.equal(new Bridge(pi).driver.id, "acp");
     assert.equal(new Bridge(pi, new CliDriver()).driver.id, "cli");
     const bridge = new Bridge(pi);
@@ -144,7 +145,7 @@ for (const scenario of ["completion", "cancel", "failure", "unknown", "missing",
     const context: Context = { tools, messages: [{ role: "user", content: "Read synthetic.txt", timestamp: 1 }] };
     const collect = async (input: Context) => {
       const events: AssistantMessageEvent[] = [];
-      for await (const event of streamAgyProvider(model, input, { sessionId, signal: controller.signal }, bridge)) events.push(event);
+      for await (const event of streamProvider(model, input, { sessionId, signal: controller.signal }, bridge)) events.push(event);
       assert.equal(events.filter((event) => event.type === "done" || event.type === "error").length, 1);
       return events.at(-1)!;
     };
@@ -217,13 +218,13 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
-    useAcpExecutable(t, executable);
+    useExecutable(t, executable);
   const bridge = new Bridge(pi);
   const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
   const session = bridge.liveSessions.getOrCreate(sessionId);
   await bridge.runtimeSessionStore.set(sessionId, {
     sessionId: "stale-session-id",
-    compatibilityKey: fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt({ messages: [] })])),
+    compatibilityKey: fingerprintSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeSystemPrompt(prepareSystemMessages({ messages: [] }))])),
   }, [], bridge.driver.sessionVersion);
   t.after(async () => {
     await bridge.liveSessions.disposeAll();
@@ -247,7 +248,7 @@ test("ACP provider falls back to new session when resume fails", { timeout: 1000
 
   const events: AssistantMessageEvent[] = [];
   const context: Context = { tools: [], messages: [{ role: "user", content: "hello", timestamp: 1 }] };
-  for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
+  for await (const event of streamProvider(model, context, { sessionId }, bridge)) events.push(event);
 
   assert.equal(prepareAttempts, 2);
   assert.equal(session.driverId, "acp");
@@ -279,7 +280,7 @@ test("agy-bridge:driver command shows status and switches active driver", async 
   const setStatus = t.mock.fn();
   const ctx = { hasUI: true, ui: { setStatus }, modelRegistry: { refresh: async () => {} } } as unknown as ExtensionCommandContext;
   t.mock.method(CliDriver.prototype, "detectExecutable", () => process.execPath);
-  useAcpExecutable(t, process.execPath);
+  useExecutable(t, process.execPath);
   t.mock.method(CliDriver.prototype, "discoverModels", async () => []);
   t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
   bridge.start();

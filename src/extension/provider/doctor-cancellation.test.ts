@@ -23,7 +23,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
   cp.execFile = replacement as unknown as typeof cp.execFile;
   syncBuiltinESMExports();
   t.after(() => { cp.execFile = original; syncBuiltinESMExports(); });
-  const { CliDriver } = await import("../drivers/cli/driver.ts");
+  const { Driver: CliDriver } = await import("../drivers/cli/driver.ts");
   const { fetchAgyUsage } = await import("../runtime/usage.ts");
   const { Bridge } = await import("./provider.ts");
 
@@ -123,7 +123,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
 });
 
 test("doctor starts a fresh query after login while the cancelled query is still closing", async (t) => {
-  const { CliDriver } = await import("../drivers/cli/driver.ts");
+  const { Driver: CliDriver } = await import("../drivers/cli/driver.ts");
   const { fetchAgyUsage } = await import("../runtime/usage.ts");
   const { Bridge } = await import("./provider.ts");
   const controller = new AbortController();

@@ -3,7 +3,7 @@ import test from "node:test";
 import { AgyRuntime } from "../../runtime/process.ts";
 import type { RuntimeEvent } from "../types.ts";
 import type { ConversationErrorState } from "./events.ts";
-import { CliRuntimeSession } from "./runtime.ts";
+import { RuntimeSession } from "./runtime.ts";
 
 for (const row of [
   { name: "replacement in the same conversation ignores historical error", preserve: true, conversationId: "same", reason: "stop" },
@@ -17,7 +17,7 @@ for (const row of [
       return () => { listener = undefined; };
     });
     const state: ConversationErrorState = { conversationId: "same" };
-    const first = new CliRuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), state);
+    const first = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), state);
     const facts: RuntimeEvent[] = [];
     const unsubscribe = first.onRuntimeEvent((event) => facts.push(event));
     assert.ok(listener);
@@ -25,7 +25,7 @@ for (const row of [
     assert.deepEqual(facts.at(-1), { type: "complete", reason: "error", error: "quota", resumable: true });
     unsubscribe();
 
-    const replacement = new CliRuntimeSession(
+    const replacement = new RuntimeSession(
       { agentName: "pi-bridge", model: "test", conversationId: row.conversationId },
       new Set(), row.preserve ? state : { conversationId: row.conversationId },
     );

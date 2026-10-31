@@ -6,9 +6,9 @@ import test from "node:test";
 import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { AgyRuntime } from "../runtime/process.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { Bridge, streamProvider } from "./provider.ts";
 
 const cases = [
   { stage: "bridge.start", aborts: 0, cancelled: false },
@@ -18,7 +18,7 @@ const cases = [
 ] as const;
 
 for (const { stage, aborts, cancelled } of cases) {
-  test(`streamAgyProvider cleans up after ${stage} ${cancelled ? "cancellation" : "failure"}`, async (t) => {
+  test(`streamProvider cleans up after ${stage} ${cancelled ? "cancellation" : "failure"}`, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agy-runtime-start-"));
     t.after(async () => {
       t.mock.restoreAll();
@@ -65,7 +65,7 @@ for (const { stage, aborts, cancelled } of cases) {
       contextWindow: 8192, maxTokens: 1024,
     } as Model<any>;
     const events: AssistantMessageEvent[] = [];
-    for await (const event of streamAgyProvider(model, context, { sessionId: `test-${stage}`, signal: controller.signal }, bridge)) {
+    for await (const event of streamProvider(model, context, { sessionId: `test-${stage}`, signal: controller.signal }, bridge)) {
       events.push(event);
       if (event.type === "error" || event.type === "done") break;
     }

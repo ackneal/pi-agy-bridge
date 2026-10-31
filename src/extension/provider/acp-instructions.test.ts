@@ -1,6 +1,6 @@
-import { CliDriver } from "../drivers/cli/driver.ts";
-import { AcpDriver } from "../drivers/acp/driver.ts";
-import { useAcpExecutable } from "../drivers/acp/executable-fixture.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
+import { useExecutable } from "../drivers/acp/executable-fixture.ts";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -11,10 +11,11 @@ import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-a
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
-import { AcpRuntimeSession } from "../drivers/acp/runtime.ts";
-import { AcpSession } from "../drivers/acp/session.ts";
-import { composeAcpSystemPrompt, fingerprintAcpSystemPrompt } from "../drivers/acp/instructions.ts";
-import { Bridge, streamAgyProvider } from "./provider.ts";
+import { RuntimeSession as AcpRuntimeSession } from "../drivers/acp/runtime.ts";
+import { Session as AcpSession } from "../drivers/acp/session.ts";
+import { composeSystemPrompt, fingerprintSystemPrompt } from "../drivers/acp/instructions.ts";
+import { Bridge, streamProvider } from "./provider.ts";
+import { prepareSystemMessages } from "./context-prompt.ts";
 
 let home: string;
 let previousHome: string | undefined;
@@ -44,7 +45,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     t.after(() => rm(directory, { recursive: true, force: true }));
     const executable = path.join(directory, "acp");
     await writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" --experimental-strip-types "${fileURLToPath(new URL("../drivers/acp/session-fixture.ts", import.meta.url))}"\n`, { mode: 0o755 });
-    useAcpExecutable(t, executable);
+    useExecutable(t, executable);
     const bridge = new Bridge(pi);
     const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(tmpdir()));
     const session = bridge.liveSessions.getOrCreate(sessionId);
@@ -74,7 +75,7 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     });
     const collect = async (context: Context) => {
       const events: AssistantMessageEvent[] = [];
-      for await (const event of streamAgyProvider(model, context, { sessionId }, bridge)) events.push(event);
+      for await (const event of streamProvider(model, context, { sessionId }, bridge)) events.push(event);
       const last = events.at(-1);
       assert.ok(last?.type === "done", JSON.stringify(last));
       return last;
@@ -91,9 +92,9 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     assert.equal(first.reason, "toolUse");
     const runtime = session.activeProcess;
     assert.ok(runtime instanceof AcpRuntimeSession);
-    assert.equal(runtime.options.systemPrompt, composeAcpSystemPrompt(context));
+    assert.equal(runtime.options.systemPrompt, composeSystemPrompt(prepareSystemMessages(context)));
     assert.ok(runtime.options.systemPrompt?.includes("PRIVATE_SECTION"));
-    assert.equal(runtime.compatibilityKey, fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt(context)])));
+    assert.equal(runtime.compatibilityKey, fingerprintSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeSystemPrompt(prepareSystemMessages(context))])));
     assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, runtime.compatibilityKey);
     assert.ok(!JSON.stringify(prompts[0]).includes("PRIVATE_"));
     assert.ok(gateway.hasPendingCalls);
@@ -111,15 +112,15 @@ for (const scenario of ["unchanged sections", "changed section", "removed sectio
     assert.equal(second.reason, "stop");
     const active = session.activeProcess;
     assert.ok(active instanceof AcpRuntimeSession);
-    assert.equal(active.options.systemPrompt, composeAcpSystemPrompt(next));
-    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, fingerprintAcpSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeAcpSystemPrompt(next)])));
+    assert.equal(active.options.systemPrompt, composeSystemPrompt(prepareSystemMessages(next)));
+    assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, fingerprintSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeSystemPrompt(prepareSystemMessages(next))])));
     if (changed) {
       assert.notEqual(active, runtime);
       assert.equal(resolve.mock.callCount(), 0);
       assert.equal(prompts.length, 2);
       const replay = JSON.stringify(prompts[1]);
-      assert.ok(replay.includes("HISTORICAL_COMPLETED_RESULT"));
       assert.ok(replay.includes("synthetic.txt"));
+      assert.ok(!replay.includes("HISTORICAL_COMPLETED_RESULT"));
       assert.ok(!replay.includes("PRIVATE_"));
       assert.ok(!JSON.stringify(oldResult).includes("HISTORICAL_COMPLETED_RESULT"));
       if (scenario === "removed section") assert.ok(!active.options.systemPrompt?.includes("PRIVATE_SECTION"));

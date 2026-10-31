@@ -9,13 +9,14 @@ import { defaultModelCatalog } from "../../discovery/model-metadata.ts";
 import { calculateSyncKey, LiveSession } from "../../session/session.ts";
 import { RuntimeSessionSync } from "../../session/state.ts";
 import { prepareDriverCwd } from "../cwd.ts";
-import type { PrepareDriverInput } from "../types.ts";
-import { CliRuntimeSession } from "../cli/runtime.ts";
-import { AcpConnection } from "./connection.ts";
-import { AcpDriver } from "./driver.ts";
-import { composeAcpSystemPrompt } from "./instructions.ts";
-import type { AcpLaunch } from "./installation.ts";
-import { AcpRuntimeSession } from "./runtime.ts";
+import { SessionMode, type PrepareDriverInput } from "../types.ts";
+import { RuntimeSession as CliRuntimeSession } from "../cli/runtime.ts";
+import { Connection } from "./connection.ts";
+import { Driver } from "./driver.ts";
+import { composeSystemPrompt } from "./instructions.ts";
+import type { Launch } from "./installation.ts";
+import { RuntimeSession } from "./runtime.ts";
+import { prepareSystemMessages } from "../../provider/context-prompt.ts";
 
 async function liveRuntime(t: TestContext, action: "continue" | "resume" | "rebuild", pendingTools = false, backend: "acp" | "cli" = "acp") {
   const home = await mkdtemp(path.join(os.tmpdir(), "acp-live-install-"));
@@ -37,10 +38,11 @@ async function liveRuntime(t: TestContext, action: "continue" | "resume" | "rebu
 
   const model = defaultModelCatalog()[0]!;
   const context = { messages: [] };
-  const systemPrompt = composeAcpSystemPrompt(context);
+  const messages = prepareSystemMessages(context);
+  const systemPrompt = composeSystemPrompt(messages);
   const runtime = backend === "cli"
     ? new CliRuntimeSession({ agentName: "pi-bridge", model: model.id }, new Set(), {})
-    : new AcpRuntimeSession({
+    : new RuntimeSession({
       executable: process.execPath, cwd: prepareDriverCwd("acp"), model: model.id, systemPrompt,
       mcp: createMcpLaunchDescriptor("unix:///unused"),
     });
@@ -53,13 +55,14 @@ async function liveRuntime(t: TestContext, action: "continue" | "resume" | "rebu
   t.mock.getter(mcp, "hasPendingCalls", () => pendingTools);
   const abort = t.mock.method(runtime, "abort", async () => {});
   const close = t.mock.method(mcp, "close", async () => {});
-  const start = t.mock.method(AcpConnection.prototype, "start", async () => { throw new Error("Unexpected ACP launch"); });
+  const start = t.mock.method(Connection.prototype, "start", async () => { throw new Error("Unexpected ACP launch"); });
   const sync = new RuntimeSessionSync();
   sync.record(session, context.messages);
   const decide = t.mock.method(sync, "decide", sync.decide.bind(sync));
   const input: PrepareDriverInput = {
-    model, context, tools: [], options: undefined, session, preparationId, sync,
+    model, context, messages, tools: [], options: undefined, session, preparationId, sync,
     store: { get: async () => undefined, delete: async () => {} },
+    mode: SessionMode.Conversation,
   };
   return { input, runtime, mcp, abort, close, start, decide };
 }
@@ -74,7 +77,7 @@ for (const row of [
     const f = await liveRuntime(t, row.action, row.pendingTools);
     const failure = new Error("Damaged companion; offline installation repair failed");
     const resolve = t.mock.fn(async () => { throw failure; });
-    const driver = new AcpDriver(resolve);
+    const driver = new Driver(resolve);
 
     const preparing = driver.prepareSession(f.input);
     if (row.action === "continue") {
@@ -99,11 +102,11 @@ for (const outcome of ["aborted", "superseded"] as const) {
     const f = await liveRuntime(t, "rebuild");
     const controller = new AbortController();
     f.input.options = { signal: controller.signal };
-    let release!: (launch: AcpLaunch) => void;
+    let release!: (launch: Launch) => void;
     let entered!: () => void;
-    const gate = new Promise<AcpLaunch>((resolve) => { release = resolve; });
+    const gate = new Promise<Launch>((resolve) => { release = resolve; });
     const resolving = new Promise<void>((resolve) => { entered = resolve; });
-    const driver = new AcpDriver(async () => { entered(); return gate; });
+    const driver = new Driver(async () => { entered(); return gate; });
     const settled = driver.prepareSession(f.input).then(value => ({ value }), error => ({ error }));
     t.after(async () => { release({ executable: process.execPath, args: [] }); await settled; });
 
@@ -129,12 +132,12 @@ for (const outcome of ["failed", "aborted", "superseded"] as const) {
     f.input.options = { signal: controller.signal };
     const checkpoint = t.mock.method(f.input.store, "get", async () => undefined);
     const failure = new Error("offline installation failure");
-    let release!: (launch: AcpLaunch) => void;
+    let release!: (launch: Launch) => void;
     let reject!: (error: Error) => void;
     let entered!: () => void;
-    const gate = new Promise<AcpLaunch>((resolve, rejectPromise) => { release = resolve; reject = rejectPromise; });
+    const gate = new Promise<Launch>((resolve, rejectPromise) => { release = resolve; reject = rejectPromise; });
     const resolving = new Promise<void>((resolve) => { entered = resolve; });
-    const driver = new AcpDriver(async () => { entered(); return gate; });
+    const driver = new Driver(async () => { entered(); return gate; });
     const settled = driver.prepareSession(f.input).then(value => ({ value }), error => ({ error }));
     t.after(async () => { release({ executable: process.execPath, args: [] }); await settled; });
 

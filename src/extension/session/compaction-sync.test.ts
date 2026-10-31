@@ -32,7 +32,7 @@ test("RuntimeSessionSync follows Pi's projected compaction context", async (t) =
       const id = pi.bind(manager);
       const store = new RuntimeSessionStore(pi);
       const session = new LiveSession(id);
-      session.setSession({ driver: "cli", isRunning: true, onRuntimeEvent: () => () => {}, formatContextUpdate: () => "", submit: async () => {}, abort: async () => {} }, "key", undefined, "historical-agy-session");
+      session.setSession({ driver: "cli", isRunning: true, onRuntimeEvent: () => () => {}, serializeContextUpdate: () => "", submit: async () => {}, abort: async () => {} }, "key", undefined, "historical-agy-session");
       const sync = new RuntimeSessionSync();
       if (!scenario.resumed) sync.record(session, preCompactionMessages);
       const checkpoint = scenario.resumed ? await store.set(id, { sessionId: "historical-agy-session" }, preCompactionMessages, "cli:v1") : undefined;

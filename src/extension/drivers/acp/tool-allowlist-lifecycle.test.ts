@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { DriverSubmission, RuntimeEvent } from "../types.ts";
-import { AcpRuntimeSession } from "./runtime.ts";
+import { RuntimeSession } from "./runtime.ts";
 
 for (const row of [
   { name: "callback before announcement", announceFirst: false, outside: false, status: "in_progress" },
@@ -41,7 +41,7 @@ for (const row of [
           sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: JSON.stringify(readResult) } },
         });
       `);
-    const runtime = new AcpRuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
+    const runtime = new RuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
       args: ["--experimental-strip-types", "--input-type=module-typescript", "-e", script],
       mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
     t.after(async () => {
@@ -57,9 +57,9 @@ for (const row of [
     const completed = new Promise<void>((resolve) => { finish = resolve; });
     runtime.onRuntimeEvent((event) => { events.push(event); if (event.type === "complete") finish(); });
     await runtime.prepare();
-    await runtime.submit({ model: { id: "selected" }, context: { messages: [{ role: "user", content: "Read the artifact", timestamp: 0 }] },
-      options: undefined, reconstructContext: true, syncedMessageCount: 0, beforeInput: () => true,
-    } as DriverSubmission);
+    await runtime.submit({ model: { id: "selected" }, messages: [{ role: "user", content: "Read the artifact" }],
+      options: undefined, beforeInput: () => true,
+    } as unknown as DriverSubmission);
     await completed;
 
     assert.equal(events.filter((event) => event.type === "tool-warning").length, 0);

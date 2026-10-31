@@ -11,7 +11,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import { CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { AgyRuntime } from "../runtime/process.ts";
 import { Bridge } from "./provider.ts";
 

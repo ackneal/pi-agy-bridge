@@ -9,8 +9,10 @@ import { BridgeIPC } from "../../bridge/ipc.ts";
 import { LiveSession, PiContextAdapter } from "../../session/session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "../../session/state.ts";
 import { AgyRuntime } from "../../runtime/process.ts";
-import { CliDriver } from "./driver.ts";
-import { CliRuntimeSession } from "./runtime.ts";
+import { Driver } from "./driver.ts";
+import { RuntimeSession } from "./runtime.ts";
+import { SessionMode } from "../types.ts";
+import { prepareSystemMessages } from "../../provider/context-prompt.ts";
 
 for (const row of [
   { name: "default dedicated cwd", persisted: false, changed: false, legacy: false, action: "continue", home: "default" },
@@ -44,7 +46,7 @@ for (const row of [
     });
     const executable = path.join(directory, "agy");
     await writeFile(executable, '#!/bin/sh\n[ "$1" = "--version" ] || exit 1\necho 1.2.14\n', { mode: 0o755 });
-    const driver = new CliDriver();
+    const driver = new Driver();
     t.mock.method(driver, "detectExecutable", () => executable);
     t.mock.method(driver, "installPlugin", async () => {});
     t.mock.method(BridgeIPC.prototype, "start", async function (this: BridgeIPC) {
@@ -65,12 +67,14 @@ for (const row of [
     const original = new LiveSession(id);
     sessions.push(original);
     const model = { id: "test-model" } as Model<any>;
+    const context = { messages: [] };
     const prepare = (session: LiveSession) => driver.prepareSession({
-      model, context: { messages: [] }, tools: [], options: undefined,
+      model, context, messages: prepareSystemMessages(context), tools: [], options: undefined,
       session, store, sync, preparationId: session.beginPreparation(),
+      mode: SessionMode.Conversation,
     });
     const first = await prepare(original);
-    assert.ok(first.proc instanceof CliRuntimeSession);
+    assert.ok(first.proc instanceof RuntimeSession);
     assert.equal(first.proc.options.cwd, path.join(geminiHome, "antigravity-cli"));
     assert.ok((await stat(first.proc.options.cwd!)).isDirectory());
     assert.equal(first.reconstructContext, true);
