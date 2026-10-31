@@ -3,7 +3,7 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { describe } from "node:test";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../../bridge/ipc.ts";
 import { LiveSession, PiContextAdapter } from "../../session/session.ts";
@@ -14,6 +14,63 @@ import { RuntimeSession } from "./runtime.ts";
 import { SessionMode } from "../types.ts";
 import { prepareSystemMessages } from "../../provider/context-prompt.ts";
 import { prepareRuntime, resolveModelAndEffort } from "./session.ts";
+
+describe("resolveModelAndEffort", () => {
+  const allNullThinkingLevels = {
+    off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null,
+  };
+
+  type ResolverCase = {
+    name: string;
+    modelId: string;
+    options?: Record<string, string> | undefined;
+    thinkingLevelMap?: Model<any>["thinkingLevelMap"];
+    expected?: ReturnType<typeof resolveModelAndEffort>;
+    error?: string;
+  };
+
+  const resolverCases: ResolverCase[] = [
+    { name: "Gemini has no default effort", modelId: "gemini-3.8-flash", expected: { baseModel: "gemini-3.8-flash", effort: undefined } },
+    { name: "explicit effort overrides suffix", modelId: "gemini-3.8-flash-low", options: { reasoningEffort: "high" }, expected: { baseModel: "gemini-3.8-flash", effort: "high" } },
+    ...["reasoningEffort", "reasoning", "thinkingLevel"].flatMap((option) => [
+      ...["off", "minimal", "xhigh", "max", "unknown", ""].flatMap((effort) =>
+        ["other-model", "other-model-high"].map((modelId) => ({
+          name: `rejects ${option}=${JSON.stringify(effort)} for ${modelId}`, modelId, options: { [option]: effort },
+          error: `Unsupported Antigravity CLI reasoning effort: ${effort}. Supported values: low, medium, high.`,
+        }))),
+      ...(["low", "medium", "high"] as const).flatMap((effort) =>
+        ["other-model", "other-model-low"].map((modelId) => ({
+          name: `accepts ${option}=${effort} for ${modelId}`, modelId, options: { [option]: effort },
+          expected: { baseModel: "other-model", effort },
+        }))),
+    ]),
+    ...([
+      ["other-model", "other-model", undefined],
+      ["other-model-low", "other-model", "low"],
+      ["other-model-medium", "other-model", "medium"],
+      ["other-model-HIGH", "other-model", "high"],
+    ] as const).flatMap(([modelId, baseModel, effort]) => [undefined, {}].map((options) => ({
+      name: `absent effort for ${modelId} with ${JSON.stringify(options)}`, modelId, options, expected: { baseModel, effort },
+    }))),
+    ...["claude-sonnet-4-6", "claude-opus-4-6-thinking"].flatMap((modelId) => [undefined, {}].map((options) => ({
+      name: `fixed ${modelId} with ${JSON.stringify(options)}`, modelId, options, thinkingLevelMap: allNullThinkingLevels,
+      expected: { baseModel: modelId, effort: undefined },
+    }))),
+    ...(["low", "medium", "high"] as const).map((effort) => ({
+      name: `supported Gemini ${effort}`, modelId: "gemini-3.8-flash", options: { reasoning: effort },
+      thinkingLevelMap: { ...allNullThinkingLevels, low: "low", medium: "medium", high: "high" },
+      expected: { baseModel: "gemini-3.8-flash", effort },
+    })),
+  ];
+
+  for (const row of resolverCases) {
+    test(row.name, () => {
+      const resolve = () => resolveModelAndEffort(row.modelId, row.options as SimpleStreamOptions, row.thinkingLevelMap);
+      if (row.error) assert.throws(resolve, { message: row.error });
+      else assert.deepEqual(resolve(), row.expected);
+    });
+  }
+});
 
 describe("prepareRuntime cancellation and lifecycle", () => {
   for (const stage of ["before lookup", "after lookup"] as const) {

@@ -6,7 +6,7 @@ import { EventProcessor } from "./events.ts";
 
 const textUpdate: SessionUpdate = { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } };
 
-describe("ACP EventProcessor notifications and completion", () => {
+describe("EventProcessor notifications and completion", () => {
   for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
     for (const kind of ["execute", "edit", "delete", "move"] as const) {
       for (const scope of ["live", "replay", "foreign"] as const) {
@@ -77,7 +77,7 @@ describe("ACP EventProcessor notifications and completion", () => {
     },
     { name: "replay usage suppressed", update: { sessionUpdate: "usage_update", used: 42, size: 1000 }, source: "replay", sessionId: "session", expected: [] },
   ] satisfies { name: string; update: SessionUpdate; source: "live" | "replay"; sessionId: string; expected: RuntimeEvent[] }[]) {
-    test(`process notification: ${row.name}`, () => {
+    test(`EventProcessor.process: ${row.name}`, () => {
       const processor = new EventProcessor("session");
       const facts: RuntimeEvent[] = [];
       const notification: SessionNotification = { sessionId: row.sessionId, update: row.update };
@@ -95,7 +95,7 @@ describe("ACP EventProcessor notifications and completion", () => {
     { reason: "max_tokens", expected: { type: "complete", reason: "error", error: "ACP prompt stopped: max_tokens", resumable: false } },
     { reason: "max_turn_requests", expected: { type: "complete", reason: "error", error: "ACP prompt stopped: max_turn_requests", resumable: false } },
   ] satisfies { reason: StopReason; expected: RuntimeEvent }[]) {
-    test(`complete prompt: ${row.reason}`, () => {
+    test(`EventProcessor.complete: ${row.reason}`, () => {
       const processor = new EventProcessor("session");
       const facts: RuntimeEvent[] = [];
 
@@ -106,7 +106,7 @@ describe("ACP EventProcessor notifications and completion", () => {
   }
 });
 
-describe("ACP EventProcessor tool allowlist validation and warnings", () => {
+describe("EventProcessor tool allowlist validation and warnings", () => {
   const path = "/gemini/antigravity-acp/brain/session/.system_generated/steps/output.txt";
   const mcp = { mcp: { server: "pi-agy-bridge_pi", tool: "read" } };
   const client = {
@@ -184,6 +184,7 @@ describe("ACP EventProcessor tool allowlist validation and warnings", () => {
     test(`tool allowlist: ${row.name}`, () => {
       const processor = new EventProcessor("session", new Set(["read"]));
       const events: RuntimeEvent[] = [];
+
       for (const action of row.actions) {
         processor.process({ sessionId: action.sessionId ?? "session", update: { ...action.update, sessionUpdate: "tool_call_update" } },
           action.replay ? "replay" : "live", (event) => events.push(event));

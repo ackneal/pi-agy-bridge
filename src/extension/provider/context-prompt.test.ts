@@ -5,7 +5,7 @@ import { prepareBridgeMessages, serializeConversation } from "./context-prompt.t
 import { serializeContent } from "../drivers/acp/runtime.ts";
 import { serializePrompt } from "../drivers/cli/runtime.ts";
 
-describe("reconstruction", () => {
+describe("conversation history reconstruction", () => {
   const assistantMetadata: Pick<AssistantMessage, "api" | "provider" | "model" | "usage"> = {
     api: "agy",
     provider: "agy",
@@ -565,7 +565,7 @@ describe("incremental updates", () => {
   });
 });
 
-describe("continuation", () => {
+describe("explicit conversation continuation", () => {
   const user: Context["messages"][number] = { role: "user", content: "Do the work", timestamp: 1 };
   for (const row of [
     { name: "new user input remains verbatim", messages: [user], synced: 0, expected: "Do the work" },

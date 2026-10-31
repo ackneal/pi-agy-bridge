@@ -11,10 +11,10 @@ import { Connection } from "./connection.ts";
 import { RuntimeSession } from "./runtime.ts";
 import { Session } from "./session.ts";
 
-describe("ACP session configuration and lifecycle", () => {
+describe("Session configuration and lifecycle", () => {
   const cases = [
     { name: "missing append capability", scenario: "no-append", sessionId: undefined, error: /must advertise agentCapabilities\._meta\.antigravity\.systemPrompt\.append === true/ },
-    { name: "new session", scenario: "normal", sessionId: undefined, error: undefined },
+    { name: "creates a session and applies mode, model and effort", scenario: "normal", sessionId: undefined, error: undefined },
     { name: "load suppresses replay and reapplies settings", scenario: "normal", sessionId: "loaded-session", error: undefined },
     { name: "missing mode config", scenario: "missing-settings", sessionId: undefined, error: /configuration is unavailable: mode/ },
     { name: "missing model config", scenario: "missing-model", sessionId: undefined, error: /configuration is unavailable: model/ },
@@ -26,7 +26,7 @@ describe("ACP session configuration and lifecycle", () => {
   ];
 
   for (const row of cases) {
-    test(`ACP session configuration: ${row.name}`, async (t) => {
+    test(`Session.prepare configuration: ${row.name}`, async (t) => {
       const updates: acp.SessionNotification[] = [];
       const mcp = { command: "/synthetic/node", args: ["/synthetic/mcp.js", "--endpoint", "unix:///synthetic.sock"] as [string, "--endpoint", string] };
       const session = new Session({
@@ -108,7 +108,7 @@ describe("ACP session configuration and lifecycle", () => {
   });
 
   for (const stage of ["preparation", "prompt"] as const) {
-    test(`ACP session cancellation: ${stage}`, async (t) => {
+    test(`Session cancellation stops the process and clears the active prompt during ${stage}`, async (t) => {
       const session = new Session({
         executable: process.execPath,
         args: ["--experimental-strip-types", fileURLToPath(new URL("./session-fixture.ts", import.meta.url)), stage === "preparation" ? "hang-new" : "hang-prompt"],
@@ -138,7 +138,7 @@ describe("ACP session configuration and lifecycle", () => {
   }
 
   for (const phase of ["preparation", "active", "wrong-session", "idle"] as const) {
-    test(`ACP session read gate: ${phase}`, async (t) => {
+    test(`Session read gate allows only the active conversation prompt: ${phase}`, async (t) => {
       const source = await readFile(new URL("./session-fixture.ts", import.meta.url), "utf8");
       const read = `
         let report;
@@ -192,7 +192,7 @@ describe("ACP session configuration and lifecycle", () => {
   }
 });
 
-describe("ACP session cleanup failure and client read lifecycle", () => {
+describe("RuntimeSession cleanup failure and client read lifecycle", () => {
   for (const mode of ["prompt rejection", "prompt success", "transport close", "synchronous close", "abort"] as const) {
     test(`cleanup rejection preserves completion after ${mode}`, async (t) => {
       const runtime = new RuntimeSession({ executable: "unused", cwd: process.cwd(), model: "selected",

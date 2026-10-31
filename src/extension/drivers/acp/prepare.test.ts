@@ -63,16 +63,18 @@ describe("prepareRuntime lifecycle and cancellation", () => {
     const stale = live.beginPreparation();
     live.beginPreparation();
     let reads = 0;
+
     await assert.rejects(prepareRuntime({ id: "raw" } as Parameters<typeof prepareRuntime>[0], { messages: [] }, [], [], undefined, { cwd: process.cwd(), resolve: async () => { throw new Error("Superseded preparation must not resolve installation"); } }, {
       store: { get: async () => { reads++; return undefined; }, delete: async () => {} }, sync: new RuntimeSessionSync(), sessionVersion: "acp:v1",
     }, live, stale), /superseded/);
+
     assert.equal(reads, 0);
     assert.equal(live.activeProcess, null);
   });
 });
 
 describe("prepareRuntime installation reuse and recovery", () => {
-  async function liveRuntime(t: TestContext, action: "continue" | "resume" | "rebuild", pendingTools = false, backend: "acp" | "cli" = "acp") {
+  async function createLiveRuntimeFixture(t: TestContext, action: "continue" | "resume" | "rebuild", pendingTools = false, backend: "acp" | "cli" = "acp") {
     const home = await mkdtemp(path.join(os.tmpdir(), "acp-live-install-"));
     const previousHome = process.env.GEMINI_HOME;
     const previousOverride = process.env.AGY_ACP_BIN;
@@ -121,13 +123,13 @@ describe("prepareRuntime installation reuse and recovery", () => {
   }
 
   for (const row of [
-    { name: "compatible running process", action: "continue", pendingTools: false },
-    { name: "pending tools with changed tool signatures", action: "continue", pendingTools: true },
-    { name: "resume requires installation", action: "resume", pendingTools: false },
-    { name: "rebuild requires installation", action: "rebuild", pendingTools: false },
+    { name: "reuses a compatible running process without resolving installation", action: "continue", pendingTools: false },
+    { name: "continues pending tools without resolving installation despite changed signatures", action: "continue", pendingTools: true },
+    { name: "resolves installation before resuming a stopped process", action: "resume", pendingTools: false },
+    { name: "resolves installation before rebuilding an incompatible process", action: "rebuild", pendingTools: false },
   ] as const) {
     test(`ACP installation resolution: ${row.name}`, async (t) => {
-      const f = await liveRuntime(t, row.action, row.pendingTools);
+      const f = await createLiveRuntimeFixture(t, row.action, row.pendingTools);
       const failure = new Error("Damaged companion; offline installation repair failed");
       const resolve = t.mock.fn(async () => { throw failure; });
       const driver = new Driver(resolve);
@@ -152,7 +154,7 @@ describe("prepareRuntime installation reuse and recovery", () => {
 
   for (const outcome of ["aborted", "superseded"] as const) {
     test(`ACP installation resolution ${outcome} before launch preserves the existing runtime`, async (t) => {
-      const f = await liveRuntime(t, "rebuild");
+      const f = await createLiveRuntimeFixture(t, "rebuild");
       const controller = new AbortController();
       f.input.options = { signal: controller.signal };
       let release!: (launch: Launch) => void;
@@ -180,7 +182,7 @@ describe("prepareRuntime installation reuse and recovery", () => {
 
   for (const outcome of ["failed", "aborted", "superseded"] as const) {
     test(`cross-driver preparation preserves CLI when ACP resolution is ${outcome}`, async (t) => {
-      const f = await liveRuntime(t, "rebuild", false, "cli");
+      const f = await createLiveRuntimeFixture(t, "rebuild", false, "cli");
       const controller = new AbortController();
       f.input.options = { signal: controller.signal };
       const checkpoint = t.mock.method(f.input.store, "get", async () => undefined);

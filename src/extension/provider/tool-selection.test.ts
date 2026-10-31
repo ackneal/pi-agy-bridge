@@ -1,6 +1,6 @@
 import { useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { describe } from "node:test";
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Context, Tool } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -85,15 +85,17 @@ const toolSelectionCases: {
   },
 ];
 
-for (const testCase of toolSelectionCases) {
-  test(`Bridge.getTools: ${testCase.name}`, (t) => {
-    const getAllTools = t.mock.fn(() => sampleRegistry);
-    const getActiveTools = t.mock.fn(() => testCase.activeNames);
-    const pi = { getAllTools, getActiveTools } satisfies Pick<ExtensionAPI, "getAllTools" | "getActiveTools">;
-    const bridge = new Bridge(pi as unknown as ExtensionAPI, new CliDriver());
+describe("Bridge.getTools declaration precedence and registry fallback", () => {
+  for (const testCase of toolSelectionCases) {
+    test(`Bridge.getTools: ${testCase.name}`, (t) => {
+      const getAllTools = t.mock.fn(() => sampleRegistry);
+      const getActiveTools = t.mock.fn(() => testCase.activeNames);
+      const pi = { getAllTools, getActiveTools } satisfies Pick<ExtensionAPI, "getAllTools" | "getActiveTools">;
+      const bridge = new Bridge(pi as unknown as ExtensionAPI, new CliDriver());
 
-    assert.deepEqual(bridge.getTools(testCase.context), testCase.expected);
-    assert.equal(getAllTools.mock.callCount(), testCase.registryReads);
-    assert.equal(getActiveTools.mock.callCount(), testCase.registryReads);
-  });
-}
+      assert.deepEqual(bridge.getTools(testCase.context), testCase.expected);
+      assert.equal(getAllTools.mock.callCount(), testCase.registryReads);
+      assert.equal(getActiveTools.mock.callCount(), testCase.registryReads);
+    });
+  }
+});

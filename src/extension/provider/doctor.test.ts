@@ -251,10 +251,10 @@ for (const driverId of ["cli", "acp"] as const) {
 
 test("doctor command progress and reporting", async (t) => {
   for (const row of [
-    { name: "success", hasUI: true, failure: false, shutdown: false, switch: false },
+    { name: "successful diagnostics clear progress and report", hasUI: true, failure: false, shutdown: false, switch: false },
     { name: "diagnostic detection failure", hasUI: true, failure: true, shutdown: false, switch: false },
     { name: "shutdown while usage is pending", hasUI: true, failure: false, shutdown: true, switch: false },
-    { name: "headless", hasUI: false, failure: false, shutdown: false, switch: false },
+    { name: "headless diagnostics report without UI", hasUI: false, failure: false, shutdown: false, switch: false },
     { name: "post-switch diagnostics failure is not a switch failure", hasUI: true, failure: true, shutdown: false, switch: true },
   ]) {
     await t.test(row.name, async (t) => {
@@ -408,7 +408,9 @@ for (const row of [
     const bridge = new Bridge(pi, driver);
     bridge.start();
     assert.ok(doctor);
+
     await doctor();
+
     const report = messages.join("\n");
     assert.match(report, row.expected);
     if (row.result instanceof Error) assert.match(report, /authentication error|network timeout/i);

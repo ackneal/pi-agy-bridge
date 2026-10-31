@@ -801,14 +801,14 @@ describe("current-turn completion and error tracking", () => {
 
 describe("native argument execution safety", () => {
   for (const row of [
-    { name: "object", input: '{"path":"README.md"}', expected: { path: "README.md" } },
-    { name: "array", input: '[1,{"path":"README.md"}]', expected: { value: [1, { path: "README.md" }] } },
-    { name: "empty array", input: '[]', expected: { value: [] } },
-    { name: "null", input: 'null', expected: { value: null } },
-    { name: "string", input: '"hello"', expected: { value: "hello" } },
-    { name: "number", input: '42', expected: { value: 42 } },
-    { name: "boolean", input: 'false', expected: { value: false } },
-    { name: "invalid JSON", input: '{broken', expected: { raw: "{broken" } },
+    { name: "object", input: '{"path":"README.md"}' },
+    { name: "array", input: '[1,{"path":"README.md"}]' },
+    { name: "empty array", input: '[]' },
+    { name: "null", input: 'null' },
+    { name: "string", input: '"hello"' },
+    { name: "number", input: '42' },
+    { name: "boolean", input: 'false' },
+    { name: "invalid JSON", input: '{broken' },
   ]) {
     for (const source of ["arguments", "input", "flat input"] as const) {
       test(`native arguments are not parsed or executed: ${source}, ${row.name}`, async (t) => {

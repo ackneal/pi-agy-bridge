@@ -56,7 +56,7 @@ for (const row of [
   });
 }
 
-describe("formatAcpToolWarning formatting and sanitization", () => {
+describe("formatAcpToolWarning", () => {
   const prefix = "Antigravity ACP: unverified tool activity — ";
   const circular: Record<string, unknown> = {};
   circular.self = circular;
@@ -75,10 +75,10 @@ describe("formatAcpToolWarning formatting and sanitization", () => {
     { title: "bounded name and body", name: "n".repeat(121), args: "a".repeat(1100),
       expected: `${"n".repeat(119)}… "${"a".repeat(998)}…` },
     { title: "circular input never throws", name: "tool", args: circular, expected: "tool [unserializable arguments]" },
-    { title: "throwing serialization", name: "tool", args: throwing, expected: "tool [unserializable arguments]" },
-    { title: "bigint serialization", name: "tool", args: 1n, expected: "tool [unserializable arguments]" },
+    { title: "handles throwing serialization", name: "tool", args: throwing, expected: "tool [unserializable arguments]" },
+    { title: "handles bigint serialization", name: "tool", args: 1n, expected: "tool [unserializable arguments]" },
     { title: "unsupported primitive", name: "tool", args: Symbol("x"), expected: "tool [unserializable arguments]" },
-    { title: "original data unchanged", name: "tool", args: unchanged,
+    { title: "redacts without mutating original data", name: "tool", args: unchanged,
       expected: 'tool {"nested":{"secret":"[REDACTED]","path":"file"}}',
       verify: () => assert.deepEqual(unchanged, { nested: { secret: "keep original", path: "file" } }) },
     { title: "undefined becomes empty args", name: "tool", args: undefined, expected: "tool {}" },
@@ -90,7 +90,7 @@ describe("formatAcpToolWarning formatting and sanitization", () => {
   ];
 
   for (const row of cases) {
-    test(`ACP tool warning: ${row.title}`, () => {
+    test(row.title, () => {
       const result = formatAcpToolWarning(row.name, row.args);
 
       assert.equal(result, prefix + row.expected);

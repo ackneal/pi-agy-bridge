@@ -12,7 +12,7 @@ import { createBridgeDriver } from "./driver.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { LiveSession } from "../session/session.ts";
 
-describe("driver selection", () => {
+describe("createBridgeDriver", () => {
   for (const scenario of [
     { name: "default", id: undefined, expected: "acp" },
     { name: "ACP", id: "acp", expected: "acp" },

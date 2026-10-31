@@ -121,11 +121,11 @@ for (const scenario of [
 
 for (const scenario of [
   { name: "persists detection", probes: 1, saved: true },
-  { name: "false does not save", probes: 1, false: true },
+  { name: "unsuccessful detection does not save", probes: 1, false: true },
   { name: "error propagates without saving", probes: 1, error: true },
   { name: "existing marker skips detection unchanged", initial: existing, probes: 0 },
-  { name: "other credential is untouched", initial: other, probes: 0 },
-  { name: "legacy marker is ignored", initial: legacy, probes: 0 },
+  { name: "user credential skips detection and remains untouched", initial: other, probes: 0 },
+  { name: "legacy marker is converted without detection", initial: legacy, probes: 0 },
   { name: "changed credential wins", probes: 1, changed: true },
   { name: "abort prevents persistence", probes: 1, abort: true },
   { name: "shutdown prevents persistence", probes: 1, close: true },
@@ -175,7 +175,7 @@ for (const scenario of [
       assert.equal(registry.getAvailable().length, 1);
       assert.equal(registry.isUsingOAuth(models[0]!), true);
       assert.equal((await runtime.checkAuth("agy"))?.type, "oauth");
-    } else if (scenario.name === "legacy marker is ignored") {
+    } else if (scenario.name === "legacy marker is converted without detection") {
       assert.equal(stored?.type, "oauth");
       assert.equal(stored?.loginEpoch, undefined);
     } else {

@@ -6,7 +6,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { serializeContent, RuntimeSession } from "./runtime.ts";
 
-describe("ACP runtime context and identity", () => {
+describe("serializeContent and RuntimeSession identity", () => {
   test("ACP context preserves images and does not filter artifact text", () => {
     const blocks = serializeContent(prepareBridgeMessages({ messages: [{ role: "user", content: [{ type: "text", text: "artifact /tmp/example" }, { type: "image", data: "YWJj", mimeType: "image/png" }], timestamp: 0 }] }, true));
     assert.deepEqual(blocks.filter((block) => block.type === "image"), [{ type: "image", data: "YWJj", mimeType: "image/png" }]);
@@ -16,12 +16,12 @@ describe("ACP runtime context and identity", () => {
   });
 
   for (const row of [
-    { name: "string", messages: [{ role: "user", content: " \n\t" }], expected: [{ type: "text", text: " \n\t" }] },
-    { name: "parts around image", messages: [{ role: "user", content: [
+    { name: "preserves a whitespace-only string", messages: [{ role: "user", content: " \n\t" }], expected: [{ type: "text", text: " \n\t" }] },
+    { name: "preserves whitespace parts around an image", messages: [{ role: "user", content: [
       { type: "text", text: " \n\t" }, { type: "image", data: "YWJj", mimeType: "image/png" }, { type: "text", text: "\n " },
     ] }], expected: [{ type: "text", text: " \n\t" }, { type: "image", data: "YWJj", mimeType: "image/png" }, { type: "text", text: "\n " }] },
   ] satisfies { name: string; messages: BridgeMessage[]; expected: unknown[] }[]) {
-    test(`ACP serializer preserves whitespace: ${row.name}`, () => {
+    test(`serializeContent preserves whitespace: ${row.name}`, () => {
       assert.deepEqual(serializeContent(row.messages), row.expected);
     });
   }
@@ -34,7 +34,7 @@ describe("ACP runtime context and identity", () => {
   });
 
   for (const systemPrompt of [undefined, "", "Pi instructions"]) {
-    test(`ACP runtime compatibility identity: ${JSON.stringify(systemPrompt)}`, async () => {
+    test(`RuntimeSession fingerprints workspace and supplied system prompt: ${JSON.stringify(systemPrompt)}`, async () => {
       const runtime = new RuntimeSession({ executable: "unused", cwd: process.cwd(), model: "raw-model-id", ...(systemPrompt === undefined ? {} : { systemPrompt }), mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
       assert.equal(runtime.compatibilityKey, systemPrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([process.cwd(), systemPrompt])));
       await runtime.abort();
@@ -59,7 +59,7 @@ describe("ACP runtime context and identity", () => {
   });
 });
 
-describe("ACP runtime image observation and client tool routes", () => {
+describe("RuntimeSession image observation and client tool routes", () => {
   test("runtime reads artifact images through an isolated observer with the original objective", async (t) => {
     const { mkdtemp, realpath, mkdir, writeFile, readFile, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");

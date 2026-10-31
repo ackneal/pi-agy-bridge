@@ -136,14 +136,14 @@ for (const scenario of [
   { name: "legacy", credential: marker, enabled: true },
   { name: "OAuth", credential: createAgyBridgeCredential(), enabled: true },
 ]) {
-  test(`bridge availability: ${scenario.name}`, () => {
+  test(`recognizes ${scenario.name} bridge credentials`, () => {
     assert.equal(isAgyBridgeEnabled(scenario.credential), scenario.enabled);
   });
 }
 
 // --- OAuth & Driver Resolution Tests ---
 
-test("local OAuth renewal and validation uses the constant bridge key", async (t) => {
+test("local OAuth renewal and validation use the constant bridge key", async (t) => {
   const spawn = t.mock.method(cp, "spawn", () => { throw new Error("Unexpected subprocess"); });
   syncBuiltinESMExports();
   t.after(() => {
@@ -453,7 +453,7 @@ for (const action of ["expiry", "login success", "login failure", "driver switch
 
 // --- Race & Concurrency Tests ---
 
-function setupRace(t: TestContext, beforeLogin: () => Promise<void> = async () => {}) {
+function createAuthenticationRaceFixture(t: TestContext, beforeLogin: () => Promise<void> = async () => {}) {
   const children: ReturnType<typeof createChild>[] = [];
   function createChild() {
     return Object.assign(new EventEmitter(), {
@@ -495,7 +495,7 @@ for (const action of ["close", "abort"] as const) {
   test(`${action} prevents a pending login from returning a credential`, async (t) => {
     let resume!: () => void;
     const gate = new Promise<void>((resolve) => { resume = resolve; });
-    const { auth, children } = setupRace(t, () => gate);
+    const { auth, children } = createAuthenticationRaceFixture(t, () => gate);
     const controller = new AbortController();
     const login = Promise.resolve(auth.oauth.login({
       signal: controller.signal, notify: () => {}, prompt: async () => "",
@@ -516,7 +516,7 @@ for (const action of ["close", "abort"] as const) {
 test("pending login blocks concurrent login and resolution with an old marker", async (t) => {
   let resume!: () => void;
   const gate = new Promise<void>((resolve) => { resume = resolve; });
-  const { auth, children, finish } = setupRace(t, () => gate);
+  const { auth, children, finish } = createAuthenticationRaceFixture(t, () => gate);
   const signal = new AbortController().signal;
   const interaction = { signal, notify: () => {}, prompt: async () => "" };
   const login = auth.oauth.login(interaction);
@@ -536,7 +536,7 @@ test("pending login blocks concurrent login and resolution with an old marker", 
 });
 
 test("login credentials and resolved environment do not depend on historical epochs", async (t) => {
-  const { auth, children, finish } = setupRace(t);
+  const { auth, children, finish } = createAuthenticationRaceFixture(t);
   const signal = new AbortController().signal;
   const login = auth.oauth.login({ signal, notify: () => {}, prompt: async () => "" });
   await Promise.resolve();
@@ -559,7 +559,7 @@ test("login credentials and resolved environment do not depend on historical epo
 test("pending failed login never returns a success credential", async (t) => {
   let fail!: (error: Error) => void;
   const gate = new Promise<void>((_, reject) => { fail = reject; });
-  const { auth, children } = setupRace(t, () => gate);
+  const { auth, children } = createAuthenticationRaceFixture(t, () => gate);
   let credentialReturned = false;
   const login = Promise.resolve(auth.oauth.login({
     signal: new AbortController().signal, notify: () => {}, prompt: async () => "",
@@ -575,7 +575,7 @@ test("pending failed login never returns a success credential", async (t) => {
 
 for (const outcome of ["authenticated", "unauthenticated", "abort", "close", "manual", "failure"] as const) {
   test(`detect deduplicates in flight: ${outcome}`, async (t) => {
-    const { auth, children, finish } = setupRace(t);
+    const { auth, children, finish } = createAuthenticationRaceFixture(t);
     const controller = new AbortController();
     const detection = auth.detect(controller.signal);
     const settled = detection.then(value => ({ value }), error => ({ error }));
@@ -632,7 +632,7 @@ for (const outcome of ["authenticated", "unauthenticated", "abort", "close", "ma
 }
 
 test("slow detection leaves credential checks and resolution spawn-free", async (t) => {
-  const { auth, children, finish } = setupRace(t);
+  const { auth, children, finish } = createAuthenticationRaceFixture(t);
   const signal = new AbortController().signal;
   const detection = auth.detect(signal);
   let settled = false;
@@ -658,7 +658,7 @@ test("slow detection leaves credential checks and resolution spawn-free", async 
 
 for (const output of ["", "Remaining 100%\n"]) {
   test(`invalid quota leaves detection unknown: ${JSON.stringify(output)}`, async (t) => {
-    const { auth, children } = setupRace(t);
+    const { auth, children } = createAuthenticationRaceFixture(t);
     const detection = auth.detect(new AbortController().signal);
     const rejected = assert.rejects(detection, (error: Error) => {
       assert.match(error.message, /returned no quota data/);
@@ -675,7 +675,7 @@ for (const output of ["", "Remaining 100%\n"]) {
 
 for (const caller of ["first", "second", "pre-aborted"] as const) {
   test(`caller cancellation is isolated: ${caller}`, async (t) => {
-    const { auth, children, finish } = setupRace(t);
+    const { auth, children, finish } = createAuthenticationRaceFixture(t);
     const cancelled = new AbortController();
     const reason = new Error("caller cancelled");
     if (caller === "pre-aborted") cancelled.abort(reason);
@@ -696,7 +696,7 @@ for (const caller of ["first", "second", "pre-aborted"] as const) {
 
 for (const loginOutcome of ["success", "failure"] as const) {
   test(`stale detection cleanup preserves new probe after login ${loginOutcome}`, async (t) => {
-    const { auth, children, finish } = setupRace(t, async () => {
+    const { auth, children, finish } = createAuthenticationRaceFixture(t, async () => {
       if (loginOutcome === "failure") throw new Error("login failed");
     });
     const signal = new AbortController().signal;
