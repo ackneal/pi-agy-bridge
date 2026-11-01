@@ -4,7 +4,9 @@
 [![Pi Extension](https://img.shields.io/badge/pi-extension-purple.svg)](https://github.com/earendil-works/pi-coding-agent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Bridge Google Antigravity models into [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent), while keeping tool execution, user permissions, and session history strictly under Pi's control.
+**Use Antigravity models in Pi without changing how Pi works.**
+
+A deeply integrated Antigravity model bridge for [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent). Use your existing Pi tools, extensions, skills, permissions, and session history.
 
 ---
 
@@ -40,26 +42,28 @@ Bridge Google Antigravity models into [Pi Coding Agent](https://github.com/earen
 
 ### Why pi-agy-bridge?
 
-Antigravity provides state-of-the-art reasoning models, but developers often prefer Pi's lightweight TUI, native command execution, flexible extensions, and strict permission models.
+**Pi stays in control. Antigravity provides the models.**
 
-`pi-agy-bridge` bridges both worlds through **inversion of tool control**:
-- **Antigravity acts purely as the model runtime**: It generates completions and requests tool calls. It does not access your workspace directly or execute local commands.
-- **Pi manages execution and policy**: Every tool call (file read/write, bash, git, custom extensions) routes through a local Model Context Protocol (MCP) server back into Pi's engine. Pi's permission checks, sandboxing, and user approvals remain authoritative.
-- **Native authentication**: The bridge delegates authentication to the selected backend without handling or persisting external API keys directly in Pi.
-- **Seamless context synchronization**: Session continuity across turns and restarts, with transparent context reconstruction whenever Pi compacts or branches history.
+Rather than replacing Pi's agent environment, pi-agy-bridge connects Antigravity model inference to the Pi harness you already use.
+
+- **Deep Pi integration**: Keep your existing tools, extensions, skills, and session history.
+- **Pi-controlled workspace operations**: The bridge exposes Pi tools over MCP and routes their execution back through Pi's tools and applicable permission policies.
+- **Restricted native capabilities**: Each driver applies its own restrictions to Antigravity's native tools. ACP also provides limited access to AGY-managed artifacts through a dedicated reader.
+- **Native backend authentication**: Sign-in is handled by the selected Antigravity backend; the bridge does not manage separate API keys.
+
+
 
 ---
 
 ## Features
 
-- **Automatic ACP Setup**: Automatically downloads, validates (SHA-256), and manages the pinned official Antigravity ACP server (1.4.4) on macOS and Linux. Zero manual installation needed.
-- **Dual Driver Architecture**:
-  - **ACP (Default)**: Fast, structured JSON-RPC over stdio via the Agent Client Protocol. Includes browser-interception to prevent unexpected popup logins.
-  - **CLI (Optional)**: Connects to your existing local `agy` CLI binary.
-- **Full MCP Tool Inversion**: Antigravity models call your workspace tools, bash commands, and Pi extensions through a dedicated Unix domain socket MCP bridge.
-- **Session Continuity & Native Compaction**: Conversations persist across turns and restarts. When Pi branches, switches providers, or compacts context, the bridge rebuilds context transparently.
-- **Accurate Token Accounting**: Reports per-turn prompt, completion, and cache-read tokens directly to Pi for status bar tracking and automatic context compaction.
-- **Built-in Diagnostics**: `/agy-bridge:doctor` provides real-time verification of driver health, binaries, socket paths, model catalogs, and auth status.
+- **Deep Pi Integration** — Use Antigravity models in your existing Pi environment, including native tools, custom extensions, skills, and sessions.
+- **Pi-Controlled Tool Execution** — Route workspace tool requests through Pi's MCP bridge, where Pi executes tools under its applicable policies.
+- **ACP & CLI Drivers** — Choose the managed ACP backend (default) or an installed Antigravity CLI. Available models and capabilities differ by driver.
+- **Session Continuity** — Reuse compatible native sessions across turns and reconstruct context from Pi history when needed, including after branching or compaction.
+- **ACP Image Support** — Deliver supported user images as prompt image blocks. Analyze supported images encountered through artifact reads with an isolated image observer.
+- **Automatic ACP Setup** — Download and verify the pinned Antigravity ACP server on macOS and Linux.
+- **Built-in Diagnostics** — Use `/agy-bridge:doctor` to check driver setup, authentication, and model discovery.
 
 ---
 
@@ -108,7 +112,7 @@ pi install git:github.com/ackneal/pi-agy-bridge
    /model
    ```
 2. Type `agy` to filter available Antigravity models (e.g., `gemini-3.8-flash [agy]`, `gemini-4-argon [agy]`, `gemini-3.1-pro [agy]`).
-3. Select your model and start chatting as normal. All standard Pi tools and skills work out of the box.
+3. Select your model and start chatting as normal. Your existing Pi tools and skills remain available.
 
 ---
 
@@ -125,20 +129,44 @@ pi install git:github.com/ackneal/pi-agy-bridge
 
 ## How It Works
 
-### Tool Boundaries
-- **Strict Boundary Control**: Antigravity acts purely as the model runtime. It cannot directly read workspace files, modify your code, or run shell commands.
-- **Pi Policy Enforcement**: All tool calls are routed through the bridge back to Pi. Every action runs through Pi's tools, subject to Pi's permission policies and user approvals.
+### Tool Execution & Permissions
 
-### Artifact Reader for AGY Offloads
-- **Offloaded Output Handling**: When Antigravity's behavior offloads large tool results, transcripts, or execution steps to disk, the model needs to inspect them.
-- **Restricted Access**: The bridge provides a dedicated Artifact Reader (`client_view_file`) strictly scoped to current-turn offload artifacts (under `.system_generated/steps/`) and registered tool schemas.
-- **Host Protection**: Arbitrary filesystem reads, directory traversal, and symlink escapes outside the designated offload directory are rejected.
-- **Image Offloads**: Offloaded image artifacts are processed via an isolated, tool-free subsession observer.
+Pi remains the primary agent harness. The bridge exposes the Pi session's tools through a local MCP adapter; Antigravity requests those tools, and Pi executes them using its existing tool environment and applicable permission policies.
+
+The drivers restrict Antigravity's native tool capabilities in different ways:
+
+- **ACP** — Configures an empty native-tool allowlist, handles permission requests through ACP, and exposes registered Pi tools over MCP. A dedicated reader allows limited access to AGY-managed artifacts.
+- **CLI** — Uses its CLI plugin and tool restrictions to direct supported workspace operations through Pi, with monitoring of reported tool activity.
+
+These mechanisms describe how the integration restricts tool use; they do not claim operating-system sandbox isolation.
+
+### Driver Differences
+
+| Capability | ACP (default) | CLI (optional) |
+| :--- | :--- | :--- |
+| Setup | Managed, verified ACP server | Existing `agy` installation |
+| Models | Models exposed by the ACP catalog | CLI catalog, including additional Claude and GPT-OSS options |
+| User images | Image blocks in the main ACP prompt | Text-only prompt serialization; no equivalent image-block path |
+| Tool-read images | Restricted artifact reader and image observer | No equivalent observer path |
+| Usage reporting | Context snapshots and prompt-response accounting | Step-level usage snapshots |
+
+Available models depend on the backend and its catalog. Use `/model` to see the current options and `/agy-bridge:driver` to switch drivers.
+
+### ACP Image Handling
+
+**User-provided images:** The bridge detects supported image references in user text and accepts image content blocks, then includes the image data in the main ACP prompt.
+
+**Images encountered through artifact reads:** Images returned through the existing MCP/tool-result or client-read paths cannot be passed into the main ACP conversation as new image blocks. Instead, a restricted Artifact Reader loads eligible AGY-managed artifacts and starts an isolated, tool-free image observer. The observer receives the image in a separate prompt and returns derived text to the main conversation.
+
+Observer analysis requires an additional model request, which can add latency and usage. The main agent receives the observer's interpretation rather than the original image block.
+
+The Artifact Reader limits reads to permitted AGY-generated artifacts and registered tool metadata. It rejects unsupported paths and symlink-based escapes; it does not provide unrestricted workspace access.
 
 ### Session Continuity & Context Reconstruction
-- **Turn Continuity**: Conversations persist across turns and restarts as long as history matches.
-- **Transparent Reconstruction**: When Pi branches, switches models, or performs context compaction, the bridge automatically reconstructs the conversation from Pi's message log to keep both runtimes synchronized.
-- **Token Accounting**: Real-time token usage (including cache reads) feeds directly into Pi for context monitoring and automatic compaction.
+
+The bridge reuses native conversations while their state remains compatible with Pi's history. When a native session cannot be reused—for example, after a branch, provider change, or context compaction—it reconstructs the relevant conversation from Pi messages, including tool execution outcomes.
+
+Both drivers report context usage to Pi, but their measurements differ: ACP provides prompt-response accounting and context snapshots, while CLI reports step-level snapshots. They should not be treated as directly comparable billing totals; monetary costs are not calculated from provider prices.
 
 ---
 
@@ -197,8 +225,3 @@ bun run typecheck
 bun run test
 ```
 
----
-
-## License
-
-[MIT](LICENSE)
