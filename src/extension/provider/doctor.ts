@@ -102,9 +102,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<strin
     lines.push("  ! Windows: Unix socket support is not verified.");
   }
 
-  lines.push(...(options.driver === "cli"
-    ? formatDoctorQuotaLines(options.usage)
-    : ["", "Quota remaining (unavailable)"]));
+  lines.push(...formatDoctorQuotaLines(options.usage));
 
   const failures = [
     ["plugin", options.pluginError],

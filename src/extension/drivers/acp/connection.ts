@@ -116,7 +116,7 @@ export class Connection {
       return await this.request(acp.methods.agent.initialize, {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientCapabilities: this.options.onRead ? { fs: { readTextFile: true } } : {},
-        clientInfo: { name: "pi-agy-bridge", version: "0.4.0" },
+        clientInfo: { name: "pi-agy-bridge", version: "0.5.0" },
       });
     } catch (error) {
       try {

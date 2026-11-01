@@ -105,6 +105,8 @@ pi install git:github.com/ackneal/pi-agy-bridge
 | `/agy-bridge:driver` | Choose the ACP or CLI driver. |
 | `/agy-bridge:doctor` | Check driver setup, authentication, and model discovery. |
 
+Driver and doctor results are user-only notifications, not model conversation messages. Without a UI, results are written to `stderr`.
+
 ---
 
 ## How It Works
@@ -124,7 +126,7 @@ Antigravity models request tools through the bridge. Pi runs registered tool req
 | Image injection | Automatically injects images referenced in user messages | — |
 | Usage | Prompt-level reporting | Step-level reporting |
 
-Use `/agy-bridge:driver` to change the driver. Use `/model` to see its available models.
+Use `/agy-bridge:driver` to change the driver. Use `/model` to see its available models. On startup, the bridge uses the driver recorded in its saved authentication. If no saved authentication or valid driver is present, it defaults to ACP.
 
 **Images:** Both drivers support tool-based image reads. ACP also uses an image observer for eligible offloaded images. The observer returns text and may add latency and model usage.
 
@@ -144,13 +146,19 @@ The bridge reuses a native session when it matches Pi's history. If Pi branches 
 
 | Variable | Description |
 | :--- | :--- |
-| `AGY_ACP_BIN` | Use a custom ACP server executable instead of the managed version. |
+| `AGY_ACP_DIR` | Absolute path to a complete ACP Server distribution directory instead of the managed version. Must contain executable `agy_acp_server.par` and `localharness_external` files. |
 | `AGY_BRIDGE_DEBUG=1` | Write diagnostic logs to `stderr`. |
 | `GEMINI_HOME` | Set the backend state directory. Default: `~/.gemini`. |
 
+For a custom ACP distribution, keep both files in the same directory and set:
+
+```bash
+export AGY_ACP_DIR="$HOME/path/to/agy-acp-server"
+```
+
 ### Managed ACP Server Details
 
-- **Version:** Antigravity ACP Server **1.4.4** (macOS and Linux, x64 and ARM64).
+- **Version:** Antigravity ACP Server **1.4.5** (macOS and Linux, x64 and ARM64).
 - **Registry:** [`src/extension/drivers/acp/registry.json`](src/extension/drivers/acp/registry.json).
 - **Storage:** `<Pi Agent Home>/pi-agy-bridge/acp/<archive-name>/` (typically `~/.pi/agent/pi-agy-bridge/acp/`).
 - **Verification:** SHA-256 checksums are verified before extraction.
@@ -163,10 +171,10 @@ Run `/agy-bridge:doctor` to check the installation, connection, and sign-in stat
 
 ### Common Problems
 
-- **ACP download or extraction fails:** Check your network, disk space, and permissions under `~/.pi/agent/`. Downloads are about 109–321 MiB. Linux extraction can require about 1 GiB.
+- **ACP download or extraction fails:** Check your network, disk space, and permissions under `~/.pi/agent/`. Downloads are about 93–307 MiB. Linux extraction can require about 1 GiB.
 - **Signed out:** Run `/login` and select **Antigravity [pi-agy-bridge]**.
 - **No models appear:** Sign in and run `/agy-bridge:doctor`. When offline, the bridge can use a cached model catalog.
-- **Custom ACP server fails:** Check that the file is executable and supports ACP. Unset `AGY_ACP_BIN` to use the managed server.
+- **Custom ACP server fails:** Check that `AGY_ACP_DIR` is an absolute directory path containing executable `agy_acp_server.par` and `localharness_external` files. Unset `AGY_ACP_DIR` to use the managed server.
 - **Enable debug logs:**
   ```bash
   export AGY_BRIDGE_DEBUG=1

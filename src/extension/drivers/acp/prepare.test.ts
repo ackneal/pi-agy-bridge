@@ -77,17 +77,17 @@ describe("prepareRuntime installation reuse and recovery", () => {
   async function createLiveRuntimeFixture(t: TestContext, action: "continue" | "resume" | "rebuild", pendingTools = false, backend: "acp" | "cli" = "acp") {
     const home = await mkdtemp(path.join(os.tmpdir(), "acp-live-install-"));
     const previousHome = process.env.GEMINI_HOME;
-    const previousOverride = process.env.AGY_ACP_BIN;
+    const previousOverride = process.env.AGY_ACP_DIR;
     process.env.GEMINI_HOME = home;
-    delete process.env.AGY_ACP_BIN;
+    delete process.env.AGY_ACP_DIR;
     const session = new LiveSession("installation-reuse");
     t.after(async () => {
       try { await session.dispose(); }
       finally {
         if (previousHome === undefined) delete process.env.GEMINI_HOME;
         else process.env.GEMINI_HOME = previousHome;
-        if (previousOverride === undefined) delete process.env.AGY_ACP_BIN;
-        else process.env.AGY_ACP_BIN = previousOverride;
+        if (previousOverride === undefined) delete process.env.AGY_ACP_DIR;
+        else process.env.AGY_ACP_DIR = previousOverride;
         await rm(home, { recursive: true, force: true });
       }
     });

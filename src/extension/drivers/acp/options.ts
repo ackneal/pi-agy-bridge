@@ -2,7 +2,6 @@ import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import fs from "node:fs";
 import path from "node:path";
 import { prepareDriverCwd } from "../cwd.ts";
-import { expandHome } from "../../shared/paths.ts";
 import type { ConnectionOptions } from "./connection.ts";
 
 function isExecutableFile(filepath: string): boolean {
@@ -15,20 +14,19 @@ function isExecutableFile(filepath: string): boolean {
   }
 }
 
-export function detectExecutable(customPath?: string): string | undefined {
-  if (customPath?.trim()) {
-    const expanded = path.resolve(expandHome(customPath));
-    if (isExecutableFile(expanded)) return expanded;
+export function detectExecutable(): string | undefined {
+  const directory = process.env.AGY_ACP_DIR;
+  if (!directory?.trim() || !path.isAbsolute(directory)) return undefined;
+
+  try {
+    if (!fs.statSync(directory).isDirectory()) return undefined;
+  } catch {
     return undefined;
   }
 
-  const fromEnv = process.env.AGY_ACP_BIN;
-  if (fromEnv?.trim()) {
-    const expanded = path.resolve(expandHome(fromEnv));
-    if (isExecutableFile(expanded)) return expanded;
-  }
-
-  return undefined;
+  const executable = path.join(directory, "agy_acp_server.par");
+  const helper = path.join(directory, "localharness_external");
+  return isExecutableFile(executable) && isExecutableFile(helper) ? executable : undefined;
 }
 
 export function resolveEffort(model: Model<any>, options: SimpleStreamOptions | undefined): string | undefined {
@@ -41,7 +39,7 @@ export function resolveEffort(model: Model<any>, options: SimpleStreamOptions | 
 }
 
 export function resolveConnectionOptions(executable?: string): ConnectionOptions {
-  if (!executable?.trim()) throw new Error("Antigravity ACP executable not found; retry ACP preparation or set AGY_ACP_BIN");
+  if (!executable?.trim()) throw new Error("Antigravity ACP executable not found; retry ACP preparation or set AGY_ACP_DIR");
 
   return { executable, cwd: prepareDriverCwd("acp"), ...(process.platform === "linux" ? { args: ["--uid="] } : {}) };
 }
