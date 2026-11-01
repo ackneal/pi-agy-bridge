@@ -97,6 +97,8 @@ const driverMenuScenarios: DriverMenuScenario[] = [
   { name: "explicit invalid driver bypasses menu", args: "other", outcome: "invalid" },
   { name: "headless default ACP reports status", hasUI: false, outcome: "status" },
   { name: "headless CLI reports status", current: "cli", hasUI: false, outcome: "status" },
+  { name: "headless current driver reports to stderr", args: "acp", hasUI: false, outcome: "same" },
+  { name: "headless invalid driver reports to stderr", args: "other", hasUI: false, outcome: "invalid" },
 ];
 
 for (const scenario of driverMenuScenarios) {
@@ -131,8 +133,10 @@ for (const scenario of driverMenuScenarios) {
     const select = t.mock.fn(async () => scenario.selected);
     const modelRegistry = { refresh: async () => {} } as unknown as ExtensionCommandContext["modelRegistry"];
     const setStatus = t.mock.fn();
+    const notify = t.mock.fn();
+    const stderr = t.mock.method(console, "error", () => {});
     const ctx = {
-      hasUI: scenario.hasUI !== false, ui: { select, setStatus }, modelRegistry,
+      hasUI: scenario.hasUI !== false, ui: { select, setStatus, notify }, modelRegistry,
     } as unknown as ExtensionCommandContext;
 
     await command(scenario.args ?? "", ctx);
@@ -159,8 +163,10 @@ for (const scenario of driverMenuScenarios) {
       ...(succeeded ? [["agy-bridge", `Checking ${targetLabel} diagnostics…`], ["agy-bridge", undefined]] : []),
     ]);
 
+    assert.equal(sendMessage.mock.callCount(), 0);
+    assert.equal(notify.mock.callCount(), ctx.hasUI && scenario.outcome !== "cancel" ? 1 : 0);
+    assert.equal(stderr.mock.callCount(), !ctx.hasUI && scenario.outcome !== "cancel" ? 1 : 0);
     if (scenario.outcome === "cancel") {
-      assert.equal(sendMessage.mock.callCount(), 0);
       return;
     }
     const contents = {
@@ -174,24 +180,20 @@ for (const scenario of driverMenuScenarios) {
         "Usage: `/agy-bridge:driver cli` or `/agy-bridge:driver acp`",
       ].join("\n"),
     };
-    assert.equal(sendMessage.mock.callCount(), 1);
+    const [report, severity] = (ctx.hasUI ? notify : stderr).mock.calls[0]!.arguments;
+    if (ctx.hasUI) assert.equal(severity, scenario.outcome === "invalid" ? "warning"
+      : scenario.outcome === "failure" || scenario.outcome === "doctorFailure" ? "error" : "info");
+    else assert.equal(stderr.mock.calls[0]!.arguments.length, 1);
     if (scenario.outcome === "success" || scenario.outcome === "doctorFailure") {
       assert.equal(bridge.driver.id, scenario.target);
-      const [report, options] = sendMessage.mock.calls[0]!.arguments;
-      assert.equal(report.customType, "pi-agy-bridge:doctor");
-      assert.equal(report.display, true);
-      assert.deepEqual(options, { triggerTurn: false });
       if (scenario.outcome === "doctorFailure") {
-        assert.equal(report.content, "Failed to collect diagnostics: synthetic diagnostics failure");
+        assert.equal(report, "Failed to collect diagnostics: synthetic diagnostics failure");
       } else {
-        assert.match(report.content, /^agy-bridge doctor\n/);
-        assert.ok(report.content.includes(targetLabel));
+        assert.match(report, /^agy-bridge doctor\n/);
+        assert.ok(report.includes(targetLabel));
       }
     } else {
-      assert.deepEqual(sendMessage.mock.calls[0]!.arguments, [
-        { customType: "pi-agy-bridge:driver", content: contents[scenario.outcome], display: true },
-        { triggerTurn: false },
-      ]);
+      assert.equal(report, contents[scenario.outcome]);
     }
   });
 }
@@ -209,6 +211,8 @@ for (const scenario of [
     const providers: Provider[] = [];
     const sendMessage = t.mock.fn();
     const setStatus = t.mock.fn();
+    const notify = t.mock.fn();
+    const stderr = t.mock.method(console, "error", () => {});
     const bridge = new Bridge({
       on: () => {}, sendMessage,
       registerCommand: (name: string, options: { handler: Handler }) => {
@@ -233,23 +237,25 @@ for (const scenario of [
     });
     const registry = { refresh } as unknown as ExtensionContext["modelRegistry"];
 
-    await command("acp", { hasUI: true, ui: { setStatus }, modelRegistry: registry } as unknown as ExtensionCommandContext);
+    await command("acp", { hasUI: true, ui: { setStatus, notify }, modelRegistry: registry } as unknown as ExtensionCommandContext);
 
     assert.equal(refresh.mock.callCount(), scenario.discoveryFailure ? 0 : 2);
     for (const call of refresh.mock.calls) assert.deepEqual(call.arguments, [{ providers: ["agy"], allowNetwork: false }]);
     assert.equal(providers.length, scenario.discoveryFailure ? 1 : 2);
     assert.equal(bridge.driver.id, scenario.discoveryFailure ? "cli" : "acp");
     if (!scenario.discoveryFailure) assert.equal(providers.at(-1)!.getModels()[0]?.id, "gemini-3.8-flash");
-    assert.equal(sendMessage.mock.callCount(), 1);
-    const [message] = sendMessage.mock.calls[0]!.arguments as unknown as [{ customType: string; content: string }];
-    assert.equal(message.customType, scenario.discoveryFailure ? "pi-agy-bridge:driver" : "pi-agy-bridge:doctor");
-    if (scenario.discoveryFailure) assert.match(message.content, /Failed to switch driver: synthetic discovery failure/);
+    assert.equal(sendMessage.mock.callCount(), 0);
+    assert.equal(stderr.mock.callCount(), 0);
+    assert.equal(notify.mock.callCount(), 1);
+    const [message, severity] = notify.mock.calls[0]!.arguments;
+    assert.equal(severity, scenario.discoveryFailure || scenario.doctorFailure ? "error" : "info");
+    if (scenario.discoveryFailure) assert.match(message, /Failed to switch driver: synthetic discovery failure/);
     else {
-      if (scenario.doctorFailure) assert.match(message.content, /^Failed to collect diagnostics: synthetic diagnostics failure/);
-      else assert.match(message.content, /^agy-bridge doctor\n/);
-      assert.doesNotMatch(message.content, /Failed to switch driver/);
-      if (scenario.refreshFailure) assert.match(message.content, /Warning[\s\S]*Pi model registry refresh failed: synthetic registry failure/);
-      else assert.doesNotMatch(message.content, /registry refresh failed/);
+      if (scenario.doctorFailure) assert.match(message, /^Failed to collect diagnostics: synthetic diagnostics failure/);
+      else assert.match(message, /^agy-bridge doctor\n/);
+      assert.doesNotMatch(message, /Failed to switch driver/);
+      if (scenario.refreshFailure) assert.match(message, /Warning[\s\S]*Pi model registry refresh failed: synthetic registry failure/);
+      else assert.doesNotMatch(message, /registry refresh failed/);
     }
     assert.deepEqual(setStatus.mock.calls.map((call) => call.arguments.at(-1)), [
       "Switching to Antigravity ACP…", undefined,
@@ -309,8 +315,10 @@ for (const scenario of [
   test(`driver switch ${scenario.from} to ${scenario.to} refreshes catalog and ignores stale ${scenario.late}`, async (t) => {
     const registrations: Provider[] = [];
     let command!: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+    const sendMessage = t.mock.fn();
+    const stderr = t.mock.method(console, "error", () => {});
     const pi = {
-      on: () => {}, sendMessage: () => {},
+      on: () => {}, sendMessage,
       registerCommand: (name: string, options: { handler: typeof command }) => {
         if (name === "agy-bridge:driver") command = options.handler;
       },
@@ -360,6 +368,9 @@ for (const scenario of [
     else fail(new Error("old discovery failed"));
     await settled;
 
+    assert.equal(sendMessage.mock.callCount(), 0);
+    assert.equal(stderr.mock.callCount(), 1);
+    assert.match(stderr.mock.calls[0]!.arguments[0], /^agy-bridge doctor\n/);
     assert.equal(refreshes, 2);
     assert.equal(registrations.length, 2);
     assert.equal(registrations.at(-1)!.name, "Antigravity [pi-agy-bridge]");
@@ -495,9 +506,11 @@ describe("stale driver switch report ownership", () => {
   ] as const) {
     test(`late ${scenario.outcome} registry refresh cannot publish an obsolete report, return to CLI=${scenario.returnToCli}`, async (t) => {
       const handlers = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void>>();
-      const messages: { customType: string; content: string }[] = [];
+      const notify = t.mock.fn();
+      const sendMessage = t.mock.fn();
+      const stderr = t.mock.method(console, "error", () => {});
       const pi = {
-        on: () => {}, sendMessage: (message: { customType: string; content: string }) => messages.push(message),
+        on: () => {}, sendMessage,
         registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) => handlers.set(name, options.handler),
         registerProvider: () => {},
       } as unknown as ExtensionAPI;
@@ -525,7 +538,7 @@ describe("stale driver switch report ownership", () => {
         if (first) { first = false; entered(); await gate; }
       } };
       const setStatus = t.mock.fn();
-      const context = { hasUI: true, ui: { setStatus }, modelRegistry } as unknown as ExtensionCommandContext;
+      const context = { hasUI: true, ui: { setStatus, notify }, modelRegistry } as unknown as ExtensionCommandContext;
       let stale: Promise<void> | undefined;
       t.after(async () => { release(); await stale; });
 
@@ -533,14 +546,17 @@ describe("stale driver switch report ownership", () => {
       await waiting;
       await command("acp", context);
       if (scenario.returnToCli) await command("cli", context);
-      const latestReports = messages.filter((message) => message.customType === "pi-agy-bridge:doctor");
+      const latestReports = notify.mock.calls;
       assert.equal(latestReports.length, scenario.returnToCli ? 2 : 1);
-      assert.match(latestReports.at(-1)!.content, scenario.returnToCli ? /Antigravity CLI/ : /Antigravity ACP/);
-      messages.length = 0;
+      assert.match(latestReports.at(-1)!.arguments[0], scenario.returnToCli ? /Antigravity CLI/ : /Antigravity ACP/);
+      for (const call of latestReports) assert.equal(call.arguments[1], "info");
+      notify.mock.resetCalls();
 
       release(scenario.outcome === "failure" ? new Error("late registry failure") : undefined);
       await stale;
-      assert.equal(messages.length, 0, "superseded completion must not publish diagnostics, warnings, or failures");
+      assert.equal(sendMessage.mock.callCount(), 0);
+      assert.equal(stderr.mock.callCount(), 0);
+      assert.equal(notify.mock.callCount(), 0, "superseded completion must not publish diagnostics, warnings, or failures");
       assert.equal(bridge.driver.id, scenario.returnToCli ? "cli" : "acp");
       assert.deepEqual(setStatus.mock.calls.at(-1)?.arguments, ["agy-bridge", undefined]);
     });

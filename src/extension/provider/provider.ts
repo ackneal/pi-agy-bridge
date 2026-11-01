@@ -297,6 +297,18 @@ export class Bridge {
     return this.progressStatus.show(ctx.ui, message);
   }
 
+  private notifyUser(ctx: ExtensionContext | undefined, message: string, type: "info" | "warning" | "error" = "info"): void {
+    try {
+      if (ctx?.hasUI) {
+        ctx.ui.notify(message, type);
+        return;
+      }
+    } catch (error) {
+      debugLog("notification", "Could not display bridge notification in Pi:", error);
+    }
+    console.error(message);
+  }
+
   private async showDoctor(ctx?: ExtensionContext, warning?: string, lifetime = this.runtimeLifetime.signal): Promise<void> {
     if (lifetime.aborted) return;
     const finishProgress = this.showProgress(ctx, `Checking ${this.driver.label} diagnostics…`);
@@ -339,20 +351,11 @@ export class Bridge {
       });
       if (lifetime.aborted) return;
 
-      this.pi.sendMessage({
-        customType: "pi-agy-bridge:doctor",
-        content: report + (authStatus === "unauthenticated"
-          ? "\nRun /login and select Antigravity [pi-agy-bridge]." : "")
-          + suffix,
-        display: true,
-      }, { triggerTurn: false });
+      this.notifyUser(ctx, report + (authStatus === "unauthenticated"
+        ? "\nRun /login and select Antigravity [pi-agy-bridge]." : "") + suffix);
     } catch (error) {
       if (lifetime.aborted) return;
-      this.pi.sendMessage({
-        customType: "pi-agy-bridge:doctor",
-        content: `Failed to collect diagnostics: ${error instanceof Error ? error.message : String(error)}${suffix}`,
-        display: true,
-      }, { triggerTurn: false });
+      this.notifyUser(ctx, `Failed to collect diagnostics: ${error instanceof Error ? error.message : String(error)}${suffix}`, "error");
     } finally {
       finishProgress();
     }
@@ -400,29 +403,17 @@ export class Bridge {
             "Usage: `/agy-bridge:driver cli` or `/agy-bridge:driver acp`",
           ].join("\n");
 
-          this.pi.sendMessage({
-            customType: "pi-agy-bridge:driver",
-            content: status,
-            display: true,
-          }, { triggerTurn: false });
+          this.notifyUser(ctx, status);
           return;
         }
 
         if (target !== "cli" && target !== "acp") {
-          this.pi.sendMessage({
-            customType: "pi-agy-bridge:driver",
-            content: `Unknown driver "${target}". Available: cli, acp.`,
-            display: true,
-          }, { triggerTurn: false });
+          this.notifyUser(ctx, `Unknown driver "${target}". Available: cli, acp.`, "warning");
           return;
         }
 
         if (target === this.driver.id) {
-          this.pi.sendMessage({
-            customType: "pi-agy-bridge:driver",
-            content: `Already using driver: **${this.driver.label}** (${target}).`,
-            display: true,
-          }, { triggerTurn: false });
+          this.notifyUser(ctx, `Already using driver: **${this.driver.label}** (${target}).`);
           return;
         }
 
@@ -432,11 +423,7 @@ export class Bridge {
         try {
           result = await this.switchDriver(target, ctx?.modelRegistry);
         } catch (error) {
-          this.pi.sendMessage({
-            customType: "pi-agy-bridge:driver",
-            content: `Failed to switch driver: ${error instanceof Error ? error.message : String(error)}`,
-            display: true,
-          }, { triggerTurn: false });
+          this.notifyUser(ctx, `Failed to switch driver: ${error instanceof Error ? error.message : String(error)}`, "error");
           return;
         } finally {
           finishProgress();

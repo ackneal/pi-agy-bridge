@@ -105,6 +105,8 @@ pi install git:github.com/ackneal/pi-agy-bridge
 | `/agy-bridge:driver` | Choose the ACP or CLI driver. |
 | `/agy-bridge:doctor` | Check driver setup, authentication, and model discovery. |
 
+Driver and doctor results are user-only notifications, not model conversation messages. Without a UI, results are written to `stderr`.
+
 ---
 
 ## How It Works

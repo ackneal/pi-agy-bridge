@@ -273,12 +273,14 @@ describe("background checks", () => {
         const handlers = new Map<string, (...args: any[]) => any>();
         const commands = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void>>();
         const messages: string[] = [];
+        t.mock.method(console, "error", (message: string) => { messages.push(message); });
+        const sendMessage = t.mock.fn();
         let provider!: Provider;
         const bridge = new Bridge({
           on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
           registerCommand: (name: string, command: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) => commands.set(name, command.handler),
           registerProvider: (registered: Provider) => { provider = registered; },
-          sendMessage: (message: { content: string }) => { messages.push(message.content); },
+          sendMessage,
         } as unknown as ExtensionAPI, driver);
         const listeners = process.listenerCount("exit");
         bridge.start();
@@ -303,8 +305,11 @@ describe("background checks", () => {
           handlers.get("session_start")!({ reason }, ctx);
           await finished;
         }
+        const startupMessages = sendMessage.mock.callCount();
         await commands.get("agy-bridge:doctor")!("", ctx);
 
+        assert.equal(messages.length, 1);
+        assert.equal(sendMessage.mock.callCount(), startupMessages, "doctor must not send conversation messages");
         assert.match(messages.at(-1)!, authenticated ? /✓ Auth: authenticated/ : /x Auth: unauthenticated/);
         assert.doesNotMatch(messages.at(-1)!, /\nErrors\n/);
         assert.equal(process.listenerCount("exit"), listeners);
@@ -325,6 +330,8 @@ describe("background checks", () => {
         });
         await commands.get("agy-bridge:doctor")!("", ctx);
 
+        assert.equal(messages.length, 2);
+        assert.equal(sendMessage.mock.callCount(), startupMessages, "doctor must not send conversation messages after login");
         assert.match(messages.at(-1)!, /✓ Auth: authenticated/);
         assert.doesNotMatch(messages.at(-1)!, /\nErrors\n/);
         assert.equal(process.listenerCount("exit"), listeners);

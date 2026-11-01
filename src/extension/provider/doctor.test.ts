@@ -230,10 +230,11 @@ for (const driverId of ["cli", "acp"] as const) {
       assert.equal(piLogin.mock.callCount(), 0);
       assert.equal(piLogout.mock.callCount(), outcome === "unauthenticated" ? 1 : 0);
       assert.equal(login.mock.callCount(), 0);
-      assert.equal(notify.mock.callCount(), 0);
-      assert.equal(sendMessage.mock.callCount(), 2);
-      assert.match(sendMessage.mock.calls[0]!.arguments[0].content, new RegExp(`Auth: ${outcome}`));
-      if (outcome === "unauthenticated") assert.match(sendMessage.mock.calls[0]!.arguments[0].content, /Run \/login and select Antigravity \[pi-agy-bridge\]/);
+      assert.equal(notify.mock.callCount(), 2);
+      assert.equal(sendMessage.mock.callCount(), 0);
+      for (const call of notify.mock.calls) assert.equal(call.arguments[1], "info");
+      assert.match(notify.mock.calls[0]!.arguments[0], new RegExp(`Auth: ${outcome}`));
+      if (outcome === "unauthenticated") assert.match(notify.mock.calls[0]!.arguments[0], /Run \/login and select Antigravity \[pi-agy-bridge\]/);
       assert.deepEqual(refresh.mock.calls[0]!.arguments, [{ providers: ["agy"], allowNetwork: false }]);
       const record = readStoredCredential("agy", authPath);
       if (outcome === "unauthenticated") assert.equal(record, undefined);
@@ -255,6 +256,7 @@ test("doctor command progress and reporting", async (t) => {
     { name: "diagnostic detection failure", hasUI: true, failure: true, shutdown: false, switch: false },
     { name: "shutdown while usage is pending", hasUI: true, failure: false, shutdown: true, switch: false },
     { name: "headless diagnostics report without UI", hasUI: false, failure: false, shutdown: false, switch: false },
+    { name: "headless diagnostic failure reports to stderr", hasUI: false, failure: true, shutdown: false, switch: false },
     { name: "post-switch diagnostics failure is not a switch failure", hasUI: true, failure: true, shutdown: false, switch: true },
   ]) {
     await t.test(row.name, async (t) => {
@@ -263,6 +265,8 @@ test("doctor command progress and reporting", async (t) => {
       let shutdown!: () => Promise<void>;
       const sendMessage = t.mock.fn();
       const setStatus = t.mock.fn();
+      const notify = t.mock.fn();
+      const stderr = t.mock.method(console, "error", () => {});
       const bridge = new Bridge({
         registerCommand: (name: string, command: { handler: Handler }) => commands.set(name, command.handler),
         registerProvider: () => {},
@@ -292,7 +296,7 @@ test("doctor command progress and reporting", async (t) => {
       });
       if (row.switch) t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
       bridge.start();
-      const ctx = { hasUI: row.hasUI, ui: { setStatus } } as unknown as ExtensionCommandContext;
+      const ctx = { hasUI: row.hasUI, ui: { setStatus, notify } } as unknown as ExtensionCommandContext;
 
       pending = commands.get(row.switch ? "agy-bridge:driver" : "agy-bridge:doctor")!(row.switch ? "acp" : "", ctx);
       await reached;
@@ -312,14 +316,15 @@ test("doctor command progress and reporting", async (t) => {
       assert.equal(setStatus.mock.callCount(), row.hasUI ? row.switch ? 4 : 2 : 0);
       assert.equal(detect.mock.callCount(), row.shutdown ? 0 : 1);
       if (row.switch) assert.equal(bridge.driver.id, "acp");
-      assert.equal(sendMessage.mock.callCount(), row.shutdown ? 0 : 1);
+      assert.equal(sendMessage.mock.callCount(), 0);
+      assert.equal(notify.mock.callCount(), !row.shutdown && row.hasUI ? 1 : 0);
+      assert.equal(stderr.mock.callCount(), !row.shutdown && !row.hasUI ? 1 : 0);
       if (!row.shutdown) {
-        const [message, options] = sendMessage.mock.calls.at(-1)!.arguments as unknown as [{ customType: string; content: string; display: boolean }, unknown];
-        assert.equal(message.customType, "pi-agy-bridge:doctor");
-        assert.equal(message.display, true);
-        assert.deepEqual(options, { triggerTurn: false });
-        if (row.failure) assert.equal(message.content, "Failed to collect diagnostics: synthetic diagnostics failure");
-        else assert.match(message.content, /^agy-bridge doctor\n/);
+        const [message, severity] = (row.hasUI ? notify : stderr).mock.calls.at(-1)!.arguments;
+        if (row.hasUI) assert.equal(severity, row.failure ? "error" : "info");
+        else assert.equal(stderr.mock.calls[0]!.arguments.length, 1);
+        if (row.failure) assert.equal(message, "Failed to collect diagnostics: synthetic diagnostics failure");
+        else assert.match(message, /^agy-bridge doctor\n/);
       }
     });
   }
@@ -340,6 +345,7 @@ for (const row of [
     let shutdown!: () => Promise<void>;
     let provider!: Provider;
     const sendMessage = t.mock.fn();
+    const stderr = t.mock.method(console, "error", () => {});
     const driver = new CliDriver();
     t.mock.method(driver, "detectExecutable", () => undefined);
     const login = t.mock.method(driver.authentication, "login", async () => {});
@@ -368,14 +374,14 @@ for (const row of [
 
     assert.equal(login.mock.callCount(), 1, "doctor must not start a new login");
     assert.equal(usage.mock.callCount(), 1);
-    assert.equal(sendMessage.mock.callCount(), 1);
-    const [message] = sendMessage.mock.calls[0]!.arguments;
-    assert.equal(message.customType, "pi-agy-bridge:doctor");
-    assert.ok(message.content.includes(`Auth: ${row.status}`));
-    assert.equal(message.content.includes("Quota remaining"), row.hasQuota);
-    if (row.outcome === "network failure") assert.match(message.content, /! usage /);
-    else assert.doesNotMatch(message.content, /! usage /);
-    if (row.outcome === "network failure") assert.match(message.content, /synthetic network failure/);
+    assert.equal(sendMessage.mock.callCount(), 0);
+    assert.equal(stderr.mock.callCount(), 1);
+    const [report] = stderr.mock.calls[0]!.arguments;
+    assert.ok(report.includes(`Auth: ${row.status}`));
+    assert.equal(report.includes("Quota remaining"), row.hasQuota);
+    if (row.outcome === "network failure") assert.match(report, /! usage /);
+    else assert.doesNotMatch(report, /! usage /);
+    if (row.outcome === "network failure") assert.match(report, /synthetic network failure/);
   });
 }
 
@@ -386,7 +392,8 @@ for (const row of [
 ] as const) {
   test(`ACP doctor reports ${row.name} without logging in`, async (t) => {
     let doctor!: () => Promise<void>;
-    const messages: string[] = [];
+    const stderr = t.mock.method(console, "error", () => {});
+    const sendMessage = t.mock.fn();
     const driver = new AcpDriver();
     const login = t.mock.method(driver.authentication, "login", async () => {
       throw new Error("login must not run");
@@ -400,9 +407,7 @@ for (const row of [
         if (name === "agy-bridge:doctor") doctor = command.handler;
       },
       registerProvider: () => {}, on: () => {},
-      sendMessage: (message: { content: string }) => {
-        messages.push(message.content);
-      },
+      sendMessage,
     } as unknown as ExtensionAPI;
     t.mock.method(driver, "detectExecutable", () => undefined);
     const bridge = new Bridge(pi, driver);
@@ -411,7 +416,9 @@ for (const row of [
 
     await doctor();
 
-    const report = messages.join("\n");
+    assert.equal(sendMessage.mock.callCount(), 0);
+    assert.equal(stderr.mock.callCount(), 1);
+    const report = stderr.mock.calls[0]!.arguments[0];
     assert.match(report, row.expected);
     if (row.result instanceof Error) assert.match(report, /authentication error|network timeout/i);
     assert.equal(probe.mock.callCount(), 1);
@@ -482,6 +489,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
       let doctor: (() => Promise<void>) | undefined;
       let shutdown: (() => Promise<void>) | undefined;
       const sendMessage = t.mock.fn();
+      const stderr = t.mock.method(console, "error", () => {});
       const pi = {
         registerCommand: (name: string, command: { handler: () => Promise<void> }) => { if (name === "agy-bridge:doctor") doctor = command.handler; },
         on: (name: string, handler: () => Promise<void>) => { if (name === "session_shutdown") shutdown = handler; },
@@ -514,6 +522,7 @@ test("doctor suppresses reports after shutdown at each await boundary", async (t
         ? [["--output-format", "json", "--print", "/usage"]]
         : [["--output-format", "json", "--print", "/usage"], ["--version"]]);
       assert.equal(sendMessage.mock.callCount(), 0);
+      assert.equal(stderr.mock.callCount(), 0);
     });
   }
 });
@@ -564,6 +573,7 @@ test("doctor starts a fresh query after login while the cancelled query is still
   let doctor!: () => Promise<void>;
   let provider!: Provider;
   const sendMessage = t.mock.fn();
+  const stderr = t.mock.method(console, "error", () => {});
   const bridge = new Bridge({
     registerCommand: (name: string, command: { handler: () => Promise<void> }) => { if (name === "agy-bridge:doctor") doctor = command.handler; },
     registerProvider: (registered: Provider) => { provider = registered; },
@@ -592,16 +602,18 @@ test("doctor starts a fresh query after login while the cancelled query is still
   assert.equal(children.length, 3, "new doctor must launch its own query");
   close(children[0]!);
   await oldDoctor;
-  assert.equal(sendMessage.mock.callCount(), 0, "cancelled doctor must not publish");
+  assert.equal(sendMessage.mock.callCount(), 0);
+  assert.equal(stderr.mock.callCount(), 0, "cancelled doctor must not publish");
   const joinedDoctor = doctor();
   pending.push(joinedDoctor);
   assert.equal(children.length, 3, "old cleanup must not discard the new shared query");
   close(children[2]!, "75");
   await Promise.all([freshDoctor, joinedDoctor]);
 
-  assert.equal(sendMessage.mock.callCount(), 2);
-  for (const call of sendMessage.mock.calls) {
-    assert.match((call.arguments[0] as { content: string }).content, /5h 75%/);
+  assert.equal(sendMessage.mock.callCount(), 0);
+  assert.equal(stderr.mock.callCount(), 2);
+  for (const call of stderr.mock.calls) {
+    assert.match(call.arguments[0], /5h 75%/);
   }
 });
 
@@ -610,6 +622,7 @@ test("doctor reports installation errors without starting a model turn", async (
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let handler: (() => Promise<void>) | undefined;
   const sendMessage = t.mock.fn();
+  const stderr = t.mock.method(console, "error", () => {});
   const pi = {
     on: () => {},
     registerProvider: () => {},
@@ -627,13 +640,11 @@ test("doctor reports installation errors without starting a model turn", async (
   assert.ok(handler);
   await handler();
 
-  assert.equal(sendMessage.mock.callCount(), 1);
-  const [message, options] = sendMessage.mock.calls[0]!.arguments;
-  assert.equal(message.customType, "pi-agy-bridge:doctor");
-  assert.equal(message.display, true);
-  assert.match(message.content, /Antigravity CLI plugin manifest not found/);
-  assert.match(message.content, /Auth:/);
-  assert.deepEqual(options, { triggerTurn: false });
+  assert.equal(sendMessage.mock.callCount(), 0);
+  assert.equal(stderr.mock.callCount(), 1);
+  const [report] = stderr.mock.calls[0]!.arguments;
+  assert.match(report, /Antigravity CLI plugin manifest not found/);
+  assert.match(report, /Auth:/);
 });
 
 test("doctor clears the recorded installation error after successful installation", async (t) => {
@@ -651,6 +662,7 @@ test("doctor clears the recorded installation error after successful installatio
   await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.2.14; else echo "install denied" >&2; exit 7; fi\n', { mode: 0o755 });
   let handler: (() => Promise<void>) | undefined;
   const sendMessage = t.mock.fn();
+  const stderr = t.mock.method(console, "error", () => {});
   const pi = {
     on: () => {}, registerProvider: () => {}, sendMessage,
     registerCommand: (name: string, command: { handler: () => Promise<void> }) => {
@@ -664,13 +676,17 @@ test("doctor clears the recorded installation error after successful installatio
   await assert.rejects(bridge.driver.installPlugin(pluginDir), /install denied/);
   assert.ok(handler);
   await handler();
-  assert.match(sendMessage.mock.calls[0]!.arguments[0].content, /! plugin .*install denied/s);
+  assert.equal(sendMessage.mock.callCount(), 0);
+  assert.equal(stderr.mock.callCount(), 1);
+  assert.match(stderr.mock.calls[0]!.arguments[0], /! plugin .*install denied/s);
 
   await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.2.14; fi\n');
   await bridge.driver.installPlugin(pluginDir);
   await handler();
 
-  const report = sendMessage.mock.calls[1]!.arguments[0].content;
+  assert.equal(sendMessage.mock.callCount(), 0);
+  assert.equal(stderr.mock.callCount(), 2);
+  const report = stderr.mock.calls[1]!.arguments[0];
   assert.ok(report.includes(`✓ Antigravity CLI 1.2.14 (Plugin ${manifest.version})`));
   assert.doesNotMatch(report, /! plugin \(/);
   assert.match(report, /! usage \(/);
