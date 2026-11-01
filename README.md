@@ -6,7 +6,7 @@
 
 **Use Antigravity models in Pi without changing how Pi works.**
 
-Use Antigravity models with [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent). Keep your Pi tools, extensions, skills, and session history.
+Use Antigravity models with [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) through Google's official ACP server. Keep your Pi tools, extensions, skills, and session history. An optional CLI driver is also available.
 
 ---
 
