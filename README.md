@@ -144,9 +144,17 @@ The bridge reuses a native session when it matches Pi's history. If Pi branches 
 
 | Variable | Description |
 | :--- | :--- |
-| `AGY_ACP_BIN` | Use a custom ACP server executable instead of the managed version. |
+| `AGY_ACP_DIR` | Absolute path to a complete ACP Server distribution directory instead of the managed version. Must contain executable `agy_acp_server.par` and `localharness_external` files. |
 | `AGY_BRIDGE_DEBUG=1` | Write diagnostic logs to `stderr`. |
 | `GEMINI_HOME` | Set the backend state directory. Default: `~/.gemini`. |
+
+For a custom ACP distribution, keep both files in the same directory and set:
+
+```bash
+export AGY_ACP_DIR="$HOME/path/to/agy-acp-server"
+```
+
+Relative paths and literal `~` paths are not accepted. Invalid directories produce an error without downloading the managed server. `AGY_ACP_BIN` is no longer supported; migrate to `AGY_ACP_DIR` and point it to the containing directory.
 
 ### Managed ACP Server Details
 
@@ -166,7 +174,7 @@ Run `/agy-bridge:doctor` to check the installation, connection, and sign-in stat
 - **ACP download or extraction fails:** Check your network, disk space, and permissions under `~/.pi/agent/`. Downloads are about 93–307 MiB. Linux extraction can require about 1 GiB.
 - **Signed out:** Run `/login` and select **Antigravity [pi-agy-bridge]**.
 - **No models appear:** Sign in and run `/agy-bridge:doctor`. When offline, the bridge can use a cached model catalog.
-- **Custom ACP server fails:** Check that the file is executable and supports ACP. Unset `AGY_ACP_BIN` to use the managed server.
+- **Custom ACP server fails:** Check that `AGY_ACP_DIR` is an absolute directory path containing executable `agy_acp_server.par` and `localharness_external` files. Unset `AGY_ACP_DIR` to use the managed server.
 - **Enable debug logs:**
   ```bash
   export AGY_BRIDGE_DEBUG=1

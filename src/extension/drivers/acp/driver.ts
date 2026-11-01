@@ -38,10 +38,10 @@ export class Driver implements BridgeDriver {
   private async connectionOptions(signal?: AbortSignal, onProgress?: (progress: DriverInstallationProgress) => void) {
     signal?.throwIfAborted();
     if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("Antigravity ACP requires macOS or Linux; native Windows is not supported");
-    const override = process.env.AGY_ACP_BIN?.trim();
-    if (override) {
+    const override = process.env.AGY_ACP_DIR;
+    if (override?.trim()) {
       const executable = detectExecutable();
-      if (!executable) throw new Error(`AGY_ACP_BIN is not an executable file: ${override}. Fix its path and permissions, or unset it to use the managed ACP installation.`);
+      if (!executable) throw new Error(`AGY_ACP_DIR must be an absolute directory containing executable regular files agy_acp_server.par and localharness_external: ${override}. Fix its path and permissions, or unset it to use the managed ACP installation.`);
       return resolveConnectionOptions(executable);
     }
 
@@ -57,7 +57,7 @@ export class Driver implements BridgeDriver {
   }
 
   detectExecutable(): string | undefined {
-    return detectExecutable() ?? (process.env.AGY_ACP_BIN?.trim() ? undefined : findInstallation());
+    return detectExecutable() ?? (process.env.AGY_ACP_DIR?.trim() ? undefined : findInstallation());
   }
 
   validateSelection(model: Model<any>, options: SimpleStreamOptions | undefined): void {

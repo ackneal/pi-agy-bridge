@@ -3,83 +3,84 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { Driver } from "./driver.ts";
 import { detectExecutable, resolveConnectionOptions } from "./options.ts";
 
-const local = ".local/bin/agy_acp_server";
-const par = ".local/opt/agy-acp/v1/agy_acp_server.par";
-const bin = ".local/opt/agy-acp/v1/agy_acp_server";
-const direct = ".local/opt/agy-acp/agy_acp_server";
-type Fixture = readonly [string, "executable" | "plain" | "directory" | "symlink" | "broken" | "loop"];
-const rows: { name: string; files: Fixture[]; custom?: string; env?: string; expected?: string }[] = [
-  { name: "explicit wins over environment and search", files: [["custom", "executable"], ["env", "executable"], [local, "executable"]], custom: "custom", env: "env", expected: "custom" },
-  { name: "explicit non-executable does not fall back", files: [["custom", "plain"], ["env", "executable"]], custom: "custom", env: "env" },
-  { name: "explicit directory rejected", files: [["custom", "directory"]], custom: "custom" },
-  { name: "explicit missing rejected", files: [], custom: "missing" },
-  { name: "explicit symlink accepted", files: [["target", "executable"], ["custom", "symlink"]], custom: "custom", expected: "custom" },
-  { name: "broken symlink rejected", files: [["custom", "broken"]], custom: "custom" },
-  { name: "filesystem error rejected", files: [["custom", "loop"]], custom: "custom" },
-  { name: "environment wins over search", files: [["env", "executable"], [local, "executable"]], env: "env", expected: "env" },
-  { name: "environment non-executable does not fall back to implicit search", files: [["env", "plain"], [local, "executable"]], env: "env" },
-  { name: "environment directory rejected", files: [["env", "directory"]], env: "env" },
-  { name: "environment executable symlink accepted", files: [["target", "executable"], ["env", "symlink"]], env: "env", expected: "env" },
-  { name: "implicit versioned distribution ignored", files: [[par, "executable"], [bin, "executable"], [local, "executable"]] },
-  { name: "implicit versioned executable ignored", files: [[par, "plain"], [bin, "executable"]] },
-  { name: "implicit versioned directory ignored", files: [[par, "directory"], [bin, "executable"]] },
-  { name: "implicit executable symlink ignored", files: [["target", "executable"], [direct, "symlink"]] },
-  { name: "direct non-executable skipped", files: [[direct, "plain"], [local, "executable"]] },
-  { name: "local non-executable ignored", files: [[local, "plain"]] },
-  { name: "local directory ignored", files: [[local, "directory"]] },
-  { name: "unreadable implicit search ignored", files: [[".local/opt/agy-acp", "plain"], [local, "executable"]] },
-  { name: "no candidates", files: [] },
+type FileKind = "executable" | "plain" | "directory" | "missing" | "symlink" | "broken" | "loop";
+const rows: { name: string; directory?: string; server?: FileKind; helper?: FileKind; valid?: boolean }[] = [
+  { name: "valid absolute distribution", valid: true },
+  { name: "absolute directory with spaces", directory: "with spaces", valid: true },
+  { name: "missing directory", directory: "missing" },
+  { name: "file instead of directory", directory: "file" },
+  { name: "relative directory", directory: "relative" },
+  { name: "literal tilde", directory: "~" },
+  { name: "tilde directory", directory: "~/distribution" },
+  { name: "missing server", server: "missing" },
+  { name: "nonexecutable server", server: "plain" },
+  { name: "directory server", server: "directory" },
+  { name: "missing helper", helper: "missing" },
+  { name: "nonexecutable helper", helper: "plain" },
+  { name: "directory helper", helper: "directory" },
+  { name: "server symlink", server: "symlink", valid: true },
+  { name: "helper symlink", helper: "symlink", valid: true },
+  { name: "broken server symlink", server: "broken" },
+  { name: "broken helper symlink", helper: "broken" },
+  { name: "filesystem error", server: "loop" },
+  { name: "empty", directory: "" },
+  { name: "blank", directory: "  " },
+  { name: "unset", directory: "unset" },
 ];
 
 for (const row of rows) {
-  test(`detectExecutable: ${row.name}`, (t) => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "acp-options-"));
-    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-    t.mock.method(os, "homedir", () => home);
-    const previous = process.env.AGY_ACP_BIN;
+  test(`detectExecutable: ${row.name}`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-options-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.mock.method(os, "homedir", () => root);
+    const previous = process.env.AGY_ACP_DIR;
     t.after(() => {
-      if (previous === undefined) delete process.env.AGY_ACP_BIN;
-      else process.env.AGY_ACP_BIN = previous;
+      if (previous === undefined) delete process.env.AGY_ACP_DIR;
+      else process.env.AGY_ACP_DIR = previous;
     });
-    delete process.env.AGY_ACP_BIN;
 
-    for (const [name, kind] of row.files) {
-      const filepath = path.join(home, name);
-      fs.mkdirSync(path.dirname(filepath), { recursive: true });
+    const directory = path.join(root, row.directory === "with spaces" ? "with spaces" : "distribution");
+    fs.mkdirSync(directory);
+    for (const [name, kind] of [["agy_acp_server.par", row.server ?? "executable"], ["localharness_external", row.helper ?? "executable"]] as const) {
+      const filepath = path.join(directory, name);
+      if (kind === "missing") continue;
       if (kind === "directory") fs.mkdirSync(filepath);
       else if (kind === "symlink" || kind === "broken" || kind === "loop") {
-        fs.symlinkSync(kind === "loop" ? filepath : path.join(home, kind === "symlink" ? "target" : "missing"), filepath);
+        const target = path.join(root, `${name}-target`);
+        if (kind === "symlink") fs.writeFileSync(target, "not a program\n", { mode: 0o700 });
+        fs.symlinkSync(kind === "loop" ? filepath : target, filepath);
       } else {
-        // Deliberately not a runnable program: detection must not launch auth probes.
-        fs.writeFileSync(filepath, "not a program\n");
-        fs.chmodSync(filepath, kind === "executable" ? 0o700 : 0o600);
+        // Detection must not launch the executable.
+        fs.writeFileSync(filepath, "not a program\n", { mode: kind === "executable" ? 0o700 : 0o600 });
       }
     }
-    if (row.env) process.env.AGY_ACP_BIN = `~/${row.env}`;
 
-    const result = detectExecutable(row.custom ? `~/${row.custom}` : undefined);
+    let override: string | undefined = directory;
+    if (row.directory === "missing") override = path.join(root, "missing");
+    else if (row.directory === "file") {
+      override = path.join(root, "file");
+      fs.writeFileSync(override, "not a directory");
+    } else if (row.directory === "relative") override = path.relative(process.cwd(), directory);
+    else if (row.directory === "unset") override = undefined;
+    else if (row.directory !== undefined && row.directory !== "with spaces") override = row.directory;
+    if (override === undefined) delete process.env.AGY_ACP_DIR;
+    else process.env.AGY_ACP_DIR = override;
 
-    assert.equal(result, row.expected ? path.join(home, row.expected) : undefined);
-  });
-}
+    assert.equal(detectExecutable(), row.valid ? path.join(directory, "agy_acp_server.par") : undefined);
 
-for (const source of ["explicit", "environment"] as const) {
-  test(`relative ACP ${source} path is anchored before changing workspace`, (t) => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acp-relative-path-"));
-    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-    const executable = path.join(directory, "agy_acp_server");
-    fs.writeFileSync(executable, "not a program\n", { mode: 0o700 });
-    const relative = path.relative(process.cwd(), executable);
-    const previous = process.env.AGY_ACP_BIN;
-    t.after(() => {
-      if (previous === undefined) delete process.env.AGY_ACP_BIN;
-      else process.env.AGY_ACP_BIN = previous;
-    });
-    if (source === "environment") process.env.AGY_ACP_BIN = relative;
-
-    assert.equal(detectExecutable(source === "explicit" ? relative : undefined), executable);
+    if (!row.valid && override?.trim() && (process.platform === "linux" || process.platform === "darwin")) {
+      let installs = 0;
+      const driver = new Driver(async () => {
+        installs++;
+        throw new Error("unexpected managed installation");
+      });
+      assert.equal(driver.detectExecutable(), undefined);
+      await assert.rejects(driver.authentication.probe(new AbortController().signal, () => {}), /AGY_ACP_DIR must be an absolute directory containing executable regular files agy_acp_server\.par and localharness_external/);
+      assert.equal(installs, 0);
+    }
   });
 }
 

@@ -383,7 +383,7 @@ export class Bridge {
           const cliPath = createBridgeDriver("cli").detectExecutable();
           let acpStatus = acpPath ? `✓ Found (${acpPath})` : "Not installed — downloads automatically on first ACP use";
           if (!acpPath) {
-            if (process.env.AGY_ACP_BIN?.trim()) acpStatus = "✗ Invalid AGY_ACP_BIN — fix its path/permissions or unset it";
+            if (process.env.AGY_ACP_DIR?.trim()) acpStatus = "✗ Invalid AGY_ACP_DIR — check its absolute path, required files, and permissions, or unset it";
             else {
               try { resolveRelease(); }
               catch (error) { acpStatus = error instanceof Error ? error.message : String(error); }

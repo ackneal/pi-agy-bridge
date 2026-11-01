@@ -250,12 +250,12 @@ describe("background checks", () => {
     for (const authenticated of [false, true]) {
       test(`${id} background checks report authenticated=${authenticated} and clean up before returning`, async (t) => {
         const home = await registerAuthHomeFixture(t);
-        const previous = { home: process.env.GEMINI_HOME, bin: process.env.AGY_ACP_BIN };
+        const previous = { home: process.env.GEMINI_HOME, dir: process.env.AGY_ACP_DIR };
         process.env.GEMINI_HOME = home;
-        delete process.env.AGY_ACP_BIN;
+        delete process.env.AGY_ACP_DIR;
         t.after(() => {
           if (previous.home === undefined) delete process.env.GEMINI_HOME; else process.env.GEMINI_HOME = previous.home;
-          if (previous.bin === undefined) delete process.env.AGY_ACP_BIN; else process.env.AGY_ACP_BIN = previous.bin;
+          if (previous.dir === undefined) delete process.env.AGY_ACP_DIR; else process.env.AGY_ACP_DIR = previous.dir;
         });
         const authPath = path.join(home, "auth.json");
         await writeFile(authPath, JSON.stringify(authenticated ? { agy: { ...createAgyBridgeCredential(), driver: id } } : {}));

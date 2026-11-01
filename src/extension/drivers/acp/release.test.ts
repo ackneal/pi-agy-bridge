@@ -107,10 +107,10 @@ test("rejects unsafe or non-ZIP archive filenames", () => {
 
 test("rejects unsupported platform and architecture combinations", () => {
   const cases = [
-    { platform: "win32", arch: "x64", message: /AGY_ACP_BIN/ },
-    { platform: "freebsd", arch: "x64", message: /AGY_ACP_BIN/ },
-    { platform: "darwin", arch: "ia32", message: /AGY_ACP_BIN/ },
-    { platform: "linux", arch: "riscv64", message: /AGY_ACP_BIN/ },
+    { platform: "win32", arch: "x64", message: /AGY_ACP_DIR/ },
+    { platform: "freebsd", arch: "x64", message: /AGY_ACP_DIR/ },
+    { platform: "darwin", arch: "ia32", message: /AGY_ACP_DIR/ },
+    { platform: "linux", arch: "riscv64", message: /AGY_ACP_DIR/ },
   ] as const;
 
   for (const row of cases) {
