@@ -126,7 +126,7 @@ Antigravity models request tools through the bridge. Pi runs registered tool req
 | Image injection | Automatically injects images referenced in user messages | — |
 | Usage | Prompt-level reporting | Step-level reporting |
 
-Use `/agy-bridge:driver` to change the driver. Use `/model` to see its available models.
+Use `/agy-bridge:driver` to change the driver. Use `/model` to see its available models. On startup, the bridge uses the driver recorded in its saved authentication. If no saved authentication or valid driver is present, it defaults to ACP.
 
 **Images:** Both drivers support tool-based image reads. ACP also uses an image observer for eligible offloaded images. The observer returns text and may add latency and model usage.
 

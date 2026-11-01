@@ -189,7 +189,8 @@ export class Bridge {
 
   constructor(pi: ExtensionAPI, driver?: BridgeDriver) {
     this.pi = pi;
-    this.driver = driver ?? createBridgeDriver("acp");
+    const credential = driver ? undefined : readStoredCredential("agy", path.join(getAgentDir(), "auth.json"));
+    this.driver = driver ?? createBridgeDriver(credential?.type === "oauth" && credential.driver === "cli" ? "cli" : "acp");
     this.driver.onInstallationProgress = (progress) => this.installationProgress.update(progress);
     this.authentication = new AgyAuthentication(this.driver.authentication, async () => {
       this.runtimeLifetime.abort(new Error(`${this.driver.label} login changed the bridge session`));

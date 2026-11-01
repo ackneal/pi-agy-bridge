@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import test from "node:test";
-import type { Credential, OAuthCredential } from "@earendil-works/pi-ai";
+import type { Credential, OAuthCredential, Provider } from "@earendil-works/pi-ai";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { ModelRegistry, ModelRuntime, readStoredCredential, type ExtensionAPI, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
@@ -222,6 +222,89 @@ for (const row of [
     assert.equal(stored?.type, "oauth");
     assert.ok(stored?.type === "oauth");
     assert.equal(stored.loginEpoch, undefined);
+  });
+}
+
+for (const driverId of ["cli", "acp"] as const) {
+  test(`saved ${driverId} is restored before registration and survives authenticated startup`, async (t) => {
+    const directory = await registerAuthHomeFixture(t);
+    const authPath = path.join(directory, "auth.json");
+    const original = { ...createAgyBridgeCredential(driverId), expires: 4102444800000 };
+    await writeFile(authPath, JSON.stringify({ agy: original }));
+    const events: string[] = [];
+    const models = parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)")
+      .map((model) => ({ ...model, agyDriver: driverId }));
+    const discoveries = [CliDriver, AcpDriver].map((Driver) => t.mock.method(Driver.prototype, "discoverModels", async function (this: CliDriver | AcpDriver) {
+      assert.equal(this.id, driverId);
+      events.push(`discover:${this.id}`);
+      return models;
+    }));
+    let provider!: Provider;
+    let start!: (event: SessionStartEvent, context: ExtensionContext) => void;
+    let shutdown!: () => Promise<void>;
+    const bridge = new Bridge({
+      on: (event: string, handler: unknown) => {
+        if (event === "session_start") start = handler as typeof start;
+        if (event === "session_shutdown") shutdown = handler as typeof shutdown;
+      },
+      registerCommand() {},
+      registerProvider: (registered: Provider) => {
+        assert.equal(bridge.driver.id, driverId);
+        events.push(`register:${bridge.driver.id}`);
+        provider = registered;
+      },
+    } as unknown as ExtensionAPI);
+    const authenticated = deferred<boolean>();
+    const probe = t.mock.method(bridge.driver.authentication, "probe", () => {
+      assert.equal(bridge.driver.id, driverId);
+      events.push(`probe:${bridge.driver.id}`);
+      return authenticated.promise;
+    });
+    const login = t.mock.method(bridge.driver.authentication, "login", async () => { throw new Error("Unexpected login"); });
+    const piLogin = t.mock.method(ModelRuntime.prototype, "login");
+    const piLogout = t.mock.method(ModelRuntime.prototype, "logout");
+    const completed = deferred<void>();
+    const refresh = t.mock.fn(async (options: unknown) => {
+      try {
+        assert.deepEqual(options, { providers: ["agy"], allowNetwork: true });
+        assert.deepEqual(readStoredCredential("agy", authPath), original);
+        await provider.refreshModels!({
+          allowNetwork: true, signal: new AbortController().signal,
+          publish: async (publication) => { publication.update?.(); return true; },
+        });
+        completed.resolve();
+      } catch (error) {
+        completed.reject(error);
+      }
+    });
+    t.after(async () => {
+      authenticated.resolve(true);
+      await shutdown?.();
+    });
+
+    assert.equal(bridge.driver.id, driverId);
+    assert.deepEqual(events, []);
+    bridge.start();
+    assert.deepEqual(events, [`register:${driverId}`]);
+    assert.equal(start({ type: "session_start", reason: "startup" }, {
+      hasUI: false, sessionManager: { getSessionId: () => "restored-driver" }, modelRegistry: { refresh },
+    } as unknown as ExtensionContext), undefined);
+    assert.deepEqual(events, [`register:${driverId}`, `probe:${driverId}`]);
+    assert.equal(refresh.mock.callCount(), 0);
+    authenticated.resolve(true);
+    await completed.promise;
+
+    assert.deepEqual(events, [`register:${driverId}`, `probe:${driverId}`, `discover:${driverId}`]);
+    assert.equal(probe.mock.callCount(), 1);
+    assert.equal(login.mock.callCount(), 0);
+    assert.equal(piLogin.mock.callCount(), 0);
+    assert.equal(piLogout.mock.callCount(), 0);
+    assert.equal(refresh.mock.callCount(), 1);
+    assert.equal(discoveries[0]!.mock.callCount(), driverId === "cli" ? 1 : 0);
+    assert.equal(discoveries[1]!.mock.callCount(), driverId === "acp" ? 1 : 0);
+    assert.equal(bridge.driver.id, driverId);
+    assert.equal(provider.getModels()[0]?.id, models[0]!.id);
+    assert.deepEqual(readStoredCredential("agy", authPath), original);
   });
 }
 

@@ -1,14 +1,14 @@
-import { useAuthHomeFixture } from "./auth-home-fixture.ts";
+import { registerAuthHomeFixture, useAuthHomeFixture } from "./auth-home-fixture.ts";
 import assert from "node:assert/strict";
 import test, { describe, type TestContext } from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
 import { ModelRuntime, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Provider } from "@earendil-works/pi-ai";
+import type { Credential, Provider } from "@earendil-works/pi-ai";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
 import { Connection as AcpConnection } from "../drivers/acp/connection.ts";
 import { useExecutable } from "../drivers/acp/executable-fixture.ts";
-import { AgyAuthentication } from "./auth.ts";
+import { AgyAuthentication, createAgyBridgeCredential } from "./auth.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge } from "./provider.ts";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -51,7 +51,42 @@ for (const failure of ["installation", "initialization", "session", "authenticat
   });
 }
 
-test("manual CLI selection applies to this bridge instance, not the next startup", async (t) => {
+for (const scenario of [
+  { name: "saved CLI", credential: createAgyBridgeCredential("cli"), expected: "cli" },
+  { name: "saved ACP", credential: createAgyBridgeCredential("acp"), expected: "acp" },
+  { name: "OAuth without driver", credential: createAgyBridgeCredential(), expected: "acp" },
+  { name: "legacy marker", credential: { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1" } }, expected: "acp" },
+  { name: "absent auth", expected: "acp" },
+  { name: "unsupported driver", credential: { ...createAgyBridgeCredential(), driver: "unsupported" }, expected: "acp" },
+  { name: "injected ACP overrides saved CLI", credential: createAgyBridgeCredential("cli"), injected: "acp", expected: "acp" },
+  { name: "injected CLI overrides saved ACP", credential: createAgyBridgeCredential("acp"), injected: "cli", expected: "cli" },
+] satisfies { name: string; credential?: Credential; injected?: "cli" | "acp"; expected: "cli" | "acp" }[]) {
+  test(`startup driver selection: ${scenario.name}`, async (t) => {
+    const directory = await registerAuthHomeFixture(t);
+    if (scenario.credential) await writeFile(path.join(directory, "auth.json"), JSON.stringify({ agy: scenario.credential }));
+    const registrations = t.mock.fn((_provider: Provider) => {
+      assert.equal(bridge.driver.id, scenario.expected);
+    });
+    const cliDiscovery = t.mock.method(CliDriver.prototype, "discoverModels", async () => []);
+    const acpDiscovery = t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
+    const injected = scenario.injected === "cli" ? new CliDriver() : scenario.injected === "acp" ? new AcpDriver() : undefined;
+    const bridge = new Bridge({
+      on() {}, registerCommand() {}, registerProvider: registrations,
+    } as unknown as ExtensionAPI, injected);
+    t.after(() => bridge.liveSessions.disposeAll());
+
+    assert.equal(bridge.driver.id, scenario.expected);
+    if (injected) assert.equal(bridge.driver, injected);
+    assert.equal(registrations.mock.callCount(), 0);
+    bridge.start();
+
+    assert.equal(registrations.mock.callCount(), 1);
+    assert.equal(cliDiscovery.mock.callCount(), 0);
+    assert.equal(acpDiscovery.mock.callCount(), 0);
+  });
+}
+
+test("manual CLI selection without authentication is not persisted to the next startup", async (t) => {
   const providers: Provider[] = [];
   const pi = {
     on: () => {}, registerCommand: () => {},
