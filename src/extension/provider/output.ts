@@ -34,6 +34,9 @@ export class PiRuntimeOutput {
       case "session-reference": this.writer.setResponseId(event.reference); break;
       case "text-delta": this.writer.appendTextDelta(event.delta); break;
       case "usage": this.writer.setUsage(event.usage); break;
+      // Standalone summaries return their accounting to Pi's summary caller.
+      // Conversation turns persist accounting separately before reaching here.
+      case "accounting": this.writer.setUsage(event.usage); break;
       case "complete":
         if (event.reason === "error" || event.reason === "aborted") {
           this.writer.handleTermination(event.reason, event.error);

@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { describe, afterEach, beforeEach } from "node:test";
-import type { AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
+import { isContextOverflow, type AssistantMessageEvent, type Context, type Model, type Usage } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import type { DriverSession, DriverSubmission, RuntimeEvent } from "../drivers/types.ts";
@@ -989,4 +989,122 @@ describe("submission failure and runtime ownership", () => {
     assert.equal(abort.mock.callCount(), 1);
     assert.equal(await store.get(id, "cli:v1"), undefined);
   });
+});
+
+describe("turn accounting", () => {
+  const cases = [
+    { name: "active callback records full accounting once without changing context usage", callback: true, handoff: false, stale: false },
+    { name: "completed MCP handoff still records late accounting", callback: true, handoff: true, stale: false },
+    { name: "stale runtime cannot record accounting", callback: true, handoff: false, stale: true },
+    { name: "standalone without callback returns billable accounting", callback: false, handoff: false, stale: false },
+  ];
+
+  for (const row of cases) {
+    test(row.name, { timeout: 5000 }, async (t) => {
+      const manager = SessionManager.inMemory(process.cwd());
+      const contextAdapter = new PiContextAdapter();
+      const session = new LiveSession(contextAdapter.bind(manager));
+      const adapter = new PiRuntimeOutput({ model: "accounting-model", provider: "agy" });
+      const mcpServer = new BridgeIPC([], session.id, session.resources);
+      const gateway = new CapabilityGateway([
+        { name: "test-tool", description: "test", parameters: { type: "object", properties: {} } },
+      ], session.resources);
+      t.after(async () => {
+        gateway.cancelPendingCalls("test cleanup");
+        if (!adapter.isCompleted()) adapter.handleTermination("aborted", "test cleanup");
+        try {
+          await session.dispose();
+        } finally {
+          await mcpServer.close();
+        }
+      });
+      t.mock.getter(mcpServer, "hasPendingCalls", () => gateway.hasPendingCalls);
+      t.mock.method(mcpServer, "setToolCallHandler", (handler: Parameters<BridgeIPC["setToolCallHandler"]>[0]) => {
+        gateway.setToolCallHandler(handler);
+      });
+      let handler: ((event: RuntimeEvent) => void) | undefined;
+      const proc: DriverSession = {
+        driver: "acp", isRunning: true,
+        onRuntimeEvent: (next) => {
+          handler = next;
+          return () => { if (handler === next) handler = undefined; };
+        },
+        serializeContextUpdate: () => "",
+        submit: async (input) => { assert.equal(input.beforeInput(), true); },
+        abort: async () => {},
+      };
+      session.setSession(proc, "settings", mcpServer, "native-conversation");
+      const onAccounting = t.mock.fn((usage: Usage) => {
+        manager.appendUsage("agy_turn", "agy", adapter.message.model, usage);
+      });
+      const turn = new Turn({
+        session, adapter, context: { messages: [] }, sync: new RuntimeSessionSync(),
+        store: undefined, preparationId: session.beginPreparation(), signal: undefined,
+        sessionVersion: "acp:v1", ...(row.callback ? { onAccounting } : {}),
+      });
+      turn.attach({ proc, mcpServer });
+      assert.ok(handler, "Turn must subscribe to the live runtime");
+      const deliver = handler;
+      const outputEvents = t.mock.method(adapter, "handleRuntimeEvent");
+      const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+      const contextUsage: Usage = {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 164101, cost: zeroCost,
+      };
+      const accounting: Usage = {
+        input: 109048, output: 15092, cacheRead: 1267257, cacheWrite: 0, totalTokens: 1391397,
+        cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 },
+      };
+      deliver({ type: "usage", usage: contextUsage });
+      deliver({ type: "text-delta", delta: "answer" });
+      let toolResult: ReturnType<CapabilityGateway["call"]> | undefined;
+      if (row.handoff) {
+        turn.openToolDispatch();
+        toolResult = gateway.call("test-tool", {});
+        const handoff = await adapter.stream.result();
+        assert.equal(handoff.stopReason, "toolUse");
+        assert.equal(gateway.hasPendingCalls, true);
+        assert.equal(handler, deliver, "pending MCP calls retain the event handler between Pi turns");
+        assert.deepEqual(handoff.usage, contextUsage);
+      }
+      if (row.stale) {
+        session.setSession({ ...proc, onRuntimeEvent: () => () => {} }, "replacement", mcpServer, "replacement-conversation");
+      }
+
+      deliver({ type: "accounting", usage: accounting });
+
+      const entries = manager.getEntries().filter((entry) => entry.type === "usage");
+      const counted = row.callback && !row.stale;
+      assert.equal(onAccounting.mock.callCount(), counted ? 1 : 0);
+      assert.equal(entries.length, counted ? 1 : 0);
+      if (counted) {
+        assert.deepEqual(onAccounting.mock.calls[0]!.arguments, [accounting]);
+        assert.equal(entries[0]!.kind, "agy_turn");
+        assert.equal(entries[0]!.provider, "agy");
+        assert.equal(entries[0]!.model, "accounting-model");
+        assert.deepEqual(entries[0]!.usage, accounting);
+      }
+      assert.equal(outputEvents.mock.calls.filter((call) => call.arguments[0].type === "accounting").length,
+        row.callback ? 0 : 1, "conversation accounting must not reach the writer");
+      assert.deepEqual(adapter.message.usage, row.callback ? contextUsage : accounting);
+      assert.deepEqual(manager.buildSessionContext().messages, [], "accounting entries do not enter LLM context");
+      if (row.callback) {
+        assert.equal(isContextOverflow(adapter.message, 1_000_000), false);
+        assert.equal(isContextOverflow({ ...adapter.message, stopReason: "stop", usage: accounting }, 1_000_000), true,
+          "the reported billable counts would trigger silent overflow on a normal stop");
+      }
+      if (row.stale) {
+        assert.equal(adapter.isCompleted(), false);
+        adapter.handleTermination("aborted", "replaced runtime");
+      } else if (!row.handoff) {
+        deliver({ type: "complete", reason: "stop", resumable: true });
+      }
+      const message = await adapter.stream.result();
+      assert.deepEqual(message.usage, row.callback ? contextUsage : accounting);
+      if (!row.stale) assert.equal(message.stopReason, row.handoff ? "toolUse" : "stop");
+      if (toolResult) {
+        gateway.cancelPendingCalls("test complete");
+        await toolResult;
+      }
+    });
+  }
 });

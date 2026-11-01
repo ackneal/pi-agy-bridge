@@ -1,9 +1,42 @@
-import type { PromptResponse, SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { PromptResponse, Usage } from "@agentclientprotocol/sdk/unstable";
 import type { RuntimeEvent } from "../types.ts";
 import { isRegisteredPiMcpTool } from "./permissions.ts";
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function mapUsage(raw: Usage | null | undefined): Extract<RuntimeEvent, { type: "accounting" }>["usage"] | undefined {
+  if (!raw) return undefined;
+
+  const inputTokens = tokenCount(raw.inputTokens);
+  const outputTokens = tokenCount(raw.outputTokens);
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+
+  const cacheRead = tokenCount(raw.cachedReadTokens) ?? 0;
+  const cacheWrite = tokenCount(raw.cachedWriteTokens) ?? 0;
+  const reasoning = tokenCount(raw.thoughtTokens);
+  // AGY includes cache tokens in inputTokens. Add thoughts to output only
+  // when the accounting total proves they were reported separately.
+  const separateThought = reasoning !== undefined &&
+    tokenCount(raw.totalTokens) === inputTokens + outputTokens + reasoning;
+  const input = Math.max(0, inputTokens - cacheRead - cacheWrite);
+  const output = outputTokens + (separateThought ? reasoning : 0);
+
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    totalTokens: input + output + cacheRead + cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
 }
 
 function isClientViewFile(call: ToolCallUpdate): boolean {
@@ -16,6 +49,7 @@ type ObservedCall = { call: ToolCallUpdate; warned?: boolean };
 export class EventProcessor {
   private readonly calls = new Map<string, ObservedCall>();
   private overflowWarned = false;
+  private contextUsage: Extract<RuntimeEvent, { type: "usage" }>["usage"] | undefined;
 
   private readonly sessionId: string;
   private readonly allowedToolNames: ReadonlySet<string>;
@@ -29,7 +63,22 @@ export class EventProcessor {
     if (source === "replay" || notification.sessionId !== this.sessionId) return;
 
     const update = notification.update;
-    if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+    if (update.sessionUpdate === "usage_update") {
+      const used = tokenCount(update.used);
+      if (used === undefined) return;
+
+      // Context updates are not billable input. The prompt response supplies
+      // accounting once, even when MCP suspends the prompt across Pi messages.
+      this.contextUsage = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: used,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      emit({ type: "usage", usage: this.contextUsage });
+    } else if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
       const id = update.toolCallId;
       if (!this.calls.has(id) && this.calls.size >= 1024) {
         if (!this.overflowWarned) {
@@ -57,12 +106,6 @@ export class EventProcessor {
     } else if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
       emit({ type: "session-reference", reference: this.sessionId });
       if (update.content.text.length > 0) emit({ type: "text-delta", delta: update.content.text });
-    } else if (update.sessionUpdate === "usage_update" && Number.isFinite(update.used) && update.used >= 0) {
-      // Context occupancy is not input/output billing, account quota, or window capacity.
-      emit({ type: "usage", usage: {
-        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: update.used,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      } });
     }
   }
 
@@ -104,6 +147,15 @@ export class EventProcessor {
     for (const id of this.calls.keys()) this.check(id, emit, true);
     this.calls.clear();
     this.overflowWarned = false;
+
+    // MCP handoffs can replace the Pi writer during a single native prompt.
+    // Give the final writer the latest context independently of accounting.
+    const contextUsage = this.contextUsage;
+    this.contextUsage = undefined;
+    if (contextUsage) emit({ type: "usage", usage: contextUsage });
+
+    const usage = mapUsage(response.usage);
+    if (usage) emit({ type: "accounting", usage });
 
     emit({ type: "session-reference", reference: this.sessionId });
     switch (response.stopReason) {
