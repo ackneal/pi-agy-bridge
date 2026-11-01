@@ -36,7 +36,9 @@ export function serializePrompt(messages: readonly BridgeMessage[]): string {
 export class RuntimeSession extends AgyRuntime implements DriverSession {
   readonly compatibilityKey: string | undefined;
   readonly driver = "cli" as const;
-  private readonly allowedToolNames: ReadonlySet<string>;
+  private readonly translator: EventTranslator;
+  private readonly runtimeSubscribers = new Set<(event: RuntimeEvent) => void>();
+  private readonly unsubscribeEvents: () => void;
   private readonly errorState: ConversationErrorState;
 
   constructor(
@@ -47,15 +49,32 @@ export class RuntimeSession extends AgyRuntime implements DriverSession {
   ) {
     super(options);
     this.compatibilityKey = compatibilityKey;
-    this.allowedToolNames = allowedToolNames;
     this.errorState = errorState;
+    this.translator = new EventTranslator({ allowedToolNames, errorState });
+
+    this.unsubscribeEvents = this.onEvent((event, source) => this.translator.translate(event, source, (runtimeEvent) => {
+      for (const subscriber of [...this.runtimeSubscribers]) this.notifySubscriber(subscriber, runtimeEvent);
+    }));
   }
 
   onRuntimeEvent(handler: (event: RuntimeEvent) => void): () => void {
-    const translator = new EventTranslator({
-      allowedToolNames: this.allowedToolNames, errorState: this.errorState,
-    });
-    return this.onEvent((event, source) => translator.translate(event, source, handler));
+    this.runtimeSubscribers.add(handler);
+    this.translator.replayContext((event) => this.notifySubscriber(handler, event));
+    return () => { this.runtimeSubscribers.delete(handler); };
+  }
+
+  private notifySubscriber(handler: (event: RuntimeEvent) => void, event: RuntimeEvent): void {
+    try {
+      handler(event);
+    } catch (error) {
+      debugLog("process", "Error in runtime event listener:", error);
+    }
+  }
+
+  override async abort(): Promise<void> {
+    this.runtimeSubscribers.clear();
+    this.unsubscribeEvents();
+    await super.abort();
   }
 
   serializeContextUpdate(messages: readonly Message[]): string {

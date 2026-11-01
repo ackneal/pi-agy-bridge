@@ -76,9 +76,22 @@ describe("turn submission and incremental context", () => {
       const startProc = t.mock.method(AgyRuntime.prototype, "start", async () => ({
         event: "init", conversation_id: decision.action === "resume" ? "old-conversation" : "new-conversation",
       }) as Awaited<ReturnType<AgyRuntime["start"]>>);
-      const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
+      const abort = t.mock.method(AgyRuntime.prototype, "abort", async function (this: AgyRuntime) {
+        assert.equal(listeners.has(this), false, "raw listener must be removed before process abort");
+      });
       const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
       const unsubscribe = t.mock.fn(() => {});
+      const subscribeRuntime = CliRuntimeSession.prototype.onRuntimeEvent;
+      const unsubscribeRuntime = t.mock.fn(() => {});
+      const runtimeSubscriptions = t.mock.method(CliRuntimeSession.prototype, "onRuntimeEvent", function (
+        this: CliRuntimeSession, handler: Parameters<CliRuntimeSession["onRuntimeEvent"]>[0],
+      ) {
+        const unsubscribe = subscribeRuntime.call(this, handler);
+        return () => {
+          unsubscribe();
+          unsubscribeRuntime();
+        };
+      });
       t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
         listeners.set(this, listener);
         return () => {
@@ -151,8 +164,10 @@ describe("turn submission and incremental context", () => {
       }
       assert.equal(decide.mock.callCount(), 1);
       assert.equal(send.mock.callCount(), 1);
-      assert.equal(unsubscribe.mock.callCount(), 1);
-      assert.equal(listeners.size, 0);
+      assert.equal(unsubscribe.mock.callCount(), 0);
+      assert.equal(listeners.size, 1, "raw subscription belongs to the live runtime, not the completed writer");
+      assert.equal(runtimeSubscriptions.mock.callCount(), 1);
+      assert.equal(unsubscribeRuntime.mock.callCount(), 1, "completed turn releases its typed subscription");
       const completed = events.at(-1);
       assert.ok(completed?.type === "done");
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(liveSession), context.messages.length + 1);
@@ -186,6 +201,9 @@ describe("turn submission and incremental context", () => {
       await bridge.liveSessions.disposeAll();
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
+      assert.equal(unsubscribe.mock.callCount(), 1);
+      assert.equal(listeners.size, 0);
+      assert.equal(unsubscribeRuntime.mock.callCount(), 1);
     });
   }
 
@@ -445,8 +463,8 @@ describe("pending tool continuation", () => {
             ? serializeContextUpdate([{ role: "user", content: "latest request", timestamp: 0 }], "pending_tool_continuation")
             : undefined,
       ]);
-      assert.equal(unsubscribe.mock.callCount(), 1);
-      assert.equal(listener, undefined);
+      assert.equal(unsubscribe.mock.callCount(), row.reason === "stop" ? 0 : 1);
+      assert.equal(typeof listener, row.reason === "stop" ? "function" : "undefined");
       assert.equal(send.mock.callCount(), row.sends);
       assert.equal(persist.mock.callCount(), row.persists);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), row.synced);
@@ -488,6 +506,11 @@ describe("pending tool continuation", () => {
         assert.equal(close.mock.callCount(), 1);
         assert.equal(abort.mock.callCount(), 1);
       }
+      await bridge.liveSessions.disposeAll();
+      assert.equal(unsubscribe.mock.callCount(), 1);
+      assert.equal(listener, undefined);
+      assert.equal(close.mock.callCount(), 1);
+      assert.equal(abort.mock.callCount(), 1);
     });
   }
 
@@ -650,6 +673,15 @@ describe("pending tool context updates", () => {
         }
       });
       await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
+      const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
+      const unsubscribe = t.mock.fn(() => {});
+      t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
+        listeners.set(this, listener);
+        return () => {
+          listeners.delete(this);
+          unsubscribe();
+        };
+      });
       bridge.start();
       const session = bridge.liveSessions.getOrCreate("mixed-pending");
       const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: "test-model" }, new Set(), {}, createHash("sha256").update(path.join(process.env.GEMINI_HOME!, "antigravity-cli")).digest("hex"));
@@ -680,7 +712,6 @@ describe("pending tool context updates", () => {
       session.setSession(oldProc, calculateSyncKey("Rules", [], "test-model", "", "pi-bridge"), oldMcp, "old-conversation");
       bridge.runtimeSessionSync.record(session, prefix);
 
-      const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
       t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
       let pending = true;
       t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp && pending; });
@@ -688,10 +719,6 @@ describe("pending tool context updates", () => {
       const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
       const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
       const start = t.mock.method(AgyRuntime.prototype, "start", async () => { throw new Error("unexpected runtime start"); });
-      t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
-        listeners.set(this, listener);
-        return () => { listeners.delete(this); };
-      });
       const send = t.mock.method(AgyRuntime.prototype, "send", async () => { throw new Error("pending results must not resend a prompt"); });
 
       const resolve = t.mock.method(BridgeIPC.prototype, "resolveToolResults", function (this: BridgeIPC, _results: Context["messages"], _appendix?: string) {
@@ -701,11 +728,17 @@ describe("pending tool context updates", () => {
         setImmediate(() => {
           pending = false;
           listener({ event: "step_update", delta: "finished" }, "agy");
-          listener({ event: "result", status: "success" }, "agy");
+          listener({ event: "result", status: "success", usage: { input_tokens: 100000, output_tokens: 50000 } }, "agy");
         });
         return 1;
       });
       const persist = t.mock.method(bridge.runtimeSessionStore, "set", async () => {});
+      const rawListener = listeners.get(oldProc);
+      assert.ok(rawListener, "runtime subscribes at construction, before a Pi writer attaches");
+      rawListener({ event: "step_update", update_type: "user_input" }, "agy");
+      rawListener({ event: "step_update", delta: "previous writer text", usage: {
+        input_tokens: 20, output_tokens: 5, cache_read_tokens: 10,
+      } }, "agy");
 
       const events: AssistantMessageEvent[] = [];
       for await (const event of streamProvider(model, context, { sessionId: session.piSessionId }, bridge)) events.push(event);
@@ -713,6 +746,11 @@ describe("pending tool context updates", () => {
       const terminal = events.at(-1);
       assert.ok(terminal?.type === "done");
       assert.equal(terminal.reason, "stop");
+      assert.deepEqual(terminal.message.content, [{ type: "text", text: "finished" }], "new writer must not replay prior text");
+      assert.deepEqual(terminal.message.usage, {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 35,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      }, "new writer receives context-only replay, not prior billing or cumulative result usage");
       assert.equal(start.mock.callCount(), 0);
       assert.equal(send.mock.callCount(), 0);
       assert.equal(close.mock.callCount(), 0);
@@ -737,8 +775,11 @@ describe("pending tool context updates", () => {
       assert.deepEqual(persist.mock.calls[0]!.arguments[2], context.messages);
       assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
-      assert.equal(listeners.size, 0);
+      assert.equal(listeners.size, 1);
+      assert.equal(unsubscribe.mock.callCount(), 0);
       await bridge.liveSessions.disposeAll();
+      assert.equal(listeners.size, 0);
+      assert.equal(unsubscribe.mock.callCount(), 1);
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
       assert.equal(session.activeProcess, null);

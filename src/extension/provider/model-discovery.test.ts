@@ -483,10 +483,13 @@ describe("model switching and conversation continuity", () => {
       const agyPath = path.join(directory, "agy");
       t.mock.method(CliDriver.prototype, "detectExecutable", () => agyPath);
       const bridge = new Bridge(pi, new CliDriver());
+      const rawListeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
 
       t.after(async () => {
-        try { await bridge.liveSessions.disposeAll(); }
-        finally { await rm(directory, { recursive: true, force: true }); }
+        try {
+          await bridge.liveSessions.disposeAll();
+          assert.equal(rawListeners.size, 0, "disposed runtimes release raw subscriptions");
+        } finally { await rm(directory, { recursive: true, force: true }); }
       });
 
       await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
@@ -508,6 +511,11 @@ describe("model switching and conversation continuity", () => {
       };
       const prefix: Context["messages"] = [{ role: "user", content: "original request", timestamp: 1 }, assistant];
       const compatibilityKey = createHash("sha256").update(prepareDriverCwd("cli")).digest("hex");
+      t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
+        assert.equal(rawListeners.has(this), false, "one raw subscription per runtime");
+        rawListeners.set(this, listener);
+        return () => { rawListeners.delete(this); };
+      });
       const oldProc = new CliRuntimeSession({ agentName: "pi-bridge", model: gemini.id }, new Set(), {}, compatibilityKey);
       const oldMcp = new BridgeIPC([], session.id, session.resources);
       session.setSession(oldProc, calculateSyncKey("Rules", [], gemini.id, "", "pi-bridge"), oldMcp, "same-conversation");
@@ -534,7 +542,6 @@ describe("model switching and conversation continuity", () => {
         ? { role: "toolResult", toolCallId: "pending-call", toolName: "test-tool", content: [{ type: "text", text: "tool answer" }], isError: false, timestamp: 5 }
         : { role: "user", content: "new request", timestamp: 5 }] };
       const controller = new AbortController();
-      const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
       const lifecycle: string[] = [];
       t.mock.getter(AgyRuntime.prototype, "isRunning", () => arrange.outcome !== "dead" || start.mock.callCount() !== 1);
       t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp && pending; });
@@ -554,12 +561,8 @@ describe("model switching and conversation continuity", () => {
         return { event: "init", conversation_id: arrange.outcome === "mismatch" || !this.options.conversationId
           ? "fresh-conversation" : this.options.conversationId } as Awaited<ReturnType<AgyRuntime["start"]>>;
       });
-      t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
-        listeners.set(this, listener);
-        return () => { listeners.delete(this); };
-      });
       const finish = (proc: AgyRuntime) => {
-        const listener = listeners.get(proc);
+        const listener = rawListeners.get(proc);
         assert.ok(listener, "subscribe before delivering runtime results");
         listener({ event: "step_update", delta: "finished" }, "agy");
         listener({ event: "result", status: "success", conversation_id: proc === oldProc ? "same-conversation" : session.conversationId! }, "agy");
@@ -593,7 +596,7 @@ describe("model switching and conversation continuity", () => {
         assert.equal(resolve.mock.callCount(), 0);
         const stored = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
         assert.equal(stored?.sessionId, expected.store === "retained" ? arrange.conversationId : undefined);
-        assert.equal(listeners.size, 0);
+        assert.equal(rawListeners.size, 0);
         return;
       }
 
@@ -605,7 +608,8 @@ describe("model switching and conversation continuity", () => {
       assert.equal(session.activeProcess?.options.conversationId, expected.runtimeConversation);
       assert.equal(session.resources.terminals.resolve(terminalHandle), expected.preservesTerminal ? "pi-terminal" : undefined);
       assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, expected.responseId);
-      assert.equal(listeners.size, 0);
+      assert.equal(rawListeners.size, 1);
+      assert.equal(rawListeners.has(session.activeProcess), true);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
 
       if (expected.continuation.kind === "pending") {
@@ -626,7 +630,8 @@ describe("model switching and conversation continuity", () => {
         assert.equal(send.mock.calls[0]!.arguments[0].message.content, "next request");
         assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.sessionId, next.message.responseId);
         assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
-        assert.equal(listeners.size, 0);
+        assert.equal(rawListeners.size, 1);
+        assert.equal(rawListeners.has(session.activeProcess!), true);
         return;
       }
 
