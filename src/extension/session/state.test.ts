@@ -3,12 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { describe, it } from "node:test";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
+import { BridgeIPC } from "../bridge/ipc.ts";
 import { LiveSession, PiContextAdapter } from "./session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync, type AgyConversationCheckpoint } from "./state.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
 import type { DriverSession } from "../drivers/types.ts";
-import type { BridgeIPC } from "../bridge/ipc.ts";
 
 function runtime(isRunning: boolean): DriverSession {
   return {
@@ -557,3 +557,153 @@ for (const row of [
       : { action: "rebuild" });
   });
 }
+
+describe("Session compatibility metadata and key synchronization", () => {
+  const original = "a".repeat(64);
+  const changed = "b".repeat(64);
+  const messages = [{ role: "user", content: "question" }];
+
+  for (const row of [
+    { name: "valid compatibility key", metadata: { compatibilityKey: original }, valid: true },
+    { name: "legacy checkpoint", metadata: {}, valid: true },
+    { name: "invalid compatibility key", metadata: { compatibilityKey: "invalid" }, valid: false },
+  ]) {
+    test(`compatibility metadata: ${row.name}`, async () => {
+      const manager = SessionManager.inMemory("/workspace");
+      const context = new PiContextAdapter();
+      const id = context.bind(manager);
+      const store = new RuntimeSessionStore(context);
+      const checkpoint = await store.set(id, { sessionId: "conversation", ...row.metadata }, messages, "acp:v1");
+
+      assert.deepEqual(await store.get(id, "acp:v1"), row.valid ? checkpoint : undefined);
+      assert.equal(checkpoint.compatibilityKey, row.metadata.compatibilityKey);
+    });
+  }
+
+  for (const row of [
+    { name: "matching live key continues", live: true, requested: original, expected: "continue" },
+    { name: "changed live key rebuilds", live: true, requested: changed, expected: "rebuild" },
+    { name: "pending calls cannot defer compatibility changes", live: true, pending: true, requested: changed, expected: "rebuild" },
+    { name: "pending calls retain compatible runtime", live: true, pending: true, requested: original, expected: "continue" },
+    { name: "missing live key rebuilds when requested", live: true, missingLiveKey: true, requested: original, expected: "rebuild" },
+    { name: "compatible checkpoint resumes", checkpoint: original, requested: original, expected: "resume" },
+    { name: "changed checkpoint key rebuilds", checkpoint: original, requested: changed, expected: "rebuild" },
+    { name: "missing checkpoint key rebuilds when requested", checkpoint: "legacy", requested: original, expected: "rebuild" },
+    { name: "caller without requested key resumes a missing-key checkpoint", checkpoint: "legacy", expected: "resume" },
+    { name: "caller without requested key resumes after settings change", live: true, changedSettings: true, expected: "resume" },
+    { name: "caller without requested key defers settings changes for pending calls", live: true, pending: true, changedSettings: true, expected: "continue" },
+  ]) {
+    test(`session compatibility: ${row.name}`, async (t) => {
+      const manager = SessionManager.inMemory("/workspace");
+      const context = new PiContextAdapter();
+      const id = context.bind(manager);
+      const store = new RuntimeSessionStore(context);
+      const session = new LiveSession(id);
+      const sync = new RuntimeSessionSync();
+      t.after(() => session.dispose());
+      const checkpoint = row.checkpoint ? await store.set(id, {
+        sessionId: "conversation",
+        ...(row.checkpoint !== "legacy" ? { compatibilityKey: row.checkpoint } : {}),
+      }, messages, row.requested ? "acp:v1" : "cli:v1") : undefined;
+      if (row.live) {
+        const process: DriverSession = {
+          driver: row.requested ? "acp" : "cli", isRunning: true,
+          ...(row.requested && !("missingLiveKey" in row && row.missingLiveKey) ? { compatibilityKey: original } : {}),
+          onRuntimeEvent: () => () => {}, serializeContextUpdate: () => "",
+          submit: async () => {}, abort: async () => {},
+        };
+        const mcp = new BridgeIPC([], session.id, session.resources);
+        t.mock.getter(mcp, "hasPendingCalls", () => row.pending ?? false);
+        session.setSession(process, "settings", mcp, "conversation");
+        sync.record(session, messages);
+      }
+
+      const decision = sync.decide(session, {
+        syncKey: row.changedSettings ? "other-settings" : "settings",
+        messages,
+        ...(row.requested ? { compatibilityKey: row.requested } : {}),
+        ...(checkpoint ? { checkpoint } : {}),
+      });
+
+      assert.equal(decision.action, row.expected);
+      if (decision.action === "resume") assert.equal(decision.conversationId, "conversation");
+    });
+  }
+
+  for (const legacy of [false, true]) {
+    test(`stored compatibility schema excludes legacy alias: legacy=${legacy}`, async () => {
+      const manager = SessionManager.inMemory("/workspace");
+      const context = new PiContextAdapter();
+      const id = context.bind(manager);
+      const store = new RuntimeSessionStore(context);
+      const written = await store.set(id, { sessionId: "conversation", compatibilityKey: original }, messages, "acp:v1");
+      const entry = manager.getBranch().at(-1);
+      assert.ok(entry?.type === "custom");
+      assert.equal(Object.hasOwn(entry.data as object, "instructionKey"), false);
+      if (legacy) {
+        const { compatibilityKey: _removed, ...metadata } = written;
+        manager.appendCustomEntry("pi-agy-bridge.runtime-session", { ...metadata, instructionKey: original });
+      }
+
+      const restored = await store.get(id, "acp:v1");
+      assert.ok(restored);
+      assert.equal(restored.compatibilityKey, legacy ? undefined : original);
+      assert.equal(Object.hasOwn(restored, "instructionKey"), false);
+      assert.equal(new RuntimeSessionSync().decide(new LiveSession(id), {
+        syncKey: "settings", messages, compatibilityKey: original, checkpoint: restored,
+      }).action, legacy ? "rebuild" : "resume");
+    });
+  }
+});
+
+test("legacy login epoch metadata is ignored when recovering compatible checkpoints", async () => {
+  const manager = SessionManager.inMemory("/workspace");
+  const adapter = new PiContextAdapter();
+  const id = adapter.bind(manager);
+  const store = new RuntimeSessionStore(adapter);
+  const checkpoint = await store.set(id, { sessionId: "conversation-a" }, [], "cli:v1");
+  const written = manager.getBranch().at(-1);
+  assert.ok(written?.type === "custom");
+  assert.equal("loginEpoch" in (written.data as Record<string, unknown>), false);
+
+  manager.appendCustomEntry("pi-agy-bridge.runtime-session", {
+    ...checkpoint, loginEpoch: "old-account-epoch",
+  });
+  assert.deepEqual(await store.get(id, "cli:v1"), checkpoint);
+});
+
+test("RuntimeSessionSync follows Pi's projected compaction context", async (t) => {
+  const scenarios = [
+    { name: "live runtime after compaction", resumed: false, compact: true, expected: "rebuild" as const },
+    { name: "persisted checkpoint after compaction", resumed: true, compact: true, expected: "rebuild" as const },
+    { name: "cancellation without compaction", resumed: false, compact: false, expected: "continue" as const },
+  ];
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const manager = SessionManager.inMemory("/workspace");
+      manager.appendMessage({ role: "user", content: "old question", timestamp: 1 });
+      const kept = manager.appendMessage({ role: "user", content: "recent question", timestamp: 2 });
+      manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "old answer" }], api: "test", provider: "test", model: "test", responseId: "historical-agy-session", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: 2 });
+      const preCompactionMessages = convertToLlm(manager.buildSessionContext().messages);
+      if (scenario.compact) manager.appendCompaction("Earlier conversation summarized", kept, 100);
+      const context = manager.buildSessionContext();
+      const pi = new PiContextAdapter();
+      const id = pi.bind(manager);
+      const store = new RuntimeSessionStore(pi);
+      const session = new LiveSession(id);
+      session.setSession({ driver: "cli", isRunning: true, onRuntimeEvent: () => () => {}, serializeContextUpdate: () => "", submit: async () => {}, abort: async () => {} }, "key", undefined, "historical-agy-session");
+      const sync = new RuntimeSessionSync();
+      if (!scenario.resumed) sync.record(session, preCompactionMessages);
+      const checkpoint = scenario.resumed ? await store.set(id, { sessionId: "historical-agy-session" }, preCompactionMessages, "cli:v1") : undefined;
+
+      const decision = sync.decide(session, {
+        syncKey: "key", conversationId: "historical-agy-session", messages: convertToLlm(context.messages), ...(checkpoint ? { checkpoint } : {}),
+      });
+
+      assert.equal(context.messages.some((message) => message.role === "user" && message.content === "old question"), !scenario.compact);
+      assert.ok(convertToLlm(context.messages).some((message) =>
+        message.role === "assistant" && message.responseId === "historical-agy-session"));
+      assert.equal(decision.action, scenario.expected);
+    });
+  }
+});
