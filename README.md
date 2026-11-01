@@ -13,19 +13,22 @@ Bridge Google Antigravity models into [Pi Coding Agent](https://github.com/earen
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      Pi Coding Agent                        │
-│   (User Interface • Permissions • Tools • Session History)  │
+│     • User Interface & Interaction                          │
+│     • Tool Execution Engine & Permission Policies           │
+│     • Conversation History & Context Compaction             │
 └──────────────┬──────────────────────────────▲───────────────┘
                │                              │
-         Unix Socket                    Unix Socket
-             IPC                            IPC
+          Unix Socket                    Child Process
+              IPC                            Stdio
+       (Tool Execution)               (Prompts / Model Stream)
                │                              │
 ┌──────────────▼──────────────┐               │
 │     pi-agy-bridge-mcp       │               │
 │   (Local MCP Bridge Server) │               │
 └──────────────▲──────────────┘               │
                │                              │
-           MCP Stdio                     Model Stream
-        (tools/call)                  (Text, Tool Calls)
+           MCP Stdio                          │
+      (tools/call & results)                  │
                │                              │
 ┌──────────────┴──────────────────────────────┴───────────────┐
 │                     Antigravity Backend                     │
