@@ -41,7 +41,7 @@ The bridge connects Antigravity models to Pi. Pi manages the conversation and ex
 - **Pi Tool Integration** — Run registered tool requests through Pi with its applicable permissions.
 - **Two Drivers** — Use the managed ACP server or your installed `agy` CLI.
 - **Session Continuity** — Reuse compatible sessions. Restore context from Pi history when needed.
-- **Image Support** — Both drivers can handle images through Pi tools. ACP also accepts image blocks directly in prompts.
+- **Image Support** — Read images through Pi tools, with automatic image injection for ACP.
 - **Automatic ACP Setup** — Download and verify the pinned ACP server.
 - **Diagnostics** — Check your setup with `/agy-bridge:doctor`.
 
@@ -120,14 +120,15 @@ Antigravity models request tools through the bridge. Pi runs registered tool req
 | Setup | Installed automatically | Requires `agy` |
 | Models | ACP model catalog | CLI model catalog |
 | Tool integration | Pi tools through MCP | Pi tools through the CLI integration |
-| Image handling | Pi tool reads, plus direct prompt image blocks and an offload observer | Pi tool reads through the CLI integration |
+| Image reads | Tool reads with image observer | Tool reads |
+| Image injection | Automatically injects images referenced in user messages | — |
 | Usage | Prompt-level reporting | Step-level reporting |
 
 Use `/agy-bridge:driver` to change the driver. Use `/model` to see its available models.
 
-**Images:** Both drivers support images through Pi's tool-based read path. Pi reads an image and returns image content through the tool integration. Antigravity may offload that content for later access.
+**Images:** Both drivers support tool-based image reads. ACP also uses an image observer for eligible offloaded images. The observer returns text and may add latency and model usage.
 
-ACP adds two paths: it can load a user-provided image location directly into a prompt image block, and it can use a Client Read observer to inspect eligible offloaded images. The observer returns text and may add latency and model usage. The normal tool-read path remains available for images in history or other locations.
+For images referenced in user messages, ACP can automatically inject image blocks into the model prompt. Tool-based reads remain available for images in history and other locations.
 
 **Usage:** ACP and CLI report usage at different levels. Do not compare their values as billing totals. The bridge does not calculate monetary costs.
 
