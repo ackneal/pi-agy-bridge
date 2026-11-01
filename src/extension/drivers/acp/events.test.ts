@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test, describe } from "node:test";
 import type { SessionNotification, SessionUpdate, StopReason, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { PromptResponse } from "@agentclientprotocol/sdk/unstable";
 import type { RuntimeEvent } from "../types.ts";
 import { EventProcessor } from "./events.ts";
 
 const textUpdate: SessionUpdate = { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } };
+const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 
 describe("EventProcessor notifications and completion", () => {
   for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
@@ -65,17 +67,6 @@ describe("EventProcessor notifications and completion", () => {
     { name: "native tool update ignored", update: { sessionUpdate: "tool_call_update", toolCallId: "native", status: "completed" }, source: "live", sessionId: "session", expected: [] },
     { name: "replay suppressed", update: textUpdate, source: "replay", sessionId: "session", expected: [] },
     { name: "foreign session ignored", update: textUpdate, source: "live", sessionId: "other", expected: [] },
-    {
-      name: "usage update normalized",
-      update: { sessionUpdate: "usage_update", used: 42, size: 1000 },
-      source: "live",
-      sessionId: "session",
-      expected: [{
-        type: "usage",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 42, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      }],
-    },
-    { name: "replay usage suppressed", update: { sessionUpdate: "usage_update", used: 42, size: 1000 }, source: "replay", sessionId: "session", expected: [] },
   ] satisfies { name: string; update: SessionUpdate; source: "live" | "replay"; sessionId: string; expected: RuntimeEvent[] }[]) {
     test(`EventProcessor.process: ${row.name}`, () => {
       const processor = new EventProcessor("session");
@@ -89,21 +80,290 @@ describe("EventProcessor notifications and completion", () => {
   }
 
   for (const row of [
-    { reason: "end_turn", expected: { type: "complete", reason: "stop", resumable: true } },
-    { reason: "cancelled", expected: { type: "complete", reason: "aborted", resumable: false } },
-    { reason: "refusal", expected: { type: "complete", reason: "error", error: "ACP prompt stopped: refusal", resumable: false } },
-    { reason: "max_tokens", expected: { type: "complete", reason: "error", error: "ACP prompt stopped: max_tokens", resumable: false } },
-    { reason: "max_turn_requests", expected: { type: "complete", reason: "error", error: "ACP prompt stopped: max_turn_requests", resumable: false } },
-  ] satisfies { reason: StopReason; expected: RuntimeEvent }[]) {
-    test(`EventProcessor.complete: ${row.reason}`, () => {
+    { name: "live usage emits used, not capacity", used: 56962, size: 1048576, source: "live", sessionId: "session", expectedUsed: 56962 },
+    { name: "zero usage emits a snapshot", used: 0, size: 1048576, source: "live", sessionId: "session", expectedUsed: 0 },
+    { name: "finite fractional usage is accepted", used: 0.5, size: 1000, source: "live", sessionId: "session", expectedUsed: 0.5 },
+    { name: "capacity does not cap usage", used: 42, size: 1, source: "live", sessionId: "session", expectedUsed: 42 },
+    { name: "replay usage suppressed", used: 42, size: 1000, source: "replay", sessionId: "session" },
+    { name: "foreign usage ignored", used: 42, size: 1000, source: "live", sessionId: "other" },
+    ...[
+      { name: "negative", used: -1 },
+      { name: "NaN", used: Number.NaN },
+      { name: "positive infinity", used: Number.POSITIVE_INFINITY },
+      { name: "negative infinity", used: Number.NEGATIVE_INFINITY },
+      { name: "missing", used: undefined },
+      { name: "null", used: null },
+      { name: "string", used: "42" },
+    ].map(({ name, used }) => ({ name: `${name} used ignored despite valid capacity`, used, size: 1000, source: "live" as const, sessionId: "session" })),
+  ] satisfies { name: string; used: unknown; size: number; source: "live" | "replay"; sessionId: string; expectedUsed?: number }[]) {
+    test(`EventProcessor.process usage: ${row.name}`, () => {
+      const processor = new EventProcessor("session");
+      const facts: RuntimeEvent[] = [];
+      // Malformed used values explicitly exercise the notification boundary.
+      const update = { sessionUpdate: "usage_update", used: row.used, size: row.size } as SessionUpdate;
+      const used = "expectedUsed" in row ? row.expectedUsed : undefined;
+      const expected: RuntimeEvent[] = used === undefined ? [] : [
+        { type: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: used, cost: zeroCost } },
+      ];
+
+      processor.process({ sessionId: row.sessionId, update }, row.source, (fact) => facts.push(fact));
+
+      assert.deepEqual(facts, expected);
+      facts.length = 0;
+      processor.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
+      assert.deepEqual(facts, [...expected, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }]);
+    });
+  }
+
+  for (const scope of ["replay", "foreign"] as const) {
+    test(`${scope} usage cannot overwrite the latest live snapshot`, () => {
+      const processor = new EventProcessor("session");
+      const facts: RuntimeEvent[] = [];
+      processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used: 42, size: 1000 } }, "live", () => {});
+      processor.process({ sessionId: scope === "foreign" ? "other" : "session", update: { sessionUpdate: "usage_update", used: 99, size: 1000 } }, scope === "replay" ? "replay" : "live", (fact) => facts.push(fact));
+      assert.equal(facts.length, 0);
+      processor.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
+      assert.deepEqual(facts, [
+        { type: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 42, cost: zeroCost } },
+        { type: "session-reference", reference: "session" },
+        { type: "complete", reason: "stop", resumable: true },
+      ]);
+    });
+  }
+
+  for (const row of [
+    {
+      name: "end_turn without usage preserves unavailable semantics",
+      response: { stopReason: "end_turn" },
+      expected: [{ type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }],
+    },
+    {
+      name: "null usage preserves unavailable semantics",
+      response: { stopReason: "end_turn", usage: null },
+      expected: [{ type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }],
+    },
+    {
+      name: "empty or invalid usage fields preserve unavailable semantics",
+      response: { stopReason: "end_turn", usage: { totalTokens: Number.NaN, inputTokens: -1, outputTokens: Number.POSITIVE_INFINITY } },
+      expected: [{ type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }],
+    },
+    {
+      name: "cancelled without usage",
+      response: { stopReason: "cancelled" },
+      expected: [{ type: "session-reference", reference: "session" }, { type: "complete", reason: "aborted", resumable: false }],
+    },
+    {
+      name: "refusal without usage",
+      response: { stopReason: "refusal" },
+      expected: [{ type: "session-reference", reference: "session" }, { type: "complete", reason: "error", error: "ACP prompt stopped: refusal", resumable: false }],
+    },
+    {
+      name: "max_tokens without usage",
+      response: { stopReason: "max_tokens" },
+      expected: [{ type: "session-reference", reference: "session" }, { type: "complete", reason: "error", error: "ACP prompt stopped: max_tokens", resumable: false }],
+    },
+    {
+      name: "max_turn_requests without usage",
+      response: { stopReason: "max_turn_requests" },
+      expected: [{ type: "session-reference", reference: "session" }, { type: "complete", reason: "error", error: "ACP prompt stopped: max_turn_requests", resumable: false }],
+    },
+  ] satisfies { name: string; response: PromptResponse; expected: RuntimeEvent[] }[]) {
+    test(`EventProcessor.complete: ${row.name}`, () => {
       const processor = new EventProcessor("session");
       const facts: RuntimeEvent[] = [];
 
-      processor.complete({ stopReason: row.reason }, (fact) => facts.push(fact));
+      processor.complete(row.response, (fact) => facts.push(fact));
 
-      assert.deepEqual(facts, [{ type: "session-reference", reference: "session" }, row.expected]);
+      assert.deepEqual(facts, row.expected);
     });
   }
+
+  for (const row of [
+    { name: "response accounting is independent of context 0 -> 56962", snapshots: [0, 56962], stopReason: "end_turn", expected: { type: "complete", reason: "stop", resumable: true } },
+    { name: "decreasing snapshots replace rather than accumulate", snapshots: [56962, 4221], stopReason: "end_turn", expected: { type: "complete", reason: "stop", resumable: true } },
+    { name: "zero snapshot does not suppress accounting", snapshots: [56962, 0], stopReason: "end_turn", expected: { type: "complete", reason: "stop", resumable: true } },
+    { name: "zero-only snapshot does not suppress accounting", snapshots: [0], stopReason: "end_turn", expected: { type: "complete", reason: "stop", resumable: true } },
+    { name: "cancelled preserves latest snapshot", snapshots: [0, 56962], stopReason: "cancelled", expected: { type: "complete", reason: "aborted", resumable: false } },
+    ...(["refusal", "max_tokens", "max_turn_requests"] as const).map((stopReason) => ({
+      name: `${stopReason} preserves latest snapshot`, snapshots: [0, 56962], stopReason,
+      expected: { type: "complete" as const, reason: "error" as const, error: `ACP prompt stopped: ${stopReason}`, resumable: false },
+    })),
+    ...(["end_turn", "cancelled", "refusal", "max_tokens", "max_turn_requests"] as const).map((stopReason) => ({
+      name: `${stopReason} accounting without a snapshot still emits`, snapshots: [], stopReason,
+      expected: stopReason === "end_turn" ? { type: "complete" as const, reason: "stop" as const, resumable: true }
+        : stopReason === "cancelled" ? { type: "complete" as const, reason: "aborted" as const, resumable: false }
+          : { type: "complete" as const, reason: "error" as const, error: `ACP prompt stopped: ${stopReason}`, resumable: false },
+    })),
+  ] satisfies { name: string; snapshots: number[]; stopReason: StopReason; expected: RuntimeEvent }[]) {
+    test(`EventProcessor.complete usage: ${row.name}`, () => {
+      const processor = new EventProcessor("session");
+      const facts: RuntimeEvent[] = [];
+      const snapshots: RuntimeEvent[] = [];
+      const response: PromptResponse = {
+        stopReason: row.stopReason,
+        usage: {
+          totalTokens: 856715,
+          inputTokens: 848726,
+          outputTokens: 7989,
+          cachedReadTokens: 697052,
+          cachedWriteTokens: 0,
+          thoughtTokens: 4474,
+        },
+      };
+
+      for (const used of row.snapshots) {
+        processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used, size: 1048576 } }, "live", (fact) => facts.push(fact));
+        snapshots.push({ type: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: used, cost: zeroCost } });
+        assert.deepEqual(facts, snapshots, "each snapshot must emit immediately without a reasoning breakdown");
+      }
+      processor.complete(response, (fact) => facts.push(fact));
+
+      const accounting: RuntimeEvent[] = [{ type: "accounting", usage: {
+        input: 151674, output: 7989, cacheRead: 697052, cacheWrite: 0,
+        reasoning: 4474, totalTokens: 856715, cost: zeroCost,
+      } }];
+      const latest = snapshots.at(-1);
+      assert.deepEqual(facts, [...snapshots, ...(latest ? [latest] : []), ...accounting, { type: "session-reference", reference: "session" }, row.expected]);
+    });
+  }
+
+  for (const row of [
+    {
+      name: "thought tokens reported separately are added to output",
+      usage: { inputTokens: 3488, outputTokens: 139, thoughtTokens: 594, totalTokens: 4221 },
+      expected: { input: 3488, output: 733, cacheRead: 0, cacheWrite: 0, reasoning: 594 },
+    },
+    {
+      name: "output already includes positive thought tokens",
+      usage: { inputTokens: 3488, outputTokens: 733, thoughtTokens: 594, totalTokens: 4221 },
+      expected: { input: 3488, output: 733, cacheRead: 0, cacheWrite: 0, reasoning: 594 },
+    },
+    {
+      name: "unreconciled total does not prove thoughts are separate",
+      usage: { inputTokens: 3488, outputTokens: 733, thoughtTokens: 594, totalTokens: 5000 },
+      expected: { input: 3488, output: 733, cacheRead: 0, cacheWrite: 0, reasoning: 594 },
+    },
+    {
+      name: "cache reads and writes are removed from input separately",
+      usage: { inputTokens: 100, outputTokens: 10, cachedReadTokens: 30, cachedWriteTokens: 20, totalTokens: 110 },
+      expected: { input: 50, output: 10, cacheRead: 30, cacheWrite: 20 },
+    },
+    {
+      name: "cache counts cannot make uncached input negative",
+      usage: { inputTokens: 10, outputTokens: 2, cachedReadTokens: 8, cachedWriteTokens: 9, totalTokens: 12 },
+      expected: { input: 0, output: 2, cacheRead: 8, cacheWrite: 9 },
+    },
+    {
+      name: "null optional counts are unavailable",
+      usage: { inputTokens: 100, outputTokens: 10, cachedReadTokens: null, cachedWriteTokens: null, thoughtTokens: null, totalTokens: 110 },
+      expected: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 },
+    },
+    {
+      name: "zero input and output are valid accounting",
+      usage: { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, totalTokens: 0 },
+      expected: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+    },
+    ...[
+      { name: "missing", totalTokens: undefined },
+      { name: "null", totalTokens: null },
+      { name: "NaN", totalTokens: Number.NaN },
+      { name: "infinite", totalTokens: Number.POSITIVE_INFINITY },
+      { name: "negative", totalTokens: -1 },
+      { name: "string", totalTokens: "4815" },
+    ].map(({ name, totalTokens }) => ({
+      name: `${name} accounting total cannot prove thoughts are separate`,
+      usage: { inputTokens: 3488, outputTokens: 733, thoughtTokens: 594, totalTokens },
+      expected: { input: 3488, output: 733, cacheRead: 0, cacheWrite: 0, reasoning: 594 },
+    })),
+  ] satisfies { name: string; usage: unknown; expected: Omit<Extract<RuntimeEvent, { type: "accounting" }>["usage"], "totalTokens" | "cost"> }[]) {
+    test(`EventProcessor.complete accounting: ${row.name}`, () => {
+      const processor = new EventProcessor("session");
+      const facts: RuntimeEvent[] = [];
+      processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used: 56962, size: 1048576 } }, "live", () => {});
+
+      // Missing or malformed required totals explicitly test the response boundary.
+      processor.complete({ stopReason: "end_turn", usage: row.usage } as PromptResponse, (fact) => facts.push(fact));
+
+      assert.deepEqual(facts.filter((fact) => fact.type === "accounting"), [
+        { type: "accounting", usage: { ...row.expected, totalTokens: row.expected.input + row.expected.output + row.expected.cacheRead + row.expected.cacheWrite, cost: zeroCost } },
+      ]);
+    });
+  }
+
+  for (const field of ["inputTokens", "outputTokens"] as const) {
+    for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, undefined, null, "42"]) {
+      test(`invalid response ${field}=${String(value)} emits no accounting despite snapshot`, () => {
+        const processor = new EventProcessor("session");
+        const facts: RuntimeEvent[] = [];
+        processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used: 42, size: 1000 } }, "live", () => {});
+        // Malformed required counts explicitly exercise the response boundary.
+        const response = { stopReason: "end_turn", usage: { totalTokens: 110, inputTokens: 100, outputTokens: 10, [field]: value } } as PromptResponse;
+
+        processor.complete(response, (fact) => facts.push(fact));
+
+        assert.deepEqual(facts, [{ type: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 42, cost: zeroCost } }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }]);
+      });
+    }
+  }
+
+  for (const row of [
+    { name: "snapshot only without response usage", usage: undefined },
+    { name: "snapshot only with null response usage", usage: null },
+  ] satisfies { name: string; usage: PromptResponse["usage"] }[]) {
+    test(row.name, () => {
+      const processor = new EventProcessor("session");
+      const facts: RuntimeEvent[] = [];
+      processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used: 42, size: 1000 } }, "live", () => {});
+
+      processor.complete(row.usage === undefined ? { stopReason: "end_turn" } : { stopReason: "end_turn", usage: row.usage }, (fact) => facts.push(fact));
+
+      assert.deepEqual(facts, [{ type: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 42, cost: zeroCost } }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }]);
+    });
+  }
+
+  for (const used of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, undefined, null, "42"]) {
+    test(`invalid update ${String(used)} does not affect response accounting`, () => {
+      const processor = new EventProcessor("session");
+      const facts: RuntimeEvent[] = [];
+      processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used: 42, size: 1000 } }, "live", () => {});
+      const update = { sessionUpdate: "usage_update", used, size: 1000 } as SessionUpdate;
+
+      processor.process({ sessionId: "session", update }, "live", (fact) => facts.push(fact));
+      assert.equal(facts.length, 0, "invalid update must not emit a snapshot");
+      processor.complete({ stopReason: "end_turn", usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } }, (fact) => facts.push(fact));
+
+      assert.deepEqual(facts, [
+        { type: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 42, cost: zeroCost } },
+        { type: "accounting", usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost: zeroCost } },
+        { type: "session-reference", reference: "session" },
+        { type: "complete", reason: "stop", resumable: true },
+      ]);
+    });
+  }
+
+  for (const row of [
+    { name: "lower response totals", inputs: [100, 50], outputs: [10, 5], contexts: [42, 21] },
+    { name: "higher response totals", inputs: [100, 150], outputs: [10, 15], contexts: [42, 63] },
+  ]) {
+    test(`consecutive prompts account once per response with ${row.name}`, () => {
+      const processor = new EventProcessor("session");
+      const facts: RuntimeEvent[] = [];
+      const expected: RuntimeEvent[] = [];
+
+      for (let prompt = 0; prompt < 2; prompt++) {
+        const inputTokens = row.inputs[prompt]!;
+        const outputTokens = row.outputs[prompt]!;
+        const used = row.contexts[prompt]!;
+        const response: PromptResponse = { stopReason: "end_turn", usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } };
+        if (prompt === 0) processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used, size: 1000 } }, "live", () => {});
+        processor.complete(response, (fact) => facts.push(fact));
+        expected.push({ type: "accounting", usage: { input: inputTokens, output: outputTokens, cacheRead: 0, cacheWrite: 0, totalTokens: inputTokens + outputTokens, cost: zeroCost } });
+        assert.deepEqual(facts.filter((fact) => fact.type === "accounting"), expected);
+        assert.deepEqual(facts.filter((fact) => fact.type === "usage"), [{ type: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: row.contexts[0], cost: zeroCost } }], "only the first prompt has a context snapshot; completion must clear it");
+      }
+    });
+  }
+
 });
 
 describe("EventProcessor tool allowlist validation and warnings", () => {

@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/pi-ai";
+import type { Context, Usage } from "@earendil-works/pi-ai";
 import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { PiToolCallBatch } from "../bridge/capabilities.ts";
 import type { PiRuntimeOutput } from "./output.ts";
@@ -17,6 +17,7 @@ interface TurnOptions {
   signal: AbortSignal | undefined;
   sessionVersion: string;
   onWarning?: (name: string, args: unknown) => void;
+  onAccounting?: (usage: Usage) => void;
 }
 
 export class Turn {
@@ -112,6 +113,17 @@ export class Turn {
         this.options.onWarning?.(event.name, event.args);
       } catch (error) {
         debugLog("warning", "Could not display ACP tool warning:", error);
+      }
+      return;
+    }
+
+    // A native prompt can finish after a Pi tool-handoff message. Account for
+    // it once even when that message's writer has already completed.
+    if (event.type === "accounting" && this.options.onAccounting) {
+      try {
+        this.options.onAccounting(event.usage);
+      } catch (error) {
+        this.fail(error);
       }
       return;
     }
