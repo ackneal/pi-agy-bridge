@@ -174,8 +174,8 @@ test("doctor reads isolated fixtures without installing or discovering", async (
       assert.match(acpReport, /  ✓ Node /, row.name);
       assert.match(acpReport, /  ✓ Pi MCP bridge entrypoint found\n/, row.name);
       assert.match(acpReport, /  ✓ Models: 2 configured\n  x Auth: unauthenticated/, row.name);
-      assert.match(acpReport, /\n\nQuota remaining \(unavailable\)\n\nErrors\n  ! discovery \(2026-01-02T00:00:00Z\): discovery failed\n  ! authentication \(2026-01-03T00:00:00Z\): login failed$/, row.name);
-      assert.doesNotMatch(acpReport, /Antigravity CLI|Plugin|Gemini 4 Argon|Python/, row.name);
+      assert.match(acpReport, /\n\nQuota remaining\n  Gemini 4 Argon  weekly 40%\n\nErrors\n  ! discovery \(2026-01-02T00:00:00Z\): discovery failed\n  ! authentication \(2026-01-03T00:00:00Z\): login failed$/, row.name);
+      assert.doesNotMatch(acpReport, /Antigravity CLI|Plugin|Python/, row.name);
       assert.equal(await fs.readFile(calls, "utf8"), `${expectedArgs}\n`, row.name);
       assert.equal(await fs.readFile(path.join(source, "plugin.json"), "utf8"), "{}");
       assert.equal(await fs.readFile(path.join(target, "plugin.json"), "utf8"), "{}");
@@ -327,6 +327,21 @@ test("doctor command progress and reporting", async (t) => {
         else assert.match(message, /^agy-bridge doctor\n/);
       }
     });
+  }
+});
+
+test("doctor quota visibility depends on usage data, not the driver", async () => {
+  for (const driver of ["acp", "cli"] as const) {
+    for (const row of [
+      { name: "absent usage", usage: undefined, visible: false },
+      { name: "empty usage", usage: { updatedAt: "2026-10-17T04:19:59Z", groups: [] }, visible: false },
+      { name: "quota data", usage: quota, visible: true },
+    ]) {
+      const report = await collectDoctorReport({ driver, usage: row.usage });
+      assert.equal(report.includes("Quota remaining"), row.visible, `${driver}: ${row.name}`);
+      if (row.visible) assert.match(report, /Fixture.*weekly 50%/);
+      assert.doesNotMatch(report, /Quota remaining \(unavailable\)/);
+    }
   }
 });
 
