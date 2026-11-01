@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import test, { describe, type TestContext } from "node:test";
 import { SessionManager, type ExtensionAPI, type ExtensionContext, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import type { Model, Context, AssistantMessageEvent } from "@earendil-works/pi-ai";
+import { isContextOverflow } from "@earendil-works/pi-ai";
+import type { DriverSession, PrepareDriverInput, RuntimeEvent } from "../drivers/types.ts";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { RuntimeSession as AcpRuntimeSession } from "../drivers/acp/runtime.ts";
@@ -36,6 +38,61 @@ const acpBoundaryModel: Model<"agy"> = {
   reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 1024,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
+
+describe("ACP accounting at the provider boundary", () => {
+  for (const standalone of [false, true]) {
+    test(`accounting uses ${standalone ? "summary result" : "separate session entry"}`, async (t) => {
+      const directory = await createAcpHome(t);
+      const bridge = new Bridge({ getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI);
+      const manager = SessionManager.inMemory(directory);
+      const sessionId = standalone ? "summary-routing-id" : bridge.piContextAdapter.bind(manager);
+      const model = { ...acpBoundaryModel, contextWindow: 1048576 };
+      const accounting = { input: 109048, output: 15092, cacheRead: 1267257, cacheWrite: 0,
+        reasoning: 7137, totalTokens: 1391397, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+      t.after(() => bridge.liveSessions.disposeAll());
+      t.mock.method(bridge.driver, "validateSelection", () => {});
+      t.mock.method(bridge.runtimeSessionStore, "set", async () => {});
+      t.mock.method(bridge.driver, "prepareSession", async (input: PrepareDriverInput) => {
+        const mcpServer = new BridgeIPC([], input.session.id, input.session.resources);
+        let handler: ((event: RuntimeEvent) => void) | undefined;
+        const proc: DriverSession = {
+          driver: "acp", isRunning: true,
+          onRuntimeEvent: (next) => { handler = next; return () => { handler = undefined; }; },
+          serializeContextUpdate: () => "",
+          abort: async () => {},
+          submit: async (submission) => {
+            assert.equal(submission.beforeInput(), true);
+            assert.ok(handler);
+            handler({ type: "usage", usage: { ...accounting, input: 0, output: 0, cacheRead: 0, reasoning: 0, totalTokens: 164101 } });
+            handler({ type: "accounting", usage: accounting });
+            handler({ type: "complete", reason: "stop", resumable: true });
+          },
+        };
+        assert.equal(input.session.setSession(proc, "settings", mcpServer, "native-session", input.preparationId), true);
+        return { proc, mcpServer, reconstructContext: true, modelId: "actual-model" };
+      });
+
+      const message = await streamProvider(model, { messages: [{ role: "user", content: "test", timestamp: 1 }] }, {
+        sessionId, ...(standalone ? { cacheRetention: "none" as const } : {}),
+      }, bridge).result();
+
+      assert.equal(message.stopReason, "stop", message.errorMessage ?? "native completion");
+      const entries = manager.getEntries().filter((entry) => entry.type === "usage");
+      if (standalone) {
+        assert.deepEqual(entries, []);
+        assert.deepEqual(message.usage, accounting, "Pi's summary caller must receive accounting");
+      } else {
+        assert.equal(entries.length, 1);
+        assert.deepEqual(entries[0]!.usage, accounting);
+        assert.equal(entries[0]!.provider, "agy");
+        assert.equal(entries[0]!.model, "actual-model");
+        assert.equal(message.usage.totalTokens, 164101);
+        assert.equal(message.usage.input + message.usage.output + message.usage.cacheRead, 0);
+        assert.equal(isContextOverflow(message, model.contextWindow), false);
+      }
+    });
+  }
+});
 
 describe("ACP instruction compatibility", () => {
   for (const scenario of ["unchanged sections", "changed section", "removed section", "unchanged legacy", "changed legacy"] as const) {

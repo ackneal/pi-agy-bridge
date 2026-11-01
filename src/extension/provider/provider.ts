@@ -7,6 +7,7 @@ import type {
   Model,
   SimpleStreamOptions,
   Tool,
+  Usage,
 } from "@earendil-works/pi-ai";
 import { getCurrentTools, isModelType, normalizeContext } from "@earendil-works/pi-ai";
 import { PiRuntimeOutput } from "./output.ts";
@@ -90,6 +91,11 @@ export function streamProvider(
     signal: options?.signal,
     sessionVersion: bridge.driver.sessionVersion,
     onWarning: (name, args) => bridge.warnTool(name, args),
+    ...(!standalone ? { onAccounting: (usage: Usage) => {
+      const manager = bridge.piContextAdapter.getSessionManager(piSessionId);
+      if (!manager) throw new Error("Pi session is unavailable for usage accounting");
+      manager.appendUsage("agy_turn", model.provider ?? "agy", adapter.message.model, usage);
+    } } : {}),
   });
 
   (async () => {

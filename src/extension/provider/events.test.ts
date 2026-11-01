@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AssistantMessageEvent, ToolCall } from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, isContextOverflow } from "@earendil-works/pi-ai";
+import { calculateContextTokens, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { RuntimeEvent } from "../drivers/types.ts";
+import { EventProcessor } from "../drivers/acp/events.ts";
 import { PiEventWriter } from "./events.ts";
 
 const tool: ToolCall = { type: "toolCall", id: "call-1", name: "read", arguments: { path: "file" } };
@@ -83,5 +86,82 @@ for (const stage of ["before-start", "after-text-close"] as const) {
       assert.equal(textEnd?.partial.usage.input, 0);
       assert.deepEqual(writer.message.content, [{ type: "text", text: "text" }]);
     }
+  });
+}
+
+const accountingUsage = {
+  inputTokens: 848726, outputTokens: 7989, cachedReadTokens: 697052,
+  thoughtTokens: 4474, totalTokens: 856715,
+};
+
+for (const row of [
+  { name: "accounting and context stay independent", used: [0, 56962], raw: accountingUsage, input: 151674, output: 7989, cacheRead: 697052, context: 56962 },
+  { name: "zero context retains billable accounting", used: [56962, 0], raw: accountingUsage, input: 151674, output: 7989, cacheRead: 697052, context: 0 },
+  { name: "missing context retains billable accounting", used: [], raw: accountingUsage, input: 151674, output: 7989, cacheRead: 697052, context: 0 },
+  { name: "real cumulative usage above 1M does not overflow context", used: [164101], raw: {
+    inputTokens: 1376305, cachedReadTokens: 1267257, outputTokens: 15092,
+    thoughtTokens: 7137, totalTokens: 1391397,
+  }, input: 109048, output: 15092, cacheRead: 1267257, context: 164101 },
+  { name: "separately reported thoughts count once in accounting output", used: [123], raw: {
+    inputTokens: 848726, outputTokens: 7989, cachedReadTokens: 697052,
+    thoughtTokens: 4474, totalTokens: 861189,
+  }, input: 151674, output: 12463, cacheRead: 697052, context: 123 },
+]) {
+  test(`ACP usage through Pi writer: ${row.name}`, async () => {
+    const processor = new EventProcessor("session");
+    const manager = SessionManager.inMemory();
+    let writer = new PiEventWriter({ model: "model" });
+    const intermediate = writer;
+    const emit = (event: RuntimeEvent) => {
+      if (event.type === "usage") writer.setUsage(event.usage);
+      if (event.type === "accounting") manager.appendUsage("agy_turn", "agy", "model", event.usage);
+    };
+    const assertContext = (message: typeof writer.message, context: number) => {
+      assert.deepEqual([message.usage.input, message.usage.output, message.usage.cacheRead, message.usage.cacheWrite], [0, 0, 0, 0]);
+      assert.equal(calculateContextTokens(message.usage), context);
+      assert.equal(isContextOverflow(message, 1048576), false);
+    };
+
+    writer.appendTextDelta("before tool");
+    for (const used of row.used) {
+      processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used, size: 1048576 } }, "live", emit);
+      assertContext(writer.message, used);
+      assert.equal(manager.getEntries().length, 0, "snapshots must not create accounting entries");
+    }
+    writer.appendToolCall(tool);
+    writer.finish("toolUse");
+    manager.appendMessage(writer.message);
+    assertContext(writer.message, row.context);
+    assert.equal(manager.getEntries().filter((entry) => entry.type === "usage").length, 0, "tool handoff must not bill the prompt");
+
+    writer = new PiEventWriter({ model: "model" });
+    writer.appendTextDelta("after tool");
+    processor.complete({ stopReason: "end_turn", usage: row.raw }, emit);
+    writer.finish();
+    manager.appendMessage(writer.message);
+
+    assertContext(writer.message, row.context);
+    for (const source of [intermediate, writer]) {
+      for await (const event of source.stream) {
+        const message = "partial" in event ? event.partial : event.type === "done" ? event.message : undefined;
+        if (message) {
+          assert.deepEqual([message.usage.input, message.usage.output, message.usage.cacheRead, message.usage.cacheWrite], [0, 0, 0, 0], "stream snapshots must never contain billable components");
+          assert.equal(isContextOverflow(message, 1048576), false);
+        }
+      }
+    }
+
+    const entries = manager.getEntries().filter((entry) => entry.type === "usage");
+    assert.equal(entries.length, 1, "one accounting entry per ACP prompt, independent of Pi messages");
+    const entry = entries[0]!;
+    assert.equal(entry.kind, "agy_turn");
+    assert.equal(entry.provider, "agy");
+    assert.equal(entry.model, "model");
+    assert.deepEqual(entry.usage, {
+      input: row.input, output: row.output, cacheRead: row.cacheRead, cacheWrite: 0,
+      reasoning: row.raw.thoughtTokens,
+      totalTokens: row.input + row.output + row.cacheRead,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    });
   });
 }

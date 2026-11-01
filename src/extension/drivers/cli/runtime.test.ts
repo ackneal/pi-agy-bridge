@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
+import { isContextOverflow, type AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { AgyRuntime } from "../../runtime/process.ts";
 import type { AgyEvent, AgyResultEvent } from "../../shared/types.ts";
 import { PiRuntimeOutput, type PiRuntimeOutputOptions } from "../../provider/output.ts";
@@ -9,6 +9,192 @@ import { EventTranslator, type ConversationErrorState } from "./events.ts";
 import { RuntimeSession } from "./runtime.ts";
 
 describe("RuntimeSession", () => {
+  for (const row of [
+    { name: "subscriber handoff", initialSubscriber: true, replacementCount: 1 },
+    { name: "events before subscribing", initialSubscriber: false, replacementCount: 1 },
+    { name: "multiple subscribers", initialSubscriber: true, replacementCount: 2 },
+  ]) {
+    test(`preserves translator state across ${row.name}`, (t) => {
+      let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
+      const onEvent = t.mock.method(AgyRuntime.prototype, "onEvent", (handler: Parameters<AgyRuntime["onEvent"]>[0]) => {
+        listener = handler;
+        return () => {};
+      });
+      const translate = t.mock.method(EventTranslator.prototype, "translate");
+      const session = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), {});
+      const first: RuntimeEvent[] = [];
+      const stop = row.initialSubscriber ? session.onRuntimeEvent((event) => first.push(event)) : () => {};
+      assert.ok(listener, "raw events are observed from construction, even without subscribers");
+
+      listener({ event: "step_update", usage: { input_tokens: 40, output_tokens: 2 } }, "agy");
+      stop();
+      const replacements = Array.from({ length: row.replacementCount }, () => [] as RuntimeEvent[]);
+      const unsubscribes = replacements.map((events) => session.onRuntimeEvent((event) => events.push(event)));
+      try {
+        listener({ event: "result", status: "success", usage: { input_tokens: 400, output_tokens: 20 } }, "agy");
+
+        assert.equal(onEvent.mock.callCount(), 1);
+        assert.equal(translate.mock.callCount(), 2, "each raw event is translated once regardless of subscriber count");
+        assert.equal(first.filter((event) => event.type === "usage").length, row.initialSubscriber ? 1 : 0);
+        for (const events of replacements) {
+          assert.deepEqual(events, [
+            { type: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 42,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } },
+            { type: "start" }, { type: "text-close" }, { type: "complete", reason: "stop", resumable: true },
+          ]);
+        }
+      } finally {
+        for (const unsubscribe of unsubscribes) unsubscribe();
+      }
+    });
+  }
+
+  for (const gap of [false, true]) {
+    test(`Pi writer retains context across handoff with gap=${gap}`, async (t) => {
+      let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
+      t.mock.method(AgyRuntime.prototype, "onEvent", (handler: Parameters<AgyRuntime["onEvent"]>[0]) => {
+        listener = handler;
+        return () => {};
+      });
+      const session = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), {});
+      const first = new PiRuntimeOutput({ model: "test" });
+      const stopFirst = session.onRuntimeEvent((event) => first.handleRuntimeEvent(event));
+      assert.ok(listener);
+      const step: AgyEvent = { event: "step_update", usage: { input_tokens: 20000, output_tokens: 100, cache_read_tokens: 140000 } };
+      if (!gap) listener(step, "agy");
+      first.handleBridgeToolCalls([{ type: "toolCall", id: "read", name: "read", arguments: {} }]);
+      const handoff = await first.stream.result();
+      stopFirst();
+      if (gap) listener(step, "agy");
+      const final = new PiRuntimeOutput({ model: "test" });
+      const stopFinal = session.onRuntimeEvent((event) => final.handleRuntimeEvent(event));
+      try {
+        listener({ event: "result", status: "success", usage: {
+          input_tokens: 109048, output_tokens: 15092, cache_read_tokens: 1267257,
+        } }, "agy");
+        const message = await final.stream.result();
+
+        assert.equal(handoff.stopReason, "toolUse");
+        assert.equal(message.usage.totalTokens, 160100);
+        assert.deepEqual([message.usage.input, message.usage.output, message.usage.cacheRead], [0, 0, 0]);
+        assert.equal(isContextOverflow(message, 1048576), false);
+      } finally {
+        stopFinal();
+        await session.abort();
+      }
+    });
+  }
+
+  for (const contextPresent of [false, true]) {
+    test(`subscriber failures remain isolated with context=${contextPresent}`, (t) => {
+      let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
+      t.mock.method(AgyRuntime.prototype, "onEvent", (handler: Parameters<AgyRuntime["onEvent"]>[0]) => {
+        listener = handler;
+        return () => {};
+      });
+      const session = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), {});
+      assert.ok(listener);
+      if (contextPresent) listener({ event: "step_update", usage: { input_tokens: 40, output_tokens: 2 } }, "agy");
+      const events: RuntimeEvent[] = [];
+      const failure = t.mock.fn(() => { throw new Error("subscriber failure"); });
+      const stopFailure = session.onRuntimeEvent(failure);
+      const stopObserver = session.onRuntimeEvent((event) => events.push(event));
+      try {
+        listener({ event: "result", status: "success" }, "agy");
+        assert.deepEqual(events.map((event) => event.type), [
+          ...(contextPresent ? ["usage"] : []), "start", "text-close", "complete",
+        ]);
+        assert.equal(failure.mock.callCount(), contextPresent ? 4 : 3);
+        stopFailure();
+        listener({ event: "init" }, "agy");
+        assert.equal(failure.mock.callCount(), contextPresent ? 4 : 3, "replay failure must still return working cleanup");
+        assert.equal(events.at(-1)?.type, "start");
+      } finally {
+        stopFailure();
+        stopObserver();
+      }
+    });
+  }
+
+  test("processes events during an unsubscribed handoff gap", (t) => {
+    let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
+    t.mock.method(AgyRuntime.prototype, "onEvent", (handler: Parameters<AgyRuntime["onEvent"]>[0]) => {
+      listener = handler;
+      return () => {};
+    });
+    const session = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), { conversationId: "same", lastError: "quota" });
+    const stop = session.onRuntimeEvent(() => {});
+    stop();
+    assert.ok(listener);
+    listener({ event: "step_update", update_type: "agent_response", state: "DONE" }, "agy");
+    const events: RuntimeEvent[] = [];
+    const unsubscribe = session.onRuntimeEvent((event) => events.push(event));
+    try {
+      listener({ event: "result", status: "error", conversation_id: "same", error: "quota" }, "agy");
+      assert.deepEqual(events.at(-1), { type: "complete", reason: "stop", resumable: true });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("snapshots subscribers so resubscription does not redeliver an event", (t) => {
+    let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
+    t.mock.method(AgyRuntime.prototype, "onEvent", (handler: Parameters<AgyRuntime["onEvent"]>[0]) => {
+      listener = handler;
+      return () => {};
+    });
+    const session = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), {});
+    const events: RuntimeEvent[] = [];
+    let unsubscribe = () => {};
+    const handler = (event: RuntimeEvent) => {
+      events.push(event);
+      unsubscribe();
+      // Limit mutation so a live Set iterator fails without hanging the test.
+      if (events.length === 1) unsubscribe = session.onRuntimeEvent(handler);
+    };
+    unsubscribe = session.onRuntimeEvent(handler);
+    try {
+      assert.ok(listener);
+      listener({ event: "init" }, "agy");
+      assert.deepEqual(events, [{ type: "start" }]);
+      listener({ event: "init" }, "agy");
+      assert.deepEqual(events, [{ type: "start" }, { type: "start" }]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("abort clears runtime subscribers before delegating raw listener cleanup", async (t) => {
+    let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
+    const originalOnEvent = AgyRuntime.prototype.onEvent;
+    t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, handler: Parameters<AgyRuntime["onEvent"]>[0]) {
+      listener ??= handler;
+      return originalOnEvent.call(this, handler);
+    });
+    const originalAbort = AgyRuntime.prototype.abort;
+    const abort = t.mock.method(AgyRuntime.prototype, "abort", async function (this: AgyRuntime) {
+      assert.ok(listener);
+      listener({ event: "init" }, "agy");
+      await originalAbort.call(this);
+    });
+    const session = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), {});
+    const events: RuntimeEvent[] = [];
+    const unsubscribe = session.onRuntimeEvent((event) => events.push(event));
+    let rawEvents = 0;
+    session.onEvent(() => { rawEvents++; });
+    try {
+      await session.abort();
+      assert.equal(abort.mock.callCount(), 1);
+      assert.deepEqual(events, []);
+      // Exercise the base dispatch to verify abort removed the real raw listeners.
+      Reflect.get(session, "dispatchEvent").call(session, { event: "init" }, "agy");
+      assert.equal(rawEvents, 0, "base abort removed raw listeners");
+      assert.deepEqual(events, []);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   for (const row of [
     { name: "replacement in the same conversation ignores historical error", preserve: true, conversationId: "same", reason: "stop" },
     { name: "new conversation reports the same error", preserve: true, conversationId: "new", reason: "error" },
@@ -328,7 +514,7 @@ describe("TranslatorOutput stream mapping", () => {
     const doneEvent = events.find((e) => e.type === "done") as any;
     assert.equal(doneEvent.message.content[0]?.text, "actual transcript");
     assert.equal(doneEvent.message.responseId, "conv-real");
-    assert.equal(doneEvent.message.usage.totalTokens, 15);
+    assert.equal(doneEvent.message.usage.totalTokens, 0, "result-only cumulative usage is not a context snapshot");
   });
 
   test("maps nested delta object in step_update", async () => {
@@ -716,11 +902,10 @@ describe("TranslatorOutput stream mapping", () => {
     assert.equal(doneEvent.message.usage.totalTokens, 9025);
   });
 
-  test("applies zero-cost subscription semantics to usage", async () => {
+  test("applies zero-cost subscription semantics to step usage", async () => {
     const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
     adapter.handleEvent({
-      event: "result",
-      status: "success",
+      event: "step_update",
       usage: {
         input_tokens: 1500,
         output_tokens: 300,
@@ -729,6 +914,7 @@ describe("TranslatorOutput stream mapping", () => {
         total_tokens: 1800,
       },
     });
+    adapter.handleEvent({ event: "result", status: "success" });
 
     const events = await collectStreamEvents(adapter);
     const doneEvent = events.find((e) => e.type === "done") as any;

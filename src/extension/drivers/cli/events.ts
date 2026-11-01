@@ -18,7 +18,7 @@ export interface EventTranslatorOptions {
 export class EventTranslator {
   private errorState: ConversationErrorState;
   private readonly allowedToolNames: ReadonlySet<string> | undefined;
-  private hasStepUsage = false;
+  private contextTokens: number | undefined;
   private completedResponse = false;
   private hasTurnError = false;
   private responseId: string | undefined;
@@ -33,6 +33,7 @@ export class EventTranslator {
     this.emit = emit;
     if (source === "runtime") {
       const result = event as AgyResultEvent;
+      this.resetTurn();
       this.emit({ type: "complete", reason: "error", error: (typeof result.error === "string" ? result.error : result.error?.message) || undefined, resumable: false });
       return;
     }
@@ -71,11 +72,27 @@ export class EventTranslator {
     }
   }
 
+  public replayContext(emit: (event: RuntimeEvent) => void): void {
+    if (this.contextTokens === undefined) return;
+
+    // A new Pi writer needs the current context, not another copy of the
+    // previous writer's billable usage, when a native prompt spans tool turns.
+    emit({ type: "usage", usage: {
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: this.contextTokens,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    } });
+  }
+
+  private resetTurn(): void {
+    this.contextTokens = undefined;
+    this.completedResponse = false;
+    this.hasTurnError = false;
+  }
+
   private handleStepUpdate(step: AgyStepUpdateEvent): void {
     const stepType = step.update_type ?? step.type ?? step.step_type;
     if (stepType === "user_input") {
-      this.completedResponse = false;
-      this.hasTurnError = false;
+      this.resetTurn();
     } else if (stepType === "error_message") {
       this.hasTurnError = true;
     } else if (stepType === "agent_response") {
@@ -84,7 +101,6 @@ export class EventTranslator {
 
     if (step.usage) {
       debugLog("usage", "Antigravity CLI step usage:", step.usage);
-      this.hasStepUsage = true;
       this.addUsage(step.usage);
     }
 
@@ -181,9 +197,8 @@ export class EventTranslator {
     debugLog("usage", "Antigravity CLI result accounting fields:", Object.fromEntries(
       Object.entries(result).filter(([key]) => /usage|token|metric|stat|metadata/i.test(key))
     ));
-    if (result.usage && !this.hasStepUsage) {
-      this.addUsage(result.usage);
-    }
+    // Result usage can cover the whole conversation, including restored turns.
+    // Without a trusted baseline it is neither current context nor turn billing.
 
     if (result.conversation_id || result.session_id) {
       this.setResponseId((result.conversation_id ?? result.session_id) as string);
@@ -200,6 +215,7 @@ export class EventTranslator {
     const error = typeof result.error === "string" ? result.error : result.error?.message;
     const historicalError = status === "error" && conversationId !== undefined &&
       error !== undefined && error === this.errorState.lastError && this.completedResponse && !this.hasTurnError;
+    this.resetTurn();
     if (status === "success") this.errorState.lastError = undefined;
     if (historicalError) {
       debugLog("events", "Ignored historical Antigravity CLI error after completed response:", { conversationId, error });
@@ -222,6 +238,7 @@ export class EventTranslator {
     const output = agyUsage.output_tokens ?? 0;
     const cacheRead = agyUsage.cache_read_tokens ?? 0;
     const reasoning = agyUsage.thinking_tokens ?? 0;
+    this.contextTokens = input + output + cacheRead;
     // Each step's usage describes that single model request. Antigravity CLI's total_tokens
     // field omits cache_read_tokens, so compute the true per-request context size
     // ourselves; keep the latest snapshot for Pi's overflow/compaction checks.
@@ -231,7 +248,7 @@ export class EventTranslator {
       cacheRead,
       cacheWrite: 0,
       ...(reasoning > 0 ? { reasoning } : {}),
-      totalTokens: input + output + cacheRead,
+      totalTokens: this.contextTokens,
       cost: {
         input: 0,
         output: 0,
