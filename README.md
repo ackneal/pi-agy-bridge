@@ -156,8 +156,6 @@ For a custom ACP distribution, keep both files in the same directory and set:
 export AGY_ACP_DIR="$HOME/path/to/agy-acp-server"
 ```
 
-Relative paths and literal `~` paths are not accepted. Invalid directories produce an error without downloading the managed server. `AGY_ACP_BIN` is no longer supported; migrate to `AGY_ACP_DIR` and point it to the containing directory.
-
 ### Managed ACP Server Details
 
 - **Version:** Antigravity ACP Server **1.4.5** (macOS and Linux, x64 and ARM64).
