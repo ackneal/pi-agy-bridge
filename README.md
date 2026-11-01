@@ -150,7 +150,7 @@ The bridge reuses a native session when it matches Pi's history. If Pi branches 
 
 ### Managed ACP Server Details
 
-- **Version:** Antigravity ACP Server **1.4.4** (macOS and Linux, x64 and ARM64).
+- **Version:** Antigravity ACP Server **1.4.5** (macOS and Linux, x64 and ARM64).
 - **Registry:** [`src/extension/drivers/acp/registry.json`](src/extension/drivers/acp/registry.json).
 - **Storage:** `<Pi Agent Home>/pi-agy-bridge/acp/<archive-name>/` (typically `~/.pi/agent/pi-agy-bridge/acp/`).
 - **Verification:** SHA-256 checksums are verified before extraction.
@@ -163,7 +163,7 @@ Run `/agy-bridge:doctor` to check the installation, connection, and sign-in stat
 
 ### Common Problems
 
-- **ACP download or extraction fails:** Check your network, disk space, and permissions under `~/.pi/agent/`. Downloads are about 109–321 MiB. Linux extraction can require about 1 GiB.
+- **ACP download or extraction fails:** Check your network, disk space, and permissions under `~/.pi/agent/`. Downloads are about 93–307 MiB. Linux extraction can require about 1 GiB.
 - **Signed out:** Run `/login` and select **Antigravity [pi-agy-bridge]**.
 - **No models appear:** Sign in and run `/agy-bridge:doctor`. When offline, the bridge can use a cached model catalog.
 - **Custom ACP server fails:** Check that the file is executable and supports ACP. Unset `AGY_ACP_BIN` to use the managed server.
