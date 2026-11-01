@@ -10,47 +10,33 @@ Bridge Google Antigravity models into [Pi Coding Agent](https://github.com/earen
 
 ## Design Concept & Architecture
 
-```mermaid
-flowchart TD
-    subgraph PiEnv["Pi Coding Agent Environment"]
-        PiUI["Pi UI & Conversation Manager"]
-        PiTools["Pi Tool Engine & Permission Sandbox"]
-        BridgeExt["pi-agy-bridge Extension"]
-    end
-
-    subgraph BackendEnv["Antigravity Runtime"]
-        Backend["Antigravity Backend (ACP / CLI)"]
-    end
-
-    MCPServer["pi-agy-bridge-mcp (Bridge Server)"]
-
-    PiUI -->|"1. User Prompt"| BridgeExt
-    BridgeExt -->|"2. Process Stdio (Prompts & Instructions)"| Backend
-    Backend -->|"3. MCP Stdio (tools/call)"| MCPServer
-    MCPServer -->|"4. Unix Domain Socket IPC"| BridgeExt
-    BridgeExt -->|"5. Execute with User Approval"| PiTools
-    PiTools -->|"6. Tool Output"| BridgeExt
-    BridgeExt -->|"7. Unix Domain Socket IPC"| MCPServer
-    MCPServer -->|"8. MCP Stdio (Tool Results)"| Backend
-    Backend -->|"9. Process Stdio (Streaming Tokens)"| BridgeExt
-    BridgeExt -->|"10. Render Text"| PiUI
+```text
+┌───────────────────────────────────────────────────────────────┐
+│                       Pi Coding Agent                         │
+│   • Terminal UI & Session History                             │
+│   • Tool Execution Engine (Bash, Read, Write, Edit, Custom)   │
+│   • Sandbox & Permission Policy Checks                        │
+└───────────────▲───────────────────────────────┬───────────────┘
+                │                               │
+       [Unix Domain Socket]            [Process Stdio]
+        • Relays tool requests          • Sends user prompts
+        • Returns tool execution        • Streams reasoning &
+          results to model                completion tokens
+                │                               │
+┌───────────────▼───────────────┐               │
+│       pi-agy-bridge-mcp       │               │
+│     (Local MCP Adapter)       │               │
+└───────────────▲───────────────┘               │
+                │                               │
+          [MCP Stdio]                           │
+        • tools/call                            │
+                │                               │
+┌───────────────┴───────────────────────────────▼───────────────┐
+│                      Antigravity Backend                      │
+│            • ACP Driver (Default) / CLI Driver (`agy`)        │
+│            • Model Reasoning & Inference                      │
+└───────────────────────────────────────────────────────────────┘
 ```
-
-### Communication Channels
-
-The bridge separates model reasoning from tool execution into two isolated paths:
-
-1. **Model Stream Path (Process Stdio)**:
-   - Pi launches the Antigravity backend (ACP server or `agy` CLI) as a child process.
-   - User prompts and system instructions travel to Antigravity over standard input.
-   - Generated tokens and reasoning deltas stream back to Pi over standard output.
-
-2. **Tool Inversion Loop (MCP Stdio + Unix Domain Socket)**:
-   - When the model decides to run a tool, it issues an MCP `tools/call` over **MCP Stdio** to `pi-agy-bridge-mcp`.
-   - `pi-agy-bridge-mcp` forwards the call over a private **Unix Domain Socket** to the `pi-agy-bridge` extension.
-   - Pi verifies policies, prompts the user if necessary, and executes the tool in Pi's sandbox.
-   - Tool results return across the Unix socket to `pi-agy-bridge-mcp`, which answers the model's MCP call.
-   - Antigravity never accesses workspace files or shell environments directly.
 
 ### Why pi-agy-bridge?
 
