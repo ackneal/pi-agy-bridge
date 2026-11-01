@@ -1,45 +1,832 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { describe, test } from "node:test";
+import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { AgyRuntime } from "../../runtime/process.ts";
+import type { AgyEvent, AgyResultEvent } from "../../shared/types.ts";
+import { PiRuntimeOutput, type PiRuntimeOutputOptions } from "../../provider/output.ts";
 import type { RuntimeEvent } from "../types.ts";
-import type { ConversationErrorState } from "./events.ts";
+import { EventTranslator, type ConversationErrorState } from "./events.ts";
 import { RuntimeSession } from "./runtime.ts";
 
-for (const row of [
-  { name: "replacement in the same conversation ignores historical error", preserve: true, conversationId: "same", reason: "stop" },
-  { name: "new conversation reports the same error", preserve: true, conversationId: "new", reason: "error" },
-  { name: "fresh runtime history reports the same error", preserve: false, conversationId: "same", reason: "error" },
-] as const) {
-  test(row.name, (t) => {
-    let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
-    t.mock.method(AgyRuntime.prototype, "onEvent", (handler: Parameters<AgyRuntime["onEvent"]>[0]) => {
-      listener = handler;
-      return () => { listener = undefined; };
-    });
-    const state: ConversationErrorState = { conversationId: "same" };
-    const first = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), state);
-    const facts: RuntimeEvent[] = [];
-    const unsubscribe = first.onRuntimeEvent((event) => facts.push(event));
-    assert.ok(listener);
-    listener({ event: "result", status: "error", conversation_id: "same", error: "quota" }, "agy");
-    assert.deepEqual(facts.at(-1), { type: "complete", reason: "error", error: "quota", resumable: true });
-    unsubscribe();
-
-    const replacement = new RuntimeSession(
-      { agentName: "pi-bridge", model: "test", conversationId: row.conversationId },
-      new Set(), row.preserve ? state : { conversationId: row.conversationId },
-    );
-    const stop = replacement.onRuntimeEvent((event) => facts.push(event));
-    try {
-      assert.ok(replacement instanceof AgyRuntime);
+describe("RuntimeSession", () => {
+  for (const row of [
+    { name: "replacement in the same conversation ignores historical error", preserve: true, conversationId: "same", reason: "stop" },
+    { name: "new conversation reports the same error", preserve: true, conversationId: "new", reason: "error" },
+    { name: "fresh runtime history reports the same error", preserve: false, conversationId: "same", reason: "error" },
+  ] as const) {
+    test(row.name, (t) => {
+      let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
+      t.mock.method(AgyRuntime.prototype, "onEvent", (handler: Parameters<AgyRuntime["onEvent"]>[0]) => {
+        listener = handler;
+        return () => { listener = undefined; };
+      });
+      const state: ConversationErrorState = { conversationId: "same" };
+      const first = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), state);
+      const facts: RuntimeEvent[] = [];
+      const unsubscribe = first.onRuntimeEvent((event) => facts.push(event));
       assert.ok(listener);
-      listener({ event: "step_update", update_type: "agent_response", state: "DONE" }, "agy");
-      listener({ event: "result", status: "error", conversation_id: row.conversationId, error: "quota" }, "agy");
-      assert.deepEqual(facts.at(-1), row.reason === "error"
-        ? { type: "complete", reason: "error", error: "quota", resumable: true }
-        : { type: "complete", reason: "stop", resumable: true });
-    } finally {
-      stop();
+      listener({ event: "result", status: "error", conversation_id: "same", error: "quota" }, "agy");
+      assert.deepEqual(facts.at(-1), { type: "complete", reason: "error", error: "quota", resumable: true });
+      unsubscribe();
+
+      const replacement = new RuntimeSession(
+        { agentName: "pi-bridge", model: "test", conversationId: row.conversationId },
+        new Set(), row.preserve ? state : { conversationId: row.conversationId },
+      );
+      const stop = replacement.onRuntimeEvent((event) => facts.push(event));
+      try {
+        assert.ok(replacement instanceof AgyRuntime);
+        assert.ok(listener);
+        listener({ event: "step_update", update_type: "agent_response", state: "DONE" }, "agy");
+        listener({ event: "result", status: "error", conversation_id: row.conversationId, error: "quota" }, "agy");
+        assert.deepEqual(facts.at(-1), row.reason === "error"
+          ? { type: "complete", reason: "error", error: "quota", resumable: true }
+          : { type: "complete", reason: "stop", resumable: true });
+      } finally {
+        stop();
+      }
+    });
+  }
+});
+
+class TranslatorOutput extends PiRuntimeOutput {
+  private readonly translator: EventTranslator;
+
+  constructor(options: PiRuntimeOutputOptions & { errorState?: ConversationErrorState }) {
+    super(options);
+    this.translator = new EventTranslator(options);
+  }
+
+  handleEvent(event: AgyEvent, source: "agy" | "runtime" = "agy"): void {
+    if (this.isCompleted()) return;
+    this.translator.translate(event, source, (fact) => this.handleRuntimeEvent(fact));
+  }
+}
+
+async function collectStreamEvents(adapter: TranslatorOutput): Promise<AssistantMessageEvent[]> {
+  const events: AssistantMessageEvent[] = [];
+  for await (const ev of adapter.stream) {
+    events.push(ev);
+  }
+  return events;
+}
+
+const blockedToolCases: {
+  name: string;
+  event: AgyEvent;
+  blocked: string | undefined;
+  terminalType?: "error";
+  unrestricted?: boolean;
+  allowedToolNames?: string[];
+}[] = [
+  ...[
+    { name: "native view_file nested", event: { event: "step_update", tool_call: { id: "view", name: "view_file", arguments: "{}" } } },
+    { name: "native view_file enveloped", event: { event: "step_update", step_update: { tool_call: { id: "view", name: "view_file" } } } },
+    { name: "native view_file flat", event: { event: "step_update", update_type: "tool", tool_name: "view_file" } },
+    { name: "native view_file legacy", event: { event: "step_update", step_type: "tool", name: "view_file" } },
+  ].map(({ name, event }) => ({ name, event, blocked: undefined, allowedToolNames: [] })),
+  ...["View_file", "view_file ", "view_file_extra", "mcp__pi__view_file", "write_to_file", "run_command"].map((name) => ({
+    name: `restricted exact-name boundary ${JSON.stringify(name)}`,
+    event: { event: "step_update", tool_call: { id: "restricted", name } },
+    blocked: name,
+  })),
+  { name: "allowed MCP view_file remains a Pi tool", event: { event: "step_update", tool_call: { id: "mcp", name: "mcp__pi__view_file" } }, blocked: undefined, allowedToolNames: ["view_file"] },
+  { name: "top-level call", event: { event: "step_update", tool_call: { id: "", name: "run_command", arguments: "{}" } }, blocked: "run_command" },
+  { name: "nested call", event: { event: "step_update", step_update: { tool_call: { id: "native", name: "run_command" } } }, blocked: "run_command" },
+  { name: "empty nested tool name", event: { event: "step_update", tool_call: { id: "native", name: "" } }, blocked: "" },
+  { name: "flat empty name", event: { event: "step_update", type: "tool", name: "" }, blocked: "" },
+  { name: "flat empty tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: "", name: "read" }, blocked: "" },
+  { name: "flat zero name", event: { event: "step_update", type: "tool", name: 0 }, blocked: "0" },
+  { name: "flat zero tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: 0, name: "read" }, blocked: "0" },
+  { name: "numeric tool name", event: { event: "step_update", type: "tool", name: 42 }, blocked: "42" },
+  ...[
+    { name: "object tool name", value: {} },
+    { name: "array tool name", value: ["read"] },
+    { name: "object tool name with invalid toString", value: { toString: null } },
+    { name: "array tool name with invalid toString", value: [{ toString: null }] },
+  ].map(({ name, value }) => ({
+    name, event: { event: "step_update", type: "tool", tool_name: value, name: "read" }, blocked: "<invalid>",
+  })),
+  { name: "missing nested tool name", event: { event: "step_update", tool_call: { id: "native" } }, blocked: "<unnamed>" },
+  { name: "nested null name with allowed flat fallback", event: { event: "step_update", type: "tool", tool_call: { id: "native", name: null }, tool_name: "read" }, blocked: "null" },
+  { name: "enveloped null name with allowed flat fallback", event: { event: "step_update", step_update: { type: "tool", tool_call: { id: "native", name: null }, name: "read" } }, blocked: "null" },
+  { name: "missing nested name with internal flat fallback", event: { event: "step_update", type: "tool", tool_call: { id: "native" }, name: "manage_task" }, blocked: "<unnamed>" },
+  { name: "flat null tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: null, name: "read" }, blocked: "null" },
+  { name: "flat undefined tool_name with allowed fallback", event: { event: "step_update", type: "tool", tool_name: undefined, name: "read" }, blocked: "<unnamed>" },
+  { name: "flat tool update", event: { event: "step_update", type: "tool", tool_name: "run_command" }, blocked: "run_command" },
+  { name: "legacy tool update", event: { event: "step_update", step_type: "tool", name: "run_command" }, blocked: "run_command" },
+  { name: "flat allowed call", event: { event: "step_update", update_type: "tool", tool_name: "read", name: "run_command", input: "{}" }, blocked: undefined },
+  { name: "top-level call overrides envelope", event: { event: "step_update", tool_call: { id: "allowed", name: "read" }, step_update: { tool_call: { id: "native", name: "run_command" } } }, blocked: undefined },
+  ...["read", "mcp__pi__read", "call_mcp_tool", "list_resources", "manage_task"].map((name) => ({
+    name: `allowed ${name}`, event: { event: "step_update", tool_call: { id: "", name, arguments: "{}" } }, blocked: undefined,
+  })),
+  { name: "no allowlist allows valid names", event: { event: "step_update", type: "tool", name: "run_command" }, blocked: undefined, unrestricted: true },
+  { name: "no allowlist rejects empty names", event: { event: "step_update", type: "tool", name: "" }, blocked: "", unrestricted: true },
+  { name: "no allowlist rejects zero names", event: { event: "step_update", type: "tool", name: 0 }, blocked: "0", unrestricted: true },
+  { name: "no allowlist rejects null names", event: { event: "step_update", tool_call: { id: "", name: null } }, blocked: "null", unrestricted: true },
+  { name: "explicit allowlist cannot permit empty names", event: { event: "step_update", type: "tool", name: "" }, blocked: "", allowedToolNames: [""] },
+  { name: "empty allowlist rejects valid names", event: { event: "step_update", type: "tool", name: "read" }, blocked: "read", allowedToolNames: [] },
+  { name: "unnamed flat tool update is not a call", event: { event: "step_update", type: "tool", tool_result: {} }, blocked: undefined },
+  { name: "text mentioning a tool", event: { event: "step_update", type: "agent_response", name: "run_command" }, blocked: undefined },
+  { name: "terminal error", event: { event: "result", status: "error", error: "run_command" }, blocked: undefined, terminalType: "error" },
+];
+
+describe("TranslatorOutput tool policy", () => {
+  for (const expected of blockedToolCases) {
+    const policyOptions = expected.unrestricted ? {} : { allowedToolNames: new Set(expected.allowedToolNames ?? ["read"]) };
+
+    test(`active MCP-only tool policy: ${expected.name}`, async () => {
+      const blockedNames: string[] = [];
+      const adapter = new TranslatorOutput({
+        model: "test", ...policyOptions,
+        onBlockedTool: (name) => blockedNames.push(name),
+      });
+
+      adapter.handleEvent(expected.event);
+
+      assert.deepEqual(blockedNames, expected.blocked === undefined ? [] : [expected.blocked]);
+      if (expected.blocked !== undefined) {
+        assert.equal(adapter.isCompleted(), true);
+        assert.equal(adapter.message.errorMessage, `The model attempted to call an unavailable tool: ${expected.blocked}`);
+      }
+      adapter.handleEvent({ event: "result", status: "success" });
+      const events = await collectStreamEvents(adapter);
+      const terminal = events.filter((event) => event.type === "done" || event.type === "error");
+      assert.equal(terminal.length, 1);
+      assert.equal(terminal[0]?.type, expected.blocked === undefined ? expected.terminalType ?? "done" : "error");
+      assert.deepEqual(adapter.message.content.filter((block) => block.type === "toolCall"), []);
+      for (const type of ["toolcall_start", "toolcall_delta", "toolcall_end"]) {
+        assert.equal(events.filter((event) => event.type === type).length, 0);
+      }
+    });
+
+    test(`pure completed-stream tool policy: ${expected.name}`, async (t) => {
+      const blockedNames: string[] = [];
+      const adapter = new TranslatorOutput({ model: "test", ...policyOptions, onBlockedTool: (name) => blockedNames.push(name) });
+      adapter.handleEvent({ event: "step_update", delta: "Completed history" });
+      adapter.handleEvent({ event: "result", status: "success" });
+      await collectStreamEvents(adapter);
+      const message = adapter.message;
+      const eventBefore = structuredClone(expected.event);
+      const push = t.mock.method(adapter.stream, "push");
+      const parse = t.mock.method(JSON, "parse");
+      const now = t.mock.method(Date, "now");
+      t.after(() => {
+        push.mock.restore();
+        parse.mock.restore();
+        now.mock.restore();
+      });
+
+      adapter.handleEvent(expected.event);
+      adapter.handleEvent(expected.event);
+
+      assert.equal(push.mock.callCount(), 0);
+      assert.equal(parse.mock.callCount(), 0);
+      assert.equal(now.mock.callCount(), 0);
+      assert.deepEqual(blockedNames, []);
+      assert.deepEqual(expected.event, eventBefore);
+      assert.deepEqual(adapter.message, message);
+      assert.equal(adapter.isCompleted(), true);
+    });
+  }
+});
+
+describe("TranslatorOutput stream mapping", () => {
+  const modelCases = [
+    { phase: "before stream", terminal: "done", allowed: true },
+    { phase: "before stream", terminal: "error", allowed: true },
+    { phase: "after init", terminal: "done", allowed: false },
+    { phase: "after init", terminal: "error", allowed: false },
+    { phase: "after text", terminal: "done", allowed: false },
+    { phase: "after text", terminal: "error", allowed: false },
+    { phase: "after completion", terminal: "done", allowed: false },
+    { phase: "after completion", terminal: "error", allowed: false },
+  ] as const;
+
+  for (const expected of modelCases) {
+    test(`setModel ${expected.phase} ${expected.allowed ? "updates" : "preserves"} metadata through ${expected.terminal}`, async (t) => {
+      const adapter = new TranslatorOutput({ model: "original-model" });
+      const finish = () => adapter.handleEvent({
+        event: "result",
+        status: expected.terminal === "done" ? "success" : "error",
+      });
+      if (expected.phase === "after init") {
+        adapter.handleEvent({ event: "init" });
+      }
+      if (expected.phase === "after text" || expected.phase === "after completion") {
+        adapter.handleEvent({ event: "step_update", delta: "Hello" });
+      }
+      if (expected.phase === "after completion") {
+        finish();
+      }
+      const before = adapter.message;
+      const push = t.mock.method(adapter.stream, "push");
+      t.after(() => push.mock.restore());
+
+      if (expected.allowed) {
+        adapter.setModel("selected-model");
+      } else {
+        assert.throws(() => adapter.setModel("selected-model"), /Cannot change model after the stream has started/);
+      }
+
+      assert.equal(push.mock.callCount(), 0);
+      const model = expected.allowed ? "selected-model" : "original-model";
+      assert.deepEqual(adapter.message, { ...before, model });
+      push.mock.restore();
+
+      if (expected.phase === "before stream" || expected.phase === "after init") {
+        adapter.handleEvent({ event: "step_update", delta: "Hello" });
+      }
+      if (expected.phase !== "after completion") {
+        finish();
+      }
+      const events = await collectStreamEvents(adapter);
+      assert.deepEqual(events.map((event) => event.type), [
+        "start", "text_start", "text_delta", "text_end", expected.terminal,
+      ]);
+      for (const event of events) {
+        const message = event.type === "done" ? event.message : event.type === "error" ? event.error : event.partial;
+        assert.equal(message.model, model);
+      }
+      assert.equal(adapter.message.model, model);
+    });
+  }
+
+  test("maps init event to responseId on the start event", async () => {
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
+    const events = adapter.stream[Symbol.asyncIterator]();
+
+    adapter.handleEvent({
+      event: "init",
+      conversation_id: "conv-12345",
+      model: "gemini-3.8-flash-high",
+    });
+
+    const first = await events.next();
+    assert.equal(first.done, false);
+    assert.equal(first.value?.type, "start");
+    assert.equal(first.value?.partial.responseId, "conv-12345");
+    await events.return?.();
+  });
+
+  test("maps streaming text deltas to text_start, text_delta, text_end and done", async () => {
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
+
+    adapter.handleEvent({ event: "init" });
+    adapter.handleEvent({ event: "step_update", delta: "Hello" });
+    adapter.handleEvent({ event: "step_update", delta: ", " });
+    adapter.handleEvent({ event: "step_update", delta: "world!" });
+    adapter.handleEvent({
+      event: "result",
+      status: "success",
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+
+    const events = await collectStreamEvents(adapter);
+    const types = events.map((e) => e.type);
+
+    assert.equal(types[0], "start");
+    assert.equal(types.includes("text_start"), true);
+    assert.equal(types.filter((t) => t === "text_delta").length, 3);
+    assert.equal(types.includes("text_end"), true);
+    assert.equal(types[types.length - 1], "done");
+
+    const doneEvent = events.find((e) => e.type === "done") as any;
+    const msg = doneEvent.message;
+    assert.equal(msg.content.length, 1);
+    assert.equal(msg.content[0]?.type, "text");
+    assert.equal((msg.content[0] as any)?.text, "Hello, world!");
+    assert.equal(msg.stopReason, "stop");
+  });
+
+  test("maps the nested agy stream-json event envelope", async () => {
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
+
+    adapter.handleEvent({
+      event: "step_update",
+      step_update: {
+        conversation_id: "conv-real",
+        step_index: 1,
+        state: "ACTIVE",
+        step_type: "agent_response",
+        text_delta: "actual transcript",
+      },
+    });
+    adapter.handleEvent({
+      event: "result",
+      result: {
+        conversation_id: "conv-real",
+        status: "SUCCESS",
+        response: "actual transcript",
+        usage: { input_tokens: 12, output_tokens: 3, total_tokens: 15 },
+      },
+    });
+
+    const events = await collectStreamEvents(adapter);
+    assert.equal(events.some((e) => e.type === "text_delta" && (e as any).delta === "actual transcript"), true);
+
+    const doneEvent = events.find((e) => e.type === "done") as any;
+    assert.equal(doneEvent.message.content[0]?.text, "actual transcript");
+    assert.equal(doneEvent.message.responseId, "conv-real");
+    assert.equal(doneEvent.message.usage.totalTokens, 15);
+  });
+
+  test("maps nested delta object in step_update", async () => {
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
+
+    adapter.handleEvent({
+      event: "step_update",
+      delta: { text: "from nested object" },
+    });
+    adapter.handleEvent({ event: "result", status: "success" });
+
+    const events = await collectStreamEvents(adapter);
+    assert.equal(events.some((e) => e.type === "text_delta" && (e as any).delta === "from nested object"), true);
+
+    const doneEvent = events.find((e) => e.type === "done") as any;
+    const msg = doneEvent.message;
+    assert.equal(msg.content[0]?.type, "text");
+    assert.equal((msg.content[0] as any)?.text, "from nested object");
+  });
+
+  const quotaError = "Claude quota exceeded. Resets in 3h27m34s.";
+  const resultCases: Array<{
+    name: string;
+    input: AgyResultEvent;
+    reason: "stop" | "toolUse" | "error" | "aborted";
+    errorMessage?: string;
+    toolCall?: boolean;
+    previousFailure?: boolean;
+  }> = [
+    {
+      name: "lowercase success ignores a stale string error",
+      input: { event: "result", status: "success", error: quotaError },
+      reason: "stop",
+    },
+    {
+      name: "nested uppercase SUCCESS ignores a stale object error",
+      input: { event: "result", result: { status: "SUCCESS", error: { message: quotaError } } },
+      reason: "stop",
+    },
+    {
+      name: "uppercase SUCCESS ignores a stale flat object error",
+      input: { event: "result", status: "SUCCESS", error: { message: quotaError } },
+      reason: "stop",
+    },
+    {
+      name: "nested uppercase SUCCESS ignores a stale string error",
+      input: { event: "result", result: { status: "SUCCESS", error: quotaError },
+      },
+      reason: "stop",
+    },
+    {
+      name: "mixed-case success ignores a stale object error",
+      input: { event: "result", status: "SuCcEsS", error: { message: quotaError } },
+      reason: "stop",
+    },
+    {
+      name: "explicit success with a stale error and native notification stops without execution",
+      input: { event: "result", status: "SUCCESS", error: quotaError },
+      reason: "stop",
+      toolCall: true,
+    },
+    {
+      name: "lowercase error reports an object error after text output",
+      input: { event: "result", status: "error", error: { message: quotaError } },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "nested uppercase ERROR reports a string error after text output",
+      input: { event: "result", result: { status: "ERROR", error: quotaError } },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "mixed-case error without diagnostics uses the default error",
+      input: { event: "result", status: "ErRoR" },
+      reason: "error",
+      errorMessage: "agy execution reported error status",
+    },
+    {
+      name: "omitted status with a string error still fails",
+      input: { event: "result", error: quotaError },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "omitted status with an object error still fails",
+      input: { event: "result", result: { error: { message: quotaError } } },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "unknown status with a string error still fails",
+      input: { event: "result", status: "UNKNOWN", error: quotaError },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "unknown status with an object error still fails",
+      input: { event: "result", status: "unknown", error: { message: quotaError } },
+      reason: "error",
+      errorMessage: quotaError,
+    },
+    {
+      name: "omitted status with an empty error object uses the default error",
+      input: { event: "result", error: {} },
+      reason: "error",
+      errorMessage: "agy execution reported error status",
+    },
+    {
+      name: "unknown status with an empty error object uses the default error",
+      input: { event: "result", status: "unknown", error: {} },
+      reason: "error",
+      errorMessage: "agy execution reported error status",
+    },
+    {
+      name: "omitted status without an error still succeeds",
+      input: { event: "result" },
+      reason: "stop",
+    },
+    {
+      name: "unknown status without an error still succeeds",
+      input: { event: "result", status: "UNKNOWN" },
+      reason: "stop",
+    },
+    {
+      name: "lowercase aborted without diagnostics remains aborted",
+      input: { event: "result", status: "aborted" },
+      reason: "aborted",
+    },
+    {
+      name: "uppercase ABORTED without diagnostics remains aborted",
+      input: { event: "result", result: { status: "ABORTED" } },
+      reason: "aborted",
+    },
+    {
+      name: "lowercase aborted retains a string diagnostic without becoming error",
+      input: { event: "result", status: "aborted", error: "Cancelled by user" },
+      reason: "aborted",
+      errorMessage: "Cancelled by user",
+    },
+    {
+      name: "uppercase ABORTED retains an object diagnostic without becoming error",
+      input: { event: "result", result: { status: "ABORTED", error: { message: "Cancelled by user" } } },
+      reason: "aborted",
+      errorMessage: "Cancelled by user",
+    },
+    {
+      name: "fresh adapter carries no previous error into a clean success",
+      input: { event: "result", status: "success" },
+      reason: "stop",
+      previousFailure: true,
+    },
+    {
+      name: "fresh adapter carries no previous error into SUCCESS with the same stale quota error",
+      input: { event: "result", result: { status: "SUCCESS", error: { message: quotaError } } },
+      reason: "stop",
+      previousFailure: true,
+    },
+  ];
+
+  for (const expected of resultCases) {
+    test(expected.name, async () => {
+      const previous = expected.previousFailure
+        ? new TranslatorOutput({ model: "claude-sonnet-4-6" })
+        : undefined;
+      if (previous) {
+        previous.handleEvent({ event: "result", status: "ERROR", error: quotaError });
+        const previousEvents = await collectStreamEvents(previous);
+        const error = previousEvents.find((event) => event.type === "error");
+        assert.ok(error);
+        assert.equal(error.error.errorMessage, quotaError);
+      }
+
+      const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
+      const text = "Hello! How can I help you today?";
+      if (previous) {
+        assert.equal(adapter.isCompleted(), false);
+        assert.equal(Object.hasOwn(adapter.message, "errorMessage"), false);
+        assert.deepEqual(adapter.message.content, []);
+      }
+      adapter.handleEvent({ event: "step_update", delta: text });
+      if (expected.toolCall) {
+        adapter.handleEvent({
+          event: "step_update",
+          tool_call: { id: "call-1", name: "mcp__pi__read", arguments: { path: "README.md" } },
+        });
+      }
+
+      adapter.handleEvent(expected.input);
+
+      const events = await collectStreamEvents(adapter);
+      const terminalEvents = events.filter((event) => event.type === "done" || event.type === "error");
+      assert.equal(terminalEvents.length, 1);
+      const terminal = terminalEvents[0];
+      assert.ok(terminal);
+      assert.equal(terminal.type, expected.reason === "error" || expected.reason === "aborted" ? "error" : "done");
+      assert.equal(terminal.reason, expected.reason);
+      const message = terminal.type === "done" ? terminal.message : terminal.error;
+      assert.equal(message.stopReason, expected.reason);
+      assert.equal(message.errorMessage, expected.errorMessage);
+      assert.deepEqual(message.content[0], { type: "text", text });
+      assert.equal(events.filter((event) => event.type === "text_end").length, 1);
+      assert.equal(message.content.some((block) => block.type === "toolCall"), false);
+      if (previous) {
+        for (const event of events) {
+          const snapshot = event.type === "done" ? event.message : "partial" in event ? event.partial : undefined;
+          assert.ok(snapshot);
+          assert.equal(Object.hasOwn(snapshot, "errorMessage"), false);
+          assert.equal(snapshot.model, "gemini-3.8-flash-high");
+        }
+        assert.equal(Object.hasOwn(adapter.message, "errorMessage"), false);
+        assert.equal(previous.message.errorMessage, quotaError);
+      }
+    });
+  }
+
+  const completedCases: Array<{ name: string; input: AgyResultEvent; type: "done" | "error" }> = [
+    { name: "successful stream ignores late events without changing its message", input: { event: "result", status: "SUCCESS" }, type: "done" },
+    { name: "failed stream ignores late events without changing its message", input: { event: "result", status: "ERROR", error: quotaError }, type: "error" },
+  ];
+
+  for (const expected of completedCases) {
+    test(expected.name, async (t) => {
+      const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
+      adapter.handleEvent({ event: "step_update", delta: "Completed text" });
+      adapter.handleEvent(expected.input);
+      const events = await collectStreamEvents(adapter);
+      const terminal = events.find((event) => event.type === "done" || event.type === "error");
+      assert.ok(terminal);
+      assert.equal(terminal.type, expected.type);
+      assert.equal(adapter.isCompleted(), true);
+      const message = structuredClone(adapter.message);
+      const push = t.mock.method(adapter.stream, "push");
+      t.after(() => push.mock.restore());
+
+      adapter.handleEvent(expected.input);
+      adapter.handleEvent({ event: "init", conversation_id: "late-conversation" });
+      adapter.handleEvent({ event: "step_update", delta: "late text", usage: { input_tokens: 999 } });
+      adapter.handleEvent({ event: "result", status: "error", error: "late error" });
+      adapter.handleEvent({ event: "result", status: "success" });
+
+      assert.equal(push.mock.callCount(), 0);
+      assert.deepEqual(adapter.message, message);
+    });
+  }
+
+  test("handleTermination handles process termination with reason aborted and closes active text", async () => {
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
+
+    adapter.handleEvent({ event: "step_update", delta: "Unfinished response..." });
+    adapter.handleTermination("aborted", "Child process was terminated");
+
+    assert.equal(adapter.isCompleted(), true);
+    const events = await collectStreamEvents(adapter);
+    assert.equal(events.some((e) => e.type === "text_end"), true);
+    assert.equal(events.some((e) => e.type === "error" && (e as any).reason === "aborted"), true);
+    const errorEvent = events.find((e) => e.type === "error") as any;
+    assert.equal(errorEvent.error.stopReason, "aborted");
+    assert.equal(errorEvent.error.errorMessage, "Child process was terminated");
+  });
+
+  test("allows Antigravity CLI internal dispatchers without exposing them as Pi tool calls", () => {
+    for (const internalTool of ["manage_task", "call_mcp_tool"]) {
+      const adapter = new TranslatorOutput({
+        model: "gemini-3.8-flash-high",
+        allowedToolNames: new Set(["read"]),
+      });
+
+      adapter.handleEvent({
+        event: "step_update",
+        type: "tool",
+        name: internalTool,
+        call_id: "native-1",
+        input: {},
+      });
+
+      assert.equal(adapter.isCompleted(), false);
+      assert.deepEqual(adapter.message.content, []);
     }
   });
-}
+
+  test("blocks native executable Antigravity CLI tool calls when a Pi tool allowlist is active", async () => {
+    const adapter = new TranslatorOutput({
+      model: "gemini-3.8-flash-high",
+      allowedToolNames: new Set(["read"]),
+    });
+
+    adapter.handleEvent({
+      event: "step_update",
+      type: "tool",
+      name: "run_command",
+      call_id: "native-2",
+      input: {},
+    });
+
+    const events = await collectStreamEvents(adapter);
+    const error = events.find((event) => event.type === "error") as any;
+    assert.equal(error.error.errorMessage, "The model attempted to call an unavailable tool: run_command");
+  });
+
+  test("emits Pi-native tool names for calls relayed through MCP", async () => {
+    const adapter = new TranslatorOutput({
+      model: "gemini-3.8-flash-high",
+      allowedToolNames: new Set(["read"]),
+    });
+
+    adapter.handleBridgeToolCalls([{
+      type: "toolCall",
+      id: "pi-1",
+      name: "read",
+      arguments: { path: "README.md" },
+    }]);
+
+    const events = await collectStreamEvents(adapter);
+    const done = events.find((event) => event.type === "done") as any;
+    assert.equal(done.reason, "toolUse");
+    assert.equal(done.message.content[0].name, "read");
+  });
+
+  test("keeps the latest step usage when final usage is also present", async () => {
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
+    adapter.handleEvent({
+      event: "step_update",
+      step_type: "agent_response",
+      usage: { input_tokens: 40, output_tokens: 2, thinking_tokens: 1, total_tokens: 42 },
+    });
+    adapter.handleEvent({
+      event: "step_update",
+      step_type: "agent_response",
+      usage: { input_tokens: 50, output_tokens: 3, thinking_tokens: 2, total_tokens: 53 },
+    });
+
+    assert.equal(adapter.message.usage.input, 50);
+    assert.equal(adapter.message.usage.totalTokens, 53);
+
+    adapter.handleEvent({
+      event: "result",
+      status: "success",
+      usage: {
+        input_tokens: 50,
+        output_tokens: 3,
+        thinking_tokens: 2,
+        cache_read_tokens: 20,
+        total_tokens: 73,
+      },
+    });
+
+    const events = await collectStreamEvents(adapter);
+    const doneEvent = events.find((event) => event.type === "done");
+    assert.equal(doneEvent?.type, "done");
+    if (doneEvent?.type !== "done") return;
+    assert.equal(doneEvent.message.usage.input, 50);
+    assert.equal(doneEvent.message.usage.output, 3);
+    assert.equal(doneEvent.message.usage.reasoning, 2);
+    assert.equal(doneEvent.message.usage.cacheRead, 0);
+    assert.equal(doneEvent.message.usage.totalTokens, 53);
+  });
+
+  test("ignores session-cumulative result usage and keeps the last step snapshot", async () => {
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash" });
+    adapter.handleEvent({
+      event: "step_update",
+      step_type: "agent_response",
+      usage: { input_tokens: 7741, output_tokens: 1284, thinking_tokens: 610, cache_read_tokens: 0, total_tokens: 9025 },
+    });
+    adapter.handleEvent({
+      event: "result",
+      status: "SUCCESS",
+      usage: {
+        input_tokens: 52512,
+        output_tokens: 2879,
+        thinking_tokens: 1392,
+        cache_read_tokens: 329718,
+        total_tokens: 55391,
+      },
+    });
+
+    const events = await collectStreamEvents(adapter);
+    const doneEvent = events.find((e) => e.type === "done") as any;
+    assert.equal(doneEvent.reason, "stop");
+    assert.equal(doneEvent.message.usage.input, 7741);
+    assert.equal(doneEvent.message.usage.cacheRead, 0);
+    assert.equal(doneEvent.message.usage.reasoning, 610);
+    assert.equal(doneEvent.message.usage.totalTokens, 9025);
+  });
+
+  test("applies zero-cost subscription semantics to usage", async () => {
+    const adapter = new TranslatorOutput({ model: "gemini-3.8-flash-high" });
+    adapter.handleEvent({
+      event: "result",
+      status: "success",
+      usage: {
+        input_tokens: 1500,
+        output_tokens: 300,
+        cache_read_tokens: 400,
+        thinking_tokens: 120,
+        total_tokens: 1800,
+      },
+    });
+
+    const events = await collectStreamEvents(adapter);
+    const doneEvent = events.find((e) => e.type === "done") as any;
+    const msg = doneEvent.message;
+    assert.equal(msg.usage.input, 1500);
+    assert.equal(msg.usage.output, 300);
+    assert.equal(msg.usage.cacheRead, 400);
+    assert.equal(msg.usage.reasoning, 120);
+    assert.equal(msg.usage.totalTokens, 2200);
+    assert.deepEqual(msg.usage.cost, {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    });
+  });
+});
+
+const turnStep = (step_type: string, state = "DONE", step_index = 7): AgyEvent => ({
+  event: "step_update",
+  step_update: { conversation_id: "continued", step_index, step_type, state,
+    ...(step_type === "agent_response" ? { text: "Gemini reply", usage: { input_tokens: 4198, output_tokens: 11 } } : {}) },
+});
+
+describe("current-turn completion and error tracking", () => {
+  for (const row of [
+    { name: "nested completed response overrides historical quota", steps: [turnStep("user_input", "DONE", 5), turnStep("system_message", "DONE", 6), turnStep("agent_response")], status: "ERROR", terminal: "done" },
+    { name: "continued repeated turns reset historical error evidence", steps: [turnStep("error_message", "DONE", 4), turnStep("user_input", "DONE", 5), turnStep("agent_response"), turnStep("user_input", "DONE", 8), turnStep("agent_response", "DONE", 9)], status: "ERROR", terminal: "done" },
+    { name: "error after completed response remains an error", steps: [turnStep("agent_response"), turnStep("error_message")], status: "ERROR", terminal: "error" },
+    { name: "current error before completed response remains an error", steps: [turnStep("user_input"), turnStep("error_message"), turnStep("agent_response")], status: "ERROR", terminal: "error" },
+    { name: "partial response with usage remains an error", steps: [turnStep("agent_response", "RUNNING")], status: "ERROR", terminal: "error" },
+    { name: "text without completion remains an error", steps: [{ event: "step_update", text_delta: "partial" } as AgyEvent], status: "ERROR", terminal: "error" },
+    { name: "new turn cannot reuse completed response", steps: [turnStep("agent_response"), turnStep("user_input")], status: "ERROR", terminal: "error" },
+    { name: "missing status error is not overridden", steps: [turnStep("agent_response")], status: undefined, terminal: "error" },
+    { name: "unknown status error is not overridden", steps: [turnStep("agent_response")], status: "UNKNOWN", terminal: "error" },
+    { name: "aborted is not overridden", steps: [turnStep("agent_response")], status: "ABORTED", terminal: "error" },
+  ]) {
+    test(`current-turn completion: ${row.name}`, async () => {
+      const adapter = new TranslatorOutput({ model: "gemini", errorState: { conversationId: "continued", lastError: "Historical Claude quota" } });
+      for (const step of row.steps) adapter.handleEvent(step);
+      adapter.handleEvent({ event: "result", result: { status: row.status, error: "Historical Claude quota" } });
+
+      const events = await collectStreamEvents(adapter);
+      const terminal = events.filter((event) => event.type === "done" || event.type === "error");
+      assert.equal(terminal.length, 1);
+      assert.equal(terminal[0]?.type, row.terminal);
+      assert.equal(adapter.message.stopReason, row.terminal === "done" ? "stop" : row.status === "ABORTED" ? "aborted" : "error");
+      assert.equal(adapter.message.errorMessage, row.terminal === "done" ? undefined : "Historical Claude quota");
+    });
+  }
+
+  for (const row of [
+    { name: "unknown error", previous: undefined, error: "quota", status: "ERROR", source: "agy", reason: "error", stored: "quota" },
+    { name: "different error", previous: "quota", error: "new", status: "ERROR", source: "agy", reason: "error", stored: "new" },
+    { name: "same error", previous: "quota", error: "quota", status: "ERROR", source: "agy", reason: "stop", stored: "quota" },
+    { name: "success clears", previous: "quota", error: "quota", status: "SUCCESS", source: "agy", reason: "stop", stored: undefined },
+    { name: "runtime failure", previous: "quota", error: "quota", status: "ERROR", source: "runtime", reason: "error", stored: "quota" },
+  ] as const) {
+    test(`stored conversation error: ${row.name}`, () => {
+      const errorState = { conversationId: "continued", lastError: row.previous as string | undefined };
+      const adapter = new TranslatorOutput({ model: "gemini", errorState });
+      adapter.handleEvent(turnStep("agent_response"));
+      adapter.handleEvent({ event: "result", status: row.status, error: row.error }, row.source);
+      assert.equal(adapter.message.stopReason, row.reason);
+      assert.equal(errorState.lastError, row.stored);
+    });
+  }
+});
+
+describe("native argument execution safety", () => {
+  for (const row of [
+    { name: "object", input: '{"path":"README.md"}' },
+    { name: "array", input: '[1,{"path":"README.md"}]' },
+    { name: "empty array", input: '[]' },
+    { name: "null", input: 'null' },
+    { name: "string", input: '"hello"' },
+    { name: "number", input: '42' },
+    { name: "boolean", input: 'false' },
+    { name: "invalid JSON", input: '{broken' },
+  ]) {
+    for (const source of ["arguments", "input", "flat input"] as const) {
+      test(`native arguments are not parsed or executed: ${source}, ${row.name}`, async (t) => {
+        const adapter = new TranslatorOutput({ model: "test" });
+        const event: AgyEvent = source === "flat input"
+          ? { event: "step_update", type: "tool", name: "read", call_id: "call-json", input: row.input }
+          : { event: "step_update", tool_call: { id: "call-json", name: "read", [source]: row.input } };
+
+        const parse = t.mock.method(JSON, "parse");
+        t.after(() => parse.mock.restore());
+        adapter.handleEvent(event);
+        assert.equal(parse.mock.callCount(), 0);
+        adapter.handleEvent({ event: "result", status: "success" });
+        const events = await collectStreamEvents(adapter);
+
+        assert.equal(events.some((event) => event.type === "toolcall_end"), false);
+        assert.deepEqual(adapter.message.content, []);
+      });
+    }
+  }
+});

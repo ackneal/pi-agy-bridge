@@ -1,11 +1,17 @@
-import { test, mock } from "node:test";
+import { test, describe, mock } from "node:test";
 import assert from "node:assert/strict";
 import cp from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { EventEmitter } from "node:events";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ProviderAuthInteraction } from "@earendil-works/pi-ai";
-import { loginAgyAuthentication } from "./auth.ts";
+import { loginAgyAuthentication, probeAgyAuthentication } from "./auth.ts";
+import type { AgyUsage } from "./usage.ts";
+import { AuthenticationRequiredError } from "../shared/types.ts";
 
 const url = "https://accounts.google.com/o/oauth2/auth?state=opaque";
 const instructions = `Authentication required. Please visit the URL to log in:\n${url}\nOr, paste the authorization code here and press Enter:`;
@@ -179,3 +185,242 @@ for (const row of [
     }
   });
 }
+
+// --- Merged from auth-command.test.ts ---
+test("cached login requests JSON usage once without input or PTY", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "agy-auth-cmd-"));
+  const executable = join(directory, "agy");
+  const record = join(directory, "record.json");
+  const spawn = cp.spawn;
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(executable, `#!${process.execPath}
+const fs = require('node:fs');
+let input = '';
+process.stdin.on('data', chunk => { input += chunk; });
+setTimeout(() => {
+  fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args: process.argv.slice(2), input, noTTY: !process.stdin.isTTY && !process.stdout.isTTY && !process.stderr.isTTY }));
+  process.stdout.write('Quota:\\nGemini Models  Weekly Limit Remaining 97%\\n');
+}, 25);
+`, { mode: 0o755 });
+  const invocation = t.mock.method(cp, "spawn", (...args: Parameters<typeof cp.spawn>) => {
+    assert.equal(args[0], executable, "cached login must not launch script");
+    assert.deepEqual(args[1], ["--output-format", "json", "--print", "/usage"]);
+    return spawn(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+
+  await loginAgyAuthentication({
+    signal: new AbortController().signal,
+    notify() { assert.fail("cached login must not notify"); },
+    prompt() { assert.fail("cached login must not prompt"); },
+  }, executable);
+
+  assert.equal(invocation.mock.callCount(), 1);
+  assert.deepEqual(JSON.parse(await readFile(record, "utf8")), {
+    args: ["--output-format", "json", "--print", "/usage"],
+    input: "",
+    noTTY: true,
+  });
+});
+
+// --- Merged from auth-probe.test.ts ---
+describe("probeAgyAuthentication", () => {
+  const groups = [{
+    name: "Pro",
+    buckets: [{ id: "pro-5h", name: "Five Hour", window: "5h", remainingFraction: 0.75 }],
+  }];
+  const text = "Quota\nPro  Five Hour  75%\n";
+  const emit = (output: string) => `process.stdout.write(${JSON.stringify(output)});`;
+  const callbackError = new Error("usage consumer failed");
+  const callbackAuthError = new AuthenticationRequiredError();
+
+  type Row = {
+    name: string;
+    script?: string;
+    result?: boolean;
+    error?: RegExp | Error;
+    callbackError?: Error;
+    aborted?: boolean;
+  };
+
+  const rows: Row[] = [
+    { name: "parsed text succeeds and reports usage once", script: emit(text), result: true },
+    { name: "unrecognized output throws", script: emit("report unavailable"), error: /returned no quota data/ },
+    { name: "nonzero exit with valid quota throws", script: `${emit(text)} process.exitCode = 7;`, error: /process failed \(exit 7\)/ },
+    { name: "explicit authentication requirement returns false", script: emit("Authentication required"), result: false },
+    { name: "OAuth URL alone is not an authentication verdict", script: emit("Open https://example.test/oauth"), error: /returned no quota data/ },
+    { name: "login suggestion alone is not an authentication verdict", script: `${emit("Please run login")} process.exitCode = 1;`, error: /process failed \(exit 1\)/ },
+    { name: "authorization code prompt alone is not an authentication verdict", script: emit("Enter authorization code:"), error: /returned no quota data/ },
+    { name: "already aborted signal throws without spawning", aborted: true },
+    { name: "callback error propagates", script: emit(text), callbackError, error: callbackError },
+    { name: "callback authentication error propagates instead of returning false", script: emit(text), callbackError: callbackAuthError, error: callbackAuthError },
+  ];
+
+  for (const row of rows) {
+    test(`probeAgyAuthentication: ${row.name}`, { timeout: 3000, skip: process.platform === "win32" }, async (t) => {
+      const directory = await mkdtemp(join(tmpdir(), "agy-auth-probe-"));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      const executable = join(directory, "agy");
+      await writeFile(executable, `#!${process.execPath}\n${row.script ?? ""}\n`, { mode: 0o755 });
+
+      const controller = new AbortController();
+      const abortReason = new Error("probe already cancelled");
+      if (row.aborted) controller.abort(abortReason);
+      const spawn = row.aborted ? t.mock.method(cp, "spawn") : undefined;
+      const watchdog = setTimeout(() => controller.abort(new Error("probe did not settle promptly")), 2000);
+      t.after(() => clearTimeout(watchdog));
+      const usages: AgyUsage[] = [];
+      const probe = probeAgyAuthentication(executable, controller.signal, (usage) => {
+        usages.push(usage);
+        if (row.callbackError) throw row.callbackError;
+      });
+
+      const expectedError = row.aborted ? abortReason : row.error;
+      if (expectedError instanceof Error) {
+        await assert.rejects(probe, (error) => error === expectedError);
+      } else if (expectedError) {
+        await assert.rejects(probe, expectedError);
+      } else {
+        assert.equal(await probe, row.result);
+      }
+
+      if (spawn) assert.equal(spawn.mock.callCount(), 0);
+      const expectsUsage = row.result === true || row.callbackError !== undefined;
+      assert.equal(usages.length, expectsUsage ? 1 : 0);
+      if (expectsUsage) {
+        assert.deepEqual(usages[0]!.groups, groups);
+        assert.ok(Number.isFinite(Date.parse(usages[0]!.updatedAt)));
+      }
+    });
+  }
+});
+
+// --- Merged from auth-descendants.test.ts ---
+describe("probeAgyAuthentication descendant termination", () => {
+  async function waitFor(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      if (await predicate()) return;
+      await delay(10);
+    }
+    assert.fail(message);
+  }
+
+  function gone(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+      throw error;
+    }
+  }
+
+  async function readPid(path: string): Promise<number | undefined> {
+    try {
+      const pid = Number(await readFile(path, "utf8"));
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
+  function kill(pid: number): void {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
+
+  for (const row of [
+    { name: "natural root completion kills a SIGTERM-ignoring child with ignored stdio", cancel: false, exitFirst: true, stdio: "ignore" },
+    { name: "cancellation kills a SIGTERM-ignoring child after the root exits with ignored stdio", cancel: true, exitFirst: false, stdio: "ignore" },
+    { name: "natural root completion kills a SIGTERM-ignoring child holding inherited stdio", cancel: false, exitFirst: true, stdio: "inherit" },
+  ] as const) {
+    test(`probeAgyAuthentication: ${row.name}`, { skip: process.platform === "win32", timeout: 15000 }, async () => {
+      const directory = await mkdtemp(join(tmpdir(), "agy-auth-descendants-"));
+      const executable = join(directory, "agy.cjs");
+      const rootFile = join(directory, "root.pid");
+      const childFile = join(directory, "child.pid");
+      const exitFile = join(directory, "exit");
+      const controller = new AbortController();
+      let rootPid: number | undefined;
+      let childPid: number | undefined;
+      let result: { value: boolean } | { error: unknown } | undefined;
+      let probe: Promise<void> | undefined;
+
+      try {
+        const childSource = `
+          const { writeFileSync } = require("node:fs");
+          process.on("SIGTERM", () => {});
+          setInterval(() => {}, 1000);
+          writeFileSync(${JSON.stringify(childFile)}, String(process.pid));
+        `;
+        await writeFile(executable, `#!${process.execPath}
+const { spawn } = require("node:child_process");
+const { writeFileSync, existsSync } = require("node:fs");
+process.on("SIGTERM", () => process.exit(0));
+writeFileSync(${JSON.stringify(rootFile)}, String(process.pid));
+spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], { stdio: ${JSON.stringify(row.stdio)} });
+const gate = setInterval(() => {
+  if (!existsSync(${JSON.stringify(exitFile)})) return;
+  clearInterval(gate);
+  process.stdout.write(JSON.stringify({ response: "Gemini Models  Weekly Limit Remaining 97%" }), () => process.exit(0));
+}, 10);
+`, { mode: 0o755 });
+
+        probe = probeAgyAuthentication(executable, controller.signal).then(
+          (value) => { result = { value }; },
+          (error: unknown) => { result = { error }; },
+        );
+        await waitFor(async () => {
+          rootPid = await readPid(rootFile);
+          childPid = await readPid(childFile);
+          return rootPid !== undefined && childPid !== undefined;
+        }, "fixture did not publish root and ready child PIDs");
+        assert.ok(rootPid);
+        assert.ok(childPid);
+        assert.equal(gone(rootPid), false, "root must be alive before the exit/cancel trigger");
+        assert.equal(gone(childPid), false, "ready child must be alive before the exit/cancel trigger");
+
+        if (row.exitFirst) {
+          await writeFile(exitFile, "exit");
+          await waitFor(() => gone(rootPid!), "root did not exit after the explicit gate");
+        }
+        if (row.cancel) controller.abort();
+
+        await waitFor(() => result !== undefined, "probe did not settle after cancellation/root exit (inherited stdio remained open)");
+        assert.ok(result);
+        if (row.cancel) {
+          assert.ok("error" in result, "cancelled probe must reject");
+          assert.ok(result.error instanceof Error);
+          assert.match(result.error.message, /abort|cancel/i);
+        } else {
+          assert.deepEqual(result, { value: true });
+        }
+        await waitFor(() => gone(rootPid!), "root survived cancellation");
+        await waitFor(() => gone(childPid!), `descendant ${childPid} survived root completion/cancellation (or was not reaped)`);
+      } finally {
+        controller.abort();
+        rootPid ??= await readPid(rootFile);
+        childPid ??= await readPid(childFile);
+        try {
+          if (rootPid) kill(-rootPid);
+          if (childPid) kill(childPid);
+          if (rootPid) kill(rootPid);
+          if (probe) {
+            await waitFor(() => result !== undefined, "probe did not settle during fixture cleanup");
+            await probe;
+          }
+          if (rootPid) await waitFor(() => gone(rootPid!), "root was not reaped during cleanup");
+          if (childPid) await waitFor(() => gone(childPid!), "descendant was not reaped during cleanup");
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
+    });
+  }
+});
