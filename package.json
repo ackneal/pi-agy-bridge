@@ -1,13 +1,15 @@
 {
   "name": "@ackneal/pi-agy-bridge",
   "version": "0.4.0",
-  "description": "Use Antigravity CLI models in Pi while keeping your existing tools and extensions.",
+  "description": "Use Antigravity models in Pi via Google's official ACP server, with native Pi tool and extension support.",
   "keywords": [
     "pi-package",
     "pi-extension",
     "pi-coding-agent",
     "agy",
-    "mcp"
+    "mcp",
+    "antigravity",
+    "acp"
   ],
   "license": "MIT",
   "repository": {
