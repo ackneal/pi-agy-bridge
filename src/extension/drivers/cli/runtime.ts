@@ -38,7 +38,6 @@ export class RuntimeSession extends AgyRuntime implements DriverSession {
   readonly driver = "cli" as const;
   private readonly translator: EventTranslator;
   private readonly runtimeSubscribers = new Set<(event: RuntimeEvent) => void>();
-  private readonly unsubscribeEvents: () => void;
   private readonly errorState: ConversationErrorState;
 
   constructor(
@@ -52,7 +51,7 @@ export class RuntimeSession extends AgyRuntime implements DriverSession {
     this.errorState = errorState;
     this.translator = new EventTranslator({ allowedToolNames, errorState });
 
-    this.unsubscribeEvents = this.onEvent((event, source) => this.translator.translate(event, source, (runtimeEvent) => {
+    this.onEvent((event, source) => this.translator.translate(event, source, (runtimeEvent) => {
       for (const subscriber of [...this.runtimeSubscribers]) this.notifySubscriber(subscriber, runtimeEvent);
     }));
   }
@@ -73,7 +72,6 @@ export class RuntimeSession extends AgyRuntime implements DriverSession {
 
   override async abort(): Promise<void> {
     this.runtimeSubscribers.clear();
-    this.unsubscribeEvents();
     await super.abort();
   }
 

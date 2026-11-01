@@ -77,10 +77,9 @@ describe("turn submission and incremental context", () => {
         event: "init", conversation_id: decision.action === "resume" ? "old-conversation" : "new-conversation",
       }) as Awaited<ReturnType<AgyRuntime["start"]>>);
       const abort = t.mock.method(AgyRuntime.prototype, "abort", async function (this: AgyRuntime) {
-        assert.equal(listeners.has(this), false, "raw listener must be removed before process abort");
+        listeners.delete(this);
       });
       const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
-      const unsubscribe = t.mock.fn(() => {});
       const subscribeRuntime = CliRuntimeSession.prototype.onRuntimeEvent;
       const unsubscribeRuntime = t.mock.fn(() => {});
       const runtimeSubscriptions = t.mock.method(CliRuntimeSession.prototype, "onRuntimeEvent", function (
@@ -94,10 +93,7 @@ describe("turn submission and incremental context", () => {
       });
       t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
         listeners.set(this, listener);
-        return () => {
-          listeners.delete(this);
-          unsubscribe();
-        };
+        return () => { listeners.delete(this); };
       });
       const send = t.mock.method(AgyRuntime.prototype, "send", async function (this: AgyRuntime, _input: AgyInput) {
         const listener = listeners.get(this);
@@ -164,7 +160,6 @@ describe("turn submission and incremental context", () => {
       }
       assert.equal(decide.mock.callCount(), 1);
       assert.equal(send.mock.callCount(), 1);
-      assert.equal(unsubscribe.mock.callCount(), 0);
       assert.equal(listeners.size, 1, "raw subscription belongs to the live runtime, not the completed writer");
       assert.equal(runtimeSubscriptions.mock.callCount(), 1);
       assert.equal(unsubscribeRuntime.mock.callCount(), 1, "completed turn releases its typed subscription");
@@ -201,7 +196,6 @@ describe("turn submission and incremental context", () => {
       await bridge.liveSessions.disposeAll();
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
-      assert.equal(unsubscribe.mock.callCount(), 1);
       assert.equal(listeners.size, 0);
       assert.equal(unsubscribeRuntime.mock.callCount(), 1);
     });
@@ -247,7 +241,7 @@ describe("tool batch validation", () => {
       });
       await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
       const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
-      const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
+      const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => { listener = undefined; });
       const send = t.mock.method(AgyRuntime.prototype, "send", async () => {});
       let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
       t.mock.method(AgyRuntime.prototype, "onEvent", (callback: Parameters<AgyRuntime["onEvent"]>[0]) => {
@@ -369,12 +363,11 @@ describe("pending tool continuation", () => {
       await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
       const controller = new AbortController();
       const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
-      const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
+      const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => { listener = undefined; });
       let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
-      const unsubscribe = t.mock.fn(() => { listener = undefined; });
       t.mock.method(AgyRuntime.prototype, "onEvent", (callback: Parameters<AgyRuntime["onEvent"]>[0]) => {
         listener = callback;
-        return unsubscribe;
+        return () => { listener = undefined; };
       });
       const send = t.mock.method(AgyRuntime.prototype, "send", async () => {
         assert.ok(listener, "provider must subscribe before sending");
@@ -463,7 +456,6 @@ describe("pending tool continuation", () => {
             ? serializeContextUpdate([{ role: "user", content: "latest request", timestamp: 0 }], "pending_tool_continuation")
             : undefined,
       ]);
-      assert.equal(unsubscribe.mock.callCount(), row.reason === "stop" ? 0 : 1);
       assert.equal(typeof listener, row.reason === "stop" ? "function" : "undefined");
       assert.equal(send.mock.callCount(), row.sends);
       assert.equal(persist.mock.callCount(), row.persists);
@@ -507,7 +499,6 @@ describe("pending tool continuation", () => {
         assert.equal(abort.mock.callCount(), 1);
       }
       await bridge.liveSessions.disposeAll();
-      assert.equal(unsubscribe.mock.callCount(), 1);
       assert.equal(listener, undefined);
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
@@ -548,13 +539,12 @@ describe("native terminal events with pending tools", () => {
       });
       await writeFile(agyPath, '#!/bin/sh\necho 1.2.14\n', { mode: 0o755 });
       const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
-      const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
+      const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => { listener = undefined; });
       const send = t.mock.method(AgyRuntime.prototype, "send", async () => {});
       let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
-      const unsubscribe = t.mock.fn(() => { listener = undefined; });
       t.mock.method(AgyRuntime.prototype, "onEvent", (callback: Parameters<AgyRuntime["onEvent"]>[0]) => {
         listener = callback;
-        return unsubscribe;
+        return () => { listener = undefined; };
       });
       t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", () => true);
       t.mock.method(bridge.runtimeSessionSync, "decide", () => ({ action: "continue" }) as RuntimeSessionDecision);
@@ -628,7 +618,6 @@ describe("native terminal events with pending tools", () => {
       assert.equal(await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion), undefined);
       assert.equal(session.activeProcess, null);
       assert.equal(session.activeMcpServer, null);
-      assert.equal(unsubscribe.mock.callCount(), 1);
       assert.equal(listener, undefined);
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
@@ -674,13 +663,9 @@ describe("pending tool context updates", () => {
       });
       await writeFile(agyPath, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
       const listeners = new Map<AgyRuntime, Parameters<AgyRuntime["onEvent"]>[0]>();
-      const unsubscribe = t.mock.fn(() => {});
       t.mock.method(AgyRuntime.prototype, "onEvent", function (this: AgyRuntime, listener: Parameters<AgyRuntime["onEvent"]>[0]) {
         listeners.set(this, listener);
-        return () => {
-          listeners.delete(this);
-          unsubscribe();
-        };
+        return () => { listeners.delete(this); };
       });
       bridge.start();
       const session = bridge.liveSessions.getOrCreate("mixed-pending");
@@ -717,7 +702,9 @@ describe("pending tool context updates", () => {
       t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", function (this: BridgeIPC) { return this === oldMcp && pending; });
       t.mock.method(BridgeIPC.prototype, "start", async () => { throw new Error("unexpected MCP start"); });
       const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
-      const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
+      const abort = t.mock.method(AgyRuntime.prototype, "abort", async function (this: AgyRuntime) {
+        listeners.delete(this);
+      });
       const start = t.mock.method(AgyRuntime.prototype, "start", async () => { throw new Error("unexpected runtime start"); });
       const send = t.mock.method(AgyRuntime.prototype, "send", async () => { throw new Error("pending results must not resend a prompt"); });
 
@@ -776,10 +763,8 @@ describe("pending tool context updates", () => {
       assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
       assert.equal(listeners.size, 1);
-      assert.equal(unsubscribe.mock.callCount(), 0);
       await bridge.liveSessions.disposeAll();
       assert.equal(listeners.size, 0);
-      assert.equal(unsubscribe.mock.callCount(), 1);
       assert.equal(close.mock.callCount(), 1);
       assert.equal(abort.mock.callCount(), 1);
       assert.equal(session.activeProcess, null);

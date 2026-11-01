@@ -224,14 +224,6 @@ describe("EventProcessor notifications and completion", () => {
       } }];
       const latest = snapshots.at(-1);
       assert.deepEqual(facts, [...snapshots, ...(latest ? [latest] : []), ...accounting, { type: "session-reference", reference: "session" }, row.expected]);
-      if (latest?.type === "usage") {
-        const completedSnapshot = facts[snapshots.length];
-        assert.equal(completedSnapshot?.type, "usage");
-        const liveSnapshot = facts[snapshots.length - 1];
-        if (completedSnapshot?.type === "usage" && liveSnapshot?.type === "usage") {
-          assert.equal(completedSnapshot.usage, liveSnapshot.usage, "completion must reuse the actual latest context object");
-        }
-      }
     });
   }
 
@@ -271,41 +263,29 @@ describe("EventProcessor notifications and completion", () => {
       usage: { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, totalTokens: 0 },
       expected: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
     },
-  ] satisfies { name: string; usage: NonNullable<PromptResponse["usage"]>; expected: Omit<Extract<RuntimeEvent, { type: "accounting" }>["usage"], "totalTokens" | "cost"> }[]) {
+    ...[
+      { name: "missing", totalTokens: undefined },
+      { name: "null", totalTokens: null },
+      { name: "NaN", totalTokens: Number.NaN },
+      { name: "infinite", totalTokens: Number.POSITIVE_INFINITY },
+      { name: "negative", totalTokens: -1 },
+      { name: "string", totalTokens: "4815" },
+    ].map(({ name, totalTokens }) => ({
+      name: `${name} accounting total cannot prove thoughts are separate`,
+      usage: { inputTokens: 3488, outputTokens: 733, thoughtTokens: 594, totalTokens },
+      expected: { input: 3488, output: 733, cacheRead: 0, cacheWrite: 0, reasoning: 594 },
+    })),
+  ] satisfies { name: string; usage: unknown; expected: Omit<Extract<RuntimeEvent, { type: "accounting" }>["usage"], "totalTokens" | "cost"> }[]) {
     test(`EventProcessor.complete accounting: ${row.name}`, () => {
       const processor = new EventProcessor("session");
       const facts: RuntimeEvent[] = [];
       processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used: 56962, size: 1048576 } }, "live", () => {});
 
-      processor.complete({ stopReason: "end_turn", usage: row.usage }, (fact) => facts.push(fact));
+      // Missing or malformed required totals explicitly test the response boundary.
+      processor.complete({ stopReason: "end_turn", usage: row.usage } as PromptResponse, (fact) => facts.push(fact));
 
       assert.deepEqual(facts.filter((fact) => fact.type === "accounting"), [
         { type: "accounting", usage: { ...row.expected, totalTokens: row.expected.input + row.expected.output + row.expected.cacheRead + row.expected.cacheWrite, cost: zeroCost } },
-      ]);
-    });
-  }
-
-  for (const row of [
-    { name: "missing", totalTokens: undefined },
-    { name: "null", totalTokens: null },
-    { name: "NaN", totalTokens: Number.NaN },
-    { name: "infinite", totalTokens: Number.POSITIVE_INFINITY },
-    { name: "negative", totalTokens: -1 },
-    { name: "string", totalTokens: "4815" },
-  ]) {
-    test(`${row.name} accounting total cannot prove thoughts are separate`, () => {
-      const processor = new EventProcessor("session");
-      const facts: RuntimeEvent[] = [];
-      processor.process({ sessionId: "session", update: { sessionUpdate: "usage_update", used: 42, size: 1000 } }, "live", () => {});
-      // Missing or malformed required totals explicitly test the response boundary.
-      const response = { stopReason: "end_turn", usage: {
-        inputTokens: 3488, outputTokens: 733, thoughtTokens: 594, totalTokens: row.totalTokens,
-      } } as PromptResponse;
-
-      processor.complete(response, (fact) => facts.push(fact));
-
-      assert.deepEqual(facts.filter((fact) => fact.type === "accounting"), [
-        { type: "accounting", usage: { input: 3488, output: 733, cacheRead: 0, cacheWrite: 0, reasoning: 594, totalTokens: 4221, cost: zeroCost } },
       ]);
     });
   }

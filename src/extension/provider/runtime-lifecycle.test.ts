@@ -73,7 +73,9 @@ async function createRuntimeFixture(t: TestContext) {
   t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
   t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
   const close = t.mock.method(BridgeIPC.prototype, "close", async () => {});
-  const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
+  const abort = t.mock.method(AgyRuntime.prototype, "abort", async function (this: AgyRuntime) {
+    rawListeners.delete(this);
+  });
   const processes: AgyRuntime[] = [];
   const start = t.mock.method(AgyRuntime.prototype, "start", async function (this: AgyRuntime) {
     processes.push(this);
@@ -378,7 +380,7 @@ describe("runtime ownership and late callbacks", () => {
       let releaseClose!: () => void;
       const closing = new Promise<void>((resolve) => { releaseClose = resolve; });
       t.after(() => releaseClose());
-      const { bridge, session, sessionId, processes, close, abort, runTurn } = await createRuntimeFixture(t);
+      const { bridge, session, sessionId, processes, rawListeners, close, abort, runTurn } = await createRuntimeFixture(t);
       let delayClose = true;
       close.mock.mockImplementation(async () => {
         if (!delayClose) return;
@@ -388,6 +390,7 @@ describe("runtime ownership and late callbacks", () => {
         if (cleanupRejects) throw new Error("bridge cleanup failed");
       });
       abort.mock.mockImplementation(async function (this: AgyRuntime) {
+        rawListeners.delete(this);
         if (this === processes[0] && cleanupRejects) throw new Error("process cleanup failed");
       });
 
@@ -1133,7 +1136,7 @@ describe("runtime startup cleanup", () => {
         }
         return { event: "init", conversation_id: "test-conversation" } as Awaited<ReturnType<AgyRuntime["start"]>>;
       });
-      const abort = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
+      const abort = t.mock.method(AgyRuntime.prototype, "abort", AgyRuntime.prototype.abort);
       const install = t.mock.method(CliDriver.prototype, "installPlugin", async () => {
         if (stage === "plugin install") throw failure;
       });

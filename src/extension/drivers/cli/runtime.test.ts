@@ -16,10 +16,9 @@ describe("RuntimeSession", () => {
   ]) {
     test(`preserves translator state across ${row.name}`, (t) => {
       let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
-      const rawUnsubscribe = t.mock.fn();
       const onEvent = t.mock.method(AgyRuntime.prototype, "onEvent", (handler: Parameters<AgyRuntime["onEvent"]>[0]) => {
         listener = handler;
-        return rawUnsubscribe;
+        return () => {};
       });
       const translate = t.mock.method(EventTranslator.prototype, "translate");
       const session = new RuntimeSession({ agentName: "pi-bridge", model: "test" }, new Set(), {});
@@ -35,7 +34,6 @@ describe("RuntimeSession", () => {
         listener({ event: "result", status: "success", usage: { input_tokens: 400, output_tokens: 20 } }, "agy");
 
         assert.equal(onEvent.mock.callCount(), 1);
-        assert.equal(rawUnsubscribe.mock.callCount(), 0, "runtime subscriptions do not change the raw listener");
         assert.equal(translate.mock.callCount(), 2, "each raw event is translated once regardless of subscriber count");
         assert.equal(first.filter((event) => event.type === "usage").length, row.initialSubscriber ? 1 : 0);
         for (const events of replacements) {

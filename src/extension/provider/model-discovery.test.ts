@@ -549,7 +549,10 @@ describe("model switching and conversation continuity", () => {
       t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
       t.mock.method(BridgeIPC.prototype, "start", async () => {});
       t.mock.method(BridgeIPC.prototype, "close", async () => { lifecycle.push("close"); });
-      t.mock.method(AgyRuntime.prototype, "abort", async () => { lifecycle.push("abort"); });
+      t.mock.method(AgyRuntime.prototype, "abort", async function (this: AgyRuntime) {
+        rawListeners.delete(this);
+        lifecycle.push("abort");
+      });
       const start = t.mock.method(AgyRuntime.prototype, "start", async function (this: AgyRuntime) {
         const attempt = start.mock.callCount() + 1;
         lifecycle.push(`start:${this.options.conversationId ?? "fresh"}`);

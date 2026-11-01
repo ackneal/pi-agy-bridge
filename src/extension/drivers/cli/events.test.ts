@@ -47,6 +47,7 @@ describe("EventTranslator", () => {
   }
 
   for (const row of [
+    { name: "context replay emits nothing before the first step snapshot", initialSnapshot: false, before: [], expected: [] },
     { name: "handoff replays only latest context", before: [], latest: undefined, expected: [contextUsage] },
     { name: "handoff uses the most recent step snapshot", before: [], latest: { input_tokens: 7 }, expected: [{ ...contextUsage, totalTokens: 7 }] },
     { name: "handoff replays an existing zero context snapshot", before: [], latest: { input_tokens: 0 }, expected: [{ ...contextUsage, totalTokens: 0 }] },
@@ -58,6 +59,7 @@ describe("EventTranslator", () => {
   ] as {
     name: string;
     before: AgyEvent[];
+    initialSnapshot?: boolean;
     source?: "agy" | "runtime";
     latest?: { input_tokens: number } | undefined;
     expected: Extract<RuntimeEvent, { type: "usage" }>["usage"][];
@@ -71,7 +73,7 @@ describe("EventTranslator", () => {
         facts.push(fact);
         if (fact.type === "complete") translator.replayContext((context) => duringCompletion.push(context));
       };
-      translator.translate({ event: "step_update", usage: { input_tokens: 2, output_tokens: 3, cache_read_tokens: 4, thinking_tokens: 5 } }, "agy", emit);
+      if (row.initialSnapshot !== false) translator.translate({ event: "step_update", usage: { input_tokens: 2, output_tokens: 3, cache_read_tokens: 4, thinking_tokens: 5 } }, "agy", emit);
       if (row.latest) translator.translate({ event: "step_update", usage: row.latest }, "agy", emit);
       for (const event of row.before) translator.translate(event, row.source ?? "agy", emit);
       const factsBeforeReplay = [...facts];
@@ -88,15 +90,6 @@ describe("EventTranslator", () => {
       assert.equal(replayed.length, row.expected.length * 2, "replay must not replace the normal callback");
     });
   }
-
-  test("context replay emits nothing before the first step snapshot", () => {
-    const translator = new EventTranslator();
-    const facts: RuntimeEvent[] = [];
-
-    translator.replayContext((fact) => facts.push(fact));
-
-    assert.deepEqual(facts, []);
-  });
 
   for (const row of [
     {

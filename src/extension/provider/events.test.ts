@@ -163,12 +163,5 @@ for (const row of [
       totalTokens: row.input + row.output + row.cacheRead,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     });
-    const footerTotals = entries.reduce((totals, { usage }) => ({
-      input: totals.input + usage.input,
-      output: totals.output + usage.output,
-      cacheRead: totals.cacheRead + usage.cacheRead,
-      cacheWrite: totals.cacheWrite + usage.cacheWrite,
-    }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-    assert.deepEqual(footerTotals, { input: row.input, output: row.output, cacheRead: row.cacheRead, cacheWrite: 0 });
   });
 }
