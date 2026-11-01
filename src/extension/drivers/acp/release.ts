@@ -27,10 +27,10 @@ export function distributionName(release: Pick<Release, "url">): string {
 
 export function resolveRelease(platform: NodeJS.Platform = process.platform, arch: string = process.arch): Release {
   if (platform !== "darwin" && platform !== "linux") {
-    throw new Error(`Unsupported ACP platform '${platform}'; the bridge supports macOS and Linux only (AGY_ACP_BIN cannot enable unsupported platforms).`);
+    throw new Error(`Unsupported ACP platform '${platform}'; the bridge supports macOS and Linux only (AGY_ACP_DIR cannot enable unsupported platforms).`);
   }
   if (arch !== "x64" && arch !== "arm64") {
-    throw new Error(`Unsupported ACP architecture '${arch}' on ${platform}; supported architectures are x64 and arm64. Set AGY_ACP_BIN to provide a binary for this architecture.`);
+    throw new Error(`Unsupported ACP architecture '${arch}' on ${platform}; supported architectures are x64 and arm64. Set AGY_ACP_DIR to provide a distribution for this architecture.`);
   }
 
   const entry = registry?.distribution?.binary?.[`${platform}-${arch === "arm64" ? "aarch64" : "x86_64"}`];

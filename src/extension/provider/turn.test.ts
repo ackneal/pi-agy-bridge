@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { describe, afterEach, beforeEach } from "node:test";
-import { isContextOverflow, type AssistantMessageEvent, type Context, type Model, type Usage } from "@earendil-works/pi-ai";
+import { isContextOverflow, type AssistantMessage, type AssistantMessageEvent, type Context, type Model, type Usage } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import type { DriverSession, DriverSubmission, RuntimeEvent } from "../drivers/types.ts";
@@ -21,6 +21,11 @@ import { serializeContextUpdate } from "./context-prompt.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { Bridge, streamProvider } from "./provider.ts";
 import { PiRuntimeOutput } from "./output.ts";
+
+// Pi times the streamed snapshot, not the message saved in the context checkpoint.
+function checkpointMessage({ durationMs: _durationMs, ...message }: AssistantMessage): Omit<AssistantMessage, "durationMs"> {
+  return message;
+}
 
 let home: string;
 let previousHome: string | undefined;
@@ -167,7 +172,7 @@ describe("turn submission and incremental context", () => {
       assert.ok(completed?.type === "done");
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(liveSession), context.messages.length + 1);
       assert.equal(persist.mock.callCount(), 1);
-      assert.deepEqual(persist.mock.calls[0]!.arguments[2], [...context.messages, completed.message]);
+      assert.deepEqual(persist.mock.calls[0]!.arguments[2], [...context.messages, checkpointMessage(completed.message)]);
       const starts = decision.action === "continue" ? 0 : 1;
       assert.equal(startProc.mock.callCount(), starts);
       assert.equal(startBridge.mock.callCount(), starts);
@@ -470,7 +475,7 @@ describe("pending tool continuation", () => {
         const terminal = events.at(-1);
         assert.ok(terminal?.type === "done");
         assert.equal(terminal.reason, row.reason);
-        assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
+        assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, checkpointMessage(terminal.message)]);
         assert.equal(persist.mock.calls[1]!.arguments[3], bridge.driver.sessionVersion);
         assert.equal(session.activeProcess, proc);
         assert.equal(close.mock.callCount(), 0);
@@ -760,7 +765,7 @@ describe("pending tool context updates", () => {
       assert.doesNotMatch(appendix!, /pending tool answer/);
       assert.equal(persist.mock.callCount(), 2);
       assert.deepEqual(persist.mock.calls[0]!.arguments[2], context.messages);
-      assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
+      assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, checkpointMessage(terminal.message)]);
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
       assert.equal(listeners.size, 1);
       await bridge.liveSessions.disposeAll();
@@ -877,7 +882,7 @@ describe("submission failure and runtime ownership", () => {
       assert.notEqual(call.id, oldId);
       assert.deepEqual(call.arguments, { batch: "next" });
       assert.equal(bridge.runtimeSessionSync.getSyncedMessageCount(session), context.messages.length + 1);
-      assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, terminal.message]);
+      assert.deepEqual(persist.mock.calls[1]!.arguments[2], [...context.messages, checkpointMessage(terminal.message)]);
       assert.equal(session.activeProcess, proc);
       assert.equal(invalidate.mock.callCount(), 0, "conversion is a tool error, not an infrastructure failure");
       assert.equal(close.mock.callCount(), 0);

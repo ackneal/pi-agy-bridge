@@ -221,7 +221,7 @@ async function publishDistribution(source: string, directory: string, manifest: 
     try { await fsp.rename(path.join(source, entry.path), target); }
     catch (error) {
       if (["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) {
-        throw new Error(`Cannot repair ACP file ${entry.path}: read-only directory permissions prevent atomic replacement. Restore the file externally or use AGY_ACP_BIN; archive directory permissions were preserved`, { cause: error });
+        throw new Error(`Cannot repair ACP file ${entry.path}: read-only directory permissions prevent atomic replacement. Restore the file externally or use AGY_ACP_DIR; archive directory permissions were preserved`, { cause: error });
       }
       throw error;
     }
@@ -271,7 +271,7 @@ async function downloadArchive(filename: string, release: Release, fetcher: type
     const response = await fetcher(release.url, { signal: bounded, redirect: "error" });
     if (!response.ok || !response.body) {
       await response.body?.cancel();
-      throw new Error(`Google download returned HTTP ${response.status}; retry or set AGY_ACP_BIN`);
+      throw new Error(`Google download returned HTTP ${response.status}; retry or set AGY_ACP_DIR`);
     }
     const length = Number(response.headers.get("content-length"));
     const total = Number.isSafeInteger(length) && length > 0 ? length : undefined;
@@ -289,10 +289,10 @@ async function downloadArchive(filename: string, release: Release, fetcher: type
     emit(total);
     progress({ phase: "verify", version: release.version, platform: release.platform, message: `Verifying ACP ${release.version} archive SHA-256` });
     const actual = hash.digest("hex");
-    if (actual !== release.sha256) throw new Error(`ACP archive SHA-256 mismatch: expected ${release.sha256}, received ${actual}. Nothing was installed; retry or set AGY_ACP_BIN.`);
+    if (actual !== release.sha256) throw new Error(`ACP archive SHA-256 mismatch: expected ${release.sha256}, received ${actual}. Nothing was installed; retry or set AGY_ACP_DIR.`);
   } catch (error) {
     if (idle.signal.aborted) throw idle.signal.reason;
-    if (bounded.aborted && !signal.aborted) throw new Error("ACP download exceeded 30 minutes; retry on a faster connection or set AGY_ACP_BIN", { cause: error });
+    if (bounded.aborted && !signal.aborted) throw new Error("ACP download exceeded 30 minutes; retry on a faster connection or set AGY_ACP_DIR", { cause: error });
     throw error;
   } finally { clearTimeout(timer!); }
 }
@@ -349,7 +349,7 @@ async function install(options: InstallationOptions, signal: AbortSignal, emit: 
       throw signal.reason;
     }
     const cause = error instanceof Error ? error.message : String(error);
-    const message = `Could not prepare Antigravity ACP ${release.version}: ${cause}. Installation: ${installationDirectory(agentHome, release)}. Check network access, free disk space, and installation directory permissions, then retry; or set AGY_ACP_BIN.`;
+    const message = `Could not prepare Antigravity ACP ${release.version}: ${cause}. Installation: ${installationDirectory(agentHome, release)}. Check network access, free disk space, and installation directory permissions, then retry; or set AGY_ACP_DIR.`;
     progress("error", message);
     throw new Error(message, { cause: error });
   } finally {

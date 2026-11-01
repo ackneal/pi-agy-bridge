@@ -118,12 +118,14 @@ test("ACP download progress temporarily replaces and restores Doctor status", as
   const commands = new Map<string, Handler>();
   let shutdown!: () => Promise<void>;
   const statuses: Array<[string, string | undefined]> = [];
+  const notify = t.mock.fn<ExtensionCommandContext["ui"]["notify"]>();
+  const sendMessage = t.mock.fn();
   const driver = new AcpDriver();
   const bridge = new Bridge({
     registerCommand: (name: string, command: { handler: Handler }) => commands.set(name, command.handler),
     registerProvider() {},
     on: (name: string, handler: () => Promise<void>) => { if (name === "session_shutdown") shutdown = handler; },
-    sendMessage() {},
+    sendMessage,
   } as unknown as ExtensionAPI, driver);
   t.mock.method(driver, "usage", async () => {
     for (const phase of ["validate", "download", "verify", "extract", "complete"] as const) {
@@ -138,7 +140,7 @@ test("ACP download progress temporarily replaces and restores Doctor status", as
 
   await commands.get("agy-bridge:doctor")!("", {
     hasUI: true,
-    ui: { setStatus: (key: string, message: string | undefined) => statuses.push([key, message]), notify() {} },
+    ui: { setStatus: (key: string, message: string | undefined) => statuses.push([key, message]), notify },
   } as unknown as ExtensionCommandContext);
 
   const messages = statuses.map(([, message]) => message);
@@ -151,18 +153,24 @@ test("ACP download progress temporarily replaces and restores Doctor status", as
   assert.ok(messages.filter((message) => message === "Checking Antigravity ACP diagnostics…").length >= 2);
   assert.equal(messages.at(-1), undefined);
   assert.ok(statuses.every(([key]) => key === "agy-bridge"));
+  assert.equal(notify.mock.callCount(), 1);
+  assert.match(notify.mock.calls[0]!.arguments[0], /Antigravity ACP/);
+  assert.equal(notify.mock.calls[0]!.arguments[1], "info");
+  assert.equal(sendMessage.mock.callCount(), 0);
 });
 
 test("overlapping commands preserve the newest active footer operation", async (t) => {
   for (const scenario of [
-    { name: "doctor finishes before switch discovery", first: "doctor", releaseFirst: "doctor" },
-    { name: "older doctor finishes after switch discovery", first: "doctor", releaseFirst: "switch" },
-    { name: "newer doctor restores pending switch progress", first: "switch", releaseFirst: "doctor" },
+    { name: "doctor finishes before switch discovery", first: "doctor", releaseFirst: "doctor", reports: ["CLI", "ACP"] },
+    { name: "older doctor finishes after switch discovery", first: "doctor", releaseFirst: "switch", reports: ["ACP"] },
+    { name: "newer doctor restores pending switch progress", first: "switch", releaseFirst: "doctor", reports: ["CLI", "ACP"] },
   ] as const) {
     await t.test(scenario.name, async (t) => {
       type Handler = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
       const commands = new Map<string, Handler>();
       const statuses: Array<string | undefined> = [];
+      const notify = t.mock.fn<ExtensionCommandContext["ui"]["notify"]>();
+      const sendMessage = t.mock.fn();
       const gates = new Map<string, { promise: Promise<void>; release: () => void; entered: Promise<void>; markEntered: () => void }>();
       for (const name of ["doctor", "switch"]) {
         let release!: () => void;
@@ -173,7 +181,7 @@ test("overlapping commands preserve the newest active footer operation", async (
       }
       const bridge = new Bridge({
         registerCommand: (name: string, command: { handler: Handler }) => commands.set(name, command.handler),
-        registerProvider: () => {}, on: () => {}, sendMessage: () => {},
+        registerProvider: () => {}, on: () => {}, sendMessage,
       } as unknown as ExtensionAPI, new CliDriver());
       t.after(async () => {
         gates.forEach((gate) => gate.release());
@@ -197,7 +205,7 @@ test("overlapping commands preserve the newest active footer operation", async (
         await switchGate.promise;
         return [];
       });
-      const ctx = { hasUI: true, ui: { setStatus: (_key: string, status?: string) => statuses.push(status) } } as unknown as ExtensionCommandContext;
+      const ctx = { hasUI: true, ui: { setStatus: (_key: string, status?: string) => statuses.push(status), notify } } as unknown as ExtensionCommandContext;
       let doctorTask: Promise<void> | undefined;
       let switchTask: Promise<void> | undefined;
 
@@ -229,6 +237,12 @@ test("overlapping commands preserve the newest active footer operation", async (
         await doctorTask;
       }
 
+      assert.equal(notify.mock.callCount(), scenario.reports.length);
+      for (const [index, { arguments: [message, type] }] of notify.mock.calls.entries()) {
+        assert.match(message, new RegExp(`Antigravity ${scenario.reports[index]}`));
+        assert.equal(type, "info");
+      }
+      assert.equal(sendMessage.mock.callCount(), 0);
       assert.equal(doctorUsage.mock.callCount(), 1);
       assert.equal(statuses.at(-1), undefined);
     });
@@ -247,7 +261,9 @@ test("doctor progress is safe across context invalidation and shutdown", async (
       const sendMessage = t.mock.fn();
       const statuses = new Map<string, string | undefined>();
       const writes: Array<[string, string | undefined]> = [];
-      const ui = { setStatus: (key: string, value?: string) => { writes.push([key, value]); statuses.set(key, value); } };
+      const notify = t.mock.fn<ExtensionCommandContext["ui"]["notify"]>();
+      const stderr = t.mock.method(console, "error", () => {});
+      const ui = { notify, setStatus: (key: string, value?: string) => { writes.push([key, value]); statuses.set(key, value); } };
       const bridge = new Bridge({
         registerCommand: (name: string, command: { handler: Handler }) => commands.set(name, command.handler),
         registerProvider: () => {},
@@ -261,7 +277,7 @@ test("doctor progress is safe across context invalidation and shutdown", async (
       let pending: Promise<void> | undefined;
       t.after(async () => {
         release();
-        await pending;
+        await Promise.allSettled(pending ? [pending] : []);
         if (shutdown) await shutdown();
       });
       t.mock.method(AgyAuthentication.prototype, "detect", async () => undefined);
@@ -291,7 +307,10 @@ test("doctor progress is safe across context invalidation and shutdown", async (
       release();
       await pending;
 
-      assert.equal(sendMessage.mock.callCount(), scenario.shutdown ? 0 : 1);
+      assert.equal(stderr.mock.callCount(), scenario.shutdown ? 0 : 1);
+      if (!scenario.shutdown) assert.match(stderr.mock.calls[0]!.arguments[0], /^agy-bridge doctor\n/);
+      assert.equal(notify.mock.callCount(), 0, "invalidated contexts cannot receive notifications");
+      assert.equal(sendMessage.mock.callCount(), 0);
       if (scenario.replacement) {
         assert.equal(statuses.get("agy-bridge"), "New bridge operation");
         assert.equal(writes.length, beforeLateCompletion, "shutdown cleanup must not overwrite replacement progress");

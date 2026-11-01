@@ -5,9 +5,9 @@ import { Driver } from "./driver.ts";
 
 for (const mode of ["catalog", "browser"] as const) {
   test(`ACP background auth and discovery clean up after ${mode}`, async (t) => {
-    const previous = process.env.AGY_ACP_BIN;
-    delete process.env.AGY_ACP_BIN;
-    t.after(() => { if (previous === undefined) delete process.env.AGY_ACP_BIN; else process.env.AGY_ACP_BIN = previous; });
+    const previous = process.env.AGY_ACP_DIR;
+    delete process.env.AGY_ACP_DIR;
+    t.after(() => { if (previous === undefined) delete process.env.AGY_ACP_DIR; else process.env.AGY_ACP_DIR = previous; });
     let installs = 0;
     const driver = new Driver(async () => {
       installs++;

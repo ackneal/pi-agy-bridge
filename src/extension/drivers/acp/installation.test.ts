@@ -480,9 +480,9 @@ describe("ensureInstallation download recovery", () => {
 describe("Driver installation resolution integration", () => {
   async function isolate(t: TestContext): Promise<string> {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "acp-resolution-"));
-    const variables = ["AGY_ACP_BIN", "PI_CODING_AGENT_DIR", "GEMINI_HOME"] as const;
+    const variables = ["AGY_ACP_DIR", "PI_CODING_AGENT_DIR", "GEMINI_HOME"] as const;
     const previous = variables.map((name) => process.env[name]);
-    delete process.env.AGY_ACP_BIN;
+    delete process.env.AGY_ACP_DIR;
     process.env.PI_CODING_AGENT_DIR = home;
     process.env.GEMINI_HOME = home;
     t.after(async () => {
@@ -555,24 +555,32 @@ describe("Driver installation resolution integration", () => {
     });
   }
 
-  for (const kind of ["missing", "directory", "non-executable"] as const) {
-    test(`invalid ${kind} AGY_ACP_BIN never triggers a managed download`, async (t) => {
+  for (const kind of ["missing", "empty-directory", "file", "missing-helper", "non-executable"] as const) {
+    test(`invalid ${kind} AGY_ACP_DIR never triggers a managed download`, async (t) => {
       const home = await isolate(t);
       const override = path.join(home, "override");
-      if (kind === "directory") await fs.mkdir(override);
-      if (kind === "non-executable") await fs.writeFile(override, "not executable", { mode: 0o600 });
-      process.env.AGY_ACP_BIN = override;
+      if (kind === "file") await fs.writeFile(override, "not a directory");
+      if (kind === "empty-directory" || kind === "missing-helper" || kind === "non-executable") await fs.mkdir(override);
+      if (kind === "missing-helper" || kind === "non-executable") {
+        await fs.writeFile(path.join(override, "agy_acp_server.par"), "fixture", { mode: 0o700 });
+      }
+      if (kind === "non-executable") await fs.writeFile(path.join(override, "localharness_external"), "fixture", { mode: 0o600 });
+      process.env.AGY_ACP_DIR = override;
       let resolutions = 0;
       const driver = new Driver(async () => { resolutions++; throw new Error("Unexpected managed download"); });
-      await assert.rejects(login(driver), /AGY_ACP_BIN is not an executable file/);
+      await assert.rejects(login(driver), /AGY_ACP_DIR/);
+      assert.equal(driver.detectExecutable(), undefined);
       assert.equal(resolutions, 0);
     });
   }
 
-  test("explicit executable bypasses installation before opening a connection", async (t) => {
+  test("explicit distribution directory bypasses installation before opening a connection", async (t) => {
     const home = await isolate(t);
-    process.env.AGY_ACP_BIN = path.join(home, "custom");
-    await fs.writeFile(process.env.AGY_ACP_BIN, "not a real ACP server", { mode: 0o700 });
+    process.env.AGY_ACP_DIR = path.join(home, "custom");
+    await fs.mkdir(process.env.AGY_ACP_DIR);
+    for (const name of ["agy_acp_server.par", "localharness_external"]) {
+      await fs.writeFile(path.join(process.env.AGY_ACP_DIR, name), "not a real ACP server", { mode: 0o700 });
+    }
     let resolutions = 0;
     const driver = new Driver(async () => { resolutions++; throw new Error("Unexpected managed download"); });
     const stopped = new Error("Reached explicit ACP connection");
