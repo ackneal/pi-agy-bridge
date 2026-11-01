@@ -41,7 +41,7 @@ The bridge connects Antigravity models to Pi. Pi manages the conversation and ex
 - **Pi Tool Integration** — Run registered tool requests through Pi with its applicable permissions.
 - **Two Drivers** — Use the managed ACP server or your installed `agy` CLI.
 - **Session Continuity** — Reuse compatible sessions. Restore context from Pi history when needed.
-- **Image Support (ACP)** — Send supported images in prompts and inspect eligible image artifacts.
+- **Image Handling** — Read images through Pi tools. ACP also supports direct image blocks in user prompts.
 - **Automatic ACP Setup** — Download and verify the pinned ACP server.
 - **Diagnostics** — Check your setup with `/agy-bridge:doctor`.
 
@@ -120,12 +120,14 @@ Antigravity models request tools through the bridge. Pi runs registered tool req
 | Setup | Installed automatically | Requires `agy` |
 | Models | ACP model catalog | CLI model catalog |
 | Tool integration | Pi tools through MCP | Pi tools through the CLI integration |
-| Images | User image blocks and supported artifact images | No equivalent image path |
+| Direct prompt images | Converts supported image paths to image blocks | No direct image-block conversion |
 | Usage | Prompt-level reporting | Step-level reporting |
 
 Use `/agy-bridge:driver` to change the driver. Use `/model` to see its available models.
 
-**Images:** ACP sends supported user images to the model. For eligible images found in AGY artifacts, it uses a separate image observer and returns the description to the main conversation. This can add latency and model usage.
+**Images:** Pi can read images through its tools and return image content through MCP. Antigravity may offload image content and read it again. ACP handles eligible offloaded images with a dedicated Client Read image observer. The observer returns a text description and can add latency and model usage.
+
+ACP also supports a direct path for user-provided image locations. The bridge reads supported images and adds them as image blocks to the prompt. The tool-based path remains available for images in conversation history and other paths.
 
 **Usage:** ACP and CLI report usage at different levels. Do not compare their values as billing totals. The bridge does not calculate monetary costs.
 
