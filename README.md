@@ -41,7 +41,7 @@ The bridge connects Antigravity models to Pi. Pi manages the conversation and ex
 - **Pi Tool Integration** — Run registered tool requests through Pi with its applicable permissions.
 - **Two Drivers** — Use the managed ACP server or your installed `agy` CLI.
 - **Session Continuity** — Reuse compatible sessions. Restore context from Pi history when needed.
-- **Image Handling** — Read images through Pi tools. ACP also supports direct image blocks in user prompts.
+- **Image Support** — Both drivers can handle images through Pi tools. ACP also accepts image blocks directly in prompts.
 - **Automatic ACP Setup** — Download and verify the pinned ACP server.
 - **Diagnostics** — Check your setup with `/agy-bridge:doctor`.
 
@@ -120,14 +120,14 @@ Antigravity models request tools through the bridge. Pi runs registered tool req
 | Setup | Installed automatically | Requires `agy` |
 | Models | ACP model catalog | CLI model catalog |
 | Tool integration | Pi tools through MCP | Pi tools through the CLI integration |
-| Direct prompt images | Converts supported image paths to image blocks | No direct image-block conversion |
+| Image handling | Pi tool reads, plus direct prompt image blocks and an offload observer | Pi tool reads through the CLI integration |
 | Usage | Prompt-level reporting | Step-level reporting |
 
 Use `/agy-bridge:driver` to change the driver. Use `/model` to see its available models.
 
-**Images:** Pi can read images through its tools and return image content through MCP. Antigravity may offload image content and read it again. ACP handles eligible offloaded images with a dedicated Client Read image observer. The observer returns a text description and can add latency and model usage.
+**Images:** Both drivers support images through Pi's tool-based read path. Pi reads an image and returns image content through the tool integration. Antigravity may offload that content for later access.
 
-ACP also supports a direct path for user-provided image locations. The bridge reads supported images and adds them as image blocks to the prompt. The tool-based path remains available for images in conversation history and other paths.
+ACP adds two paths: it can load a user-provided image location directly into a prompt image block, and it can use a Client Read observer to inspect eligible offloaded images. The observer returns text and may add latency and model usage. The normal tool-read path remains available for images in history or other locations.
 
 **Usage:** ACP and CLI report usage at different levels. Do not compare their values as billing totals. The bridge does not calculate monetary costs.
 
