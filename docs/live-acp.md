@@ -1,86 +1,100 @@
 # Direct AGY ACP contract diagnostic
 
-`bun run check:acp` is the entry point for a direct AGY ACP contract diagnostic.
-It is not a Pi live suite or a Pi integration compatibility test.
-The script sends ACP requests directly; verification status is recorded separately.
+`bun run check:acp` sends requests directly to AGY ACP with fixed
+`gemini-3.8-flash`, mode `default`, and effort `low`. It does not start Pi,
+a provider, or a live harness. Tool restriction and genuine text offload/Client
+Read checks are part of the default diagnostic; their live evidence is pending.
 
-## Invocation and side effects
+## Invocation and boundaries
 
 ```sh
 bun run check:acp
 ```
 
-Normal invocation is live opt-in: it may download the pinned backend, send billable
-prompts, and change host backend cache/session state. Prepare backend authentication
-externally before running. Cancellation does not guarantee zero cost.
+No environment flags or model matrix are required. Prepare backend authentication
+externally. Invocation opts into downloading the pinned backend, billable prompts,
+and possible host backend state writes; cancellation does not guarantee zero cost.
+`--cancel` optionally adds an activity-gated cancellation check. `--help` is offline
+and does not install, launch a backend, or send prompts.
 
-`bun run check:acp --help` is offline: no installation, backend launch, or prompts.
-There is no environment matrix, consent-flag setup, scenario registry, or model selection.
-The fixed configuration is `gemini-3.8-flash`, mode `default`, effort `low`.
-`--cancel` optionally adds the activity-gated cancellation check.
+The script uses production raw `Connection` and `ensureInstallation` with a temporary
+agent home and pinned managed release. Existing host HOME/GEMINI_HOME and authentication
+are reused; the script does not read/copy tokens, log in, log out, or delete credentials.
+The whole-run deadline is 15 minutes plus at most 5 seconds for cleanup; prompts have
+60 seconds, or 120 seconds for each bulk offload attempt.
 
-## Transport and isolation boundary
+Temporary installation and scratch do not isolate backend cache, sessions, or
+artifacts. Cleanup does not roll back host backend state. Path checks and disabled
+native tools are not an OS sandbox or a guarantee against a hostile same-UID process.
 
-`scripts/check-acp.ts` uses the production raw `Connection` transport and
-`ensureInstallation` with a temporary `agentHome` and the pinned managed release.
-It does not substitute a host executable or start Pi, a provider, history
-reconstruction, compaction, or a mock MCP server. Sessions use `mcpServers: []`.
+## Basic direct ACP checks
 
-The diagnostic reuses the backend's existing host authentication environment.
-It does not read or copy OAuth tokens, log in, log out, or delete credentials.
-An unavailable authenticated backend is not an authenticated compatibility pass.
+- Inspect advertised `systemPrompt.append` support and send instructions through
+  `_meta.antigravity.systemPrompt.append` on session creation.
+- Verify actual mode/model/effort configuration responses, instruction delivery,
+  and same-session memory without repeating the hidden value.
+- Send one tiny red pixel directly and check its answer. This is only direct image
+  input; image offload remains `UNTESTED`.
+- Capture raw allowlisted final usage and separate `usage_update` fields. Missing
+  usage is `null`, not zero or a usage PASS; neither source proves billing totals.
+- Attempt load only when advertised; otherwise report `NOT_SUPPORTED`.
+- With `--cancel`, require observed activity while a prompt is still pending before
+  cancellation. Missing that boundary is not a cancellation pass.
 
-A temporary agent home isolates the managed installation, not the backend or OS.
-Host backend cache, sessions, and artifacts may still be written outside scratch.
-Sending `enabledTools: []` records disabled-native configuration; it does not prove
-an attempted native operation was denied or establish an OS sandbox.
+## Tool restrictions and real data source
 
-## Checks and evidence
+`scripts/acp-probe-mcp.ts` is a minimal real stdio MCP data source, registered as
+`pi-agy-bridge_pi` with one empty-arguments tool, `mcp__pi__offload_probe`.
+It generates a fresh handler-only receipt solely at the result tail and writes a
+private execution audit. It does not create AGY artifacts or implement offload.
 
-- Inspect initialization for advertised `systemPrompt.append` support and send
-  instructions through `_meta.antigravity.systemPrompt.append` on session creation.
-- Record `_meta.antigravity.enabledTools: []` in the actual session request.
-- Apply mode `default`, model `gemini-3.8-flash`, and `thinking_level: low`;
-  verify actual configuration responses, not requested values alone.
-- Use a text instruction marker to check instruction delivery, then a second
-  prompt in the same session to check memory without repeating the hidden value.
-- Send a tiny red image directly in an ACP prompt and check the visual answer.
-  This checks direct image input, not Pi image injection or tool-result images.
-- Capture raw final prompt usage and `usage_update` notifications separately.
-  Inspect the observed fields without Pi accounting or usage conversion.
-  Missing final usage remains `null`, not a zero or usage PASS; neither source
-  is independent proof of billing totals.
-- Attempt session load only when initialization advertises `loadSession`.
-  Otherwise report `NOT_SUPPORTED`, not a load pass or a reconstruction result.
-- With `--cancel`, observe prompt activity and confirm it is still pending before
-  sending cancellation. A missed active boundary is not a cancellation pass.
+The default restriction challenge requests a small, roughly 64-byte-class result
+and sends `enabledTools: []`. It asks for a native write to a scratch canary, then
+MCP recovery. Only the registered MCP tool may receive `allow_once`; other permission
+requests are denied. Actual tool and permission notifications, the execution audit,
+recovered receipt, and unchanged canary are checked.
 
-The report retains the pinned backend version, allowlisted initialization facts,
-requested/observed configuration values, prompt text responses, stop reasons,
-raw numeric usage fields and context updates. It is not a full RPC trace and does
-not retain auth payloads or backend stderr. A model answer alone cannot prove
-configuration, usage or cancellation behavior.
+An unchanged canary plus successful MCP recovery without an actual native permission
+attempt is `NOT_REACHED`, not an enforcement PASS. Configuration alone proves neither
+a denied operation nor confinement.
 
-## Excluded paths
+## Genuine text offload and Client Read
 
-MCP handoff, text/image offload, and Client Read recovery are not tested.
-They require actual MCP-result prerequisites and observed offload/read boundaries;
-pure prompts, seeded files, or invented artifact references cannot establish them.
-Pi startup, provider integration, persisted history, compaction, and Pi usage
-mapping are outside this diagnostic's scope.
+Bulk attempts request 64 KiB, 256 KiB, 1 MiB, then 4 MiB, stopping at actual offload.
+Each attempt gets a new source and session. A source permits at most two successful
+calls to expose retry while bounding amplification; the diagnostic requires exactly
+one audited execution. Prompts, seeded files, and invented references are not evidence.
 
-## Reports, cleanup, and verification
+The text-only reader accepts only current-session generated steps and exact MCP
+metadata paths. It rejects other paths and unsafe files, uses immutable bounded
+snapshots/pages and the production `start_line` continuation footer. AGY may read
+its own tool metadata before execution; each callback records the execution count.
+Such reads cannot prove result offload. Recovery must match the tail receipt from
+exactly one actual MCP execution.
 
-Write a private JSON report to a temporary path and print its location for review.
-Treat the report as sensitive; review it before sharing. Stop owned connections
-and remove script-owned scratch on success or failure, retaining the report.
-Installation teardown is joined before scratch removal. If the cleanup deadline
-expires, report cleanup FAIL and possible retained scratch; do not claim removal.
-Host backend state is not rolled back.
+Client Read PASS requires an observed offload reference/read, an AGY artifact
+containing the handler-only receipt, an actual first-page RPC followed by a later
+RPC using that same artifact's advertised continuation, the receipt in an actual
+read response tail, and that receipt in the model's final answer. Metadata reads
+alone do not qualify.
 
-The prior live run established only an `AUTH-probe` pass. Six failing cases from
-the Pi harness do not establish direct ACP incompatibility.
-This replacement has not been run live and has no authenticated compatibility PASS.
-Typecheck and offline help are checked separately from live execution. The existing
-offline suite reports 2,057 PASS, 13 SKIP and zero failures; those checks do not
-exercise this diagnostic against AGY or establish live compatibility.
+No offload within the tested bounds is `NOT_REACHED`. A core tool/offload/read check
+left `NOT_REACHED` makes the outcome `INCOMPLETE`. Reached read errors or assertion
+failures are `FAIL`, not a reason to retry larger payloads. Model-answer mismatches
+are recorded separately as `MODEL_MISMATCH` and prevent a successful outcome.
+
+## Reports, cleanup, and evidence
+
+Private JSON reports retain backend/configuration facts, raw allowlisted usage,
+compact tool/permission/read/artifact facts and execution hashes, not full result
+payloads, auth payloads, backend stderr, or a full RPC trace. Review before sharing.
+Owned connections and scratch are cleaned up on success or failure; the report is
+retained. Installation teardown is joined before scratch removal. Cleanup deadline
+expiry is FAIL with possible retained scratch, not a claim of removal.
+
+The prior basic direct ACP live run against 1.4.5 passed configuration, instruction,
+memory, red-pixel input, load, and cleanup checks; raw usage was observed. The new
+tool restriction, text offload, and Client Read path has not been run live.
+Offline tests/typechecking are separate evidence, not live compatibility proof;
+the current offline suite reports 2,171 PASS, 13 SKIP and zero failures. Pi/provider integration, history
+reconstruction, compaction, Pi accounting, and image offload are outside this scope.
