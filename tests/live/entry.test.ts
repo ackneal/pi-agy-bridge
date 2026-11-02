@@ -12,6 +12,9 @@ for (const row of [
   { name: "no isolation attestation", optIn: "1", isolated: "", extended: "", selected: "", reason: /disposable Linux container/ },
   { name: "no isolated workspace", optIn: "1", isolated: "1", extended: "", selected: "", reason: /PI_AGY_LIVE_WORKSPACE|disposable Linux container/ },
   { name: "extended no opt-in", optIn: "", isolated: "", extended: "1", selected: "", reason: /PI_AGY_LIVE=1/ },
+  { name: "local no opt-in", optIn: "", isolated: "", extended: "", selected: "AUTH-probe", mode: "local", local: "1", reason: /PI_AGY_LIVE=1/ },
+  { name: "local missing consent", optIn: "1", isolated: "", extended: "", selected: "AUTH-probe", mode: "local", local: "", reason: /macOS.*PI_AGY_LIVE_LOCAL=1/ },
+  { name: "local flag is not isolation", optIn: "1", isolated: "", extended: "", selected: "AUTH-probe", mode: "isolated", local: "1", reason: /disposable Linux/ },
   { name: "selected upgrade cases", optIn: "", isolated: "", extended: "", selected: "AUTH-probe,IMG-prompt-small,IMG-mcp-offload,OFFLOAD-text", reason: /PI_AGY_LIVE=1/ },
 ]) {
   test(`live entry stays offline: ${row.name}`, async t => {
@@ -21,6 +24,7 @@ for (const row of [
     delete env.NODE_TEST_CONTEXT;
     const child = spawn(process.execPath, ["--experimental-transform-types", "--test", "tests/live/acp.live.ts"], {
       env: { ...env, PI_AGY_LIVE: row.optIn, PI_AGY_LIVE_ISOLATED: row.isolated,
+        PI_AGY_LIVE_MODE: row.mode ?? "isolated", PI_AGY_LIVE_LOCAL: row.local ?? "",
         PI_AGY_LIVE_WORKSPACE: "", PI_AGY_LIVE_SCENARIOS: row.selected, PI_AGY_LIVE_REPORT_DIR: directory,
         PI_AGY_LIVE_EXTENDED: row.extended, PI_AGY_LIVE_AUTH_STATE: "authenticated", PI_AGY_LIVE_LOGIN: "",
         PI_AGY_LIVE_INSTALL: "1", AGY_ACP_DIR: "/must-not-be-executed", PI_AGY_LIVE_TIMEOUT_MS: "1000" },

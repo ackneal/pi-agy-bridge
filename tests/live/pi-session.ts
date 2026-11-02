@@ -13,6 +13,8 @@ import type { DriverSession } from "../../src/extension/drivers/types.ts";
 import { Bridge } from "../../src/extension/provider/provider.ts";
 import { createAgyBridgeCredential } from "../../src/extension/provider/auth.ts";
 import type { LiveSession } from "../../src/extension/session/session.ts";
+import { executionMode } from "./environment.ts";
+import { liveSettings } from "./settings.ts";
 
 export async function createLivePiSession(options: {
   cwd: string;
@@ -25,13 +27,17 @@ export async function createLivePiSession(options: {
 }): Promise<{ session: AgentSession; bridge: Bridge; close: () => Promise<void> }> {
   options.signal.throwIfAborted();
   const temporaryRoot = await realpath(tmpdir());
-  // The production ACP driver derives its working directory from GEMINI_HOME.
-  // Require the harness's isolated home rather than changing process-global state.
-  for (const directory of [options.cwd, options.directory, process.env.GEMINI_HOME]) {
-    assert.ok(directory, "Live Pi requires an isolated GEMINI_HOME");
+  for (const directory of [options.cwd, options.directory]) {
     const resolved = await realpath(directory);
-    assert.ok(resolved.startsWith(temporaryRoot + path.sep), "Live Pi directories must be scratch directories");
+    assert.ok(resolved.startsWith(temporaryRoot + path.sep), "Live Pi project and session directories must be scratch directories");
   }
+  assert.ok(process.env.GEMINI_HOME, "Live Pi requires an explicit GEMINI_HOME");
+  const backendHome = await realpath(process.env.GEMINI_HOME);
+  if (!backendHome.startsWith(temporaryRoot + path.sep)) {
+    assert.equal(executionMode(), "local", "Host backend state requires explicit local consent");
+  }
+  // The production driver uses GEMINI_HOME/antigravity-acp as its native cwd.
+  // In local mode that is host backend state, not an isolated project.
   assert.ok(!process.env.AGY_ACP_DIR?.trim(), "Unset AGY_ACP_DIR so the supplied launch is used");
 
   const scratch = await mkdtemp(path.join(options.directory, "pi-session-"));
@@ -113,6 +119,10 @@ export async function createLivePiSession(options: {
       cacheWarming: "off",
     });
     const driver = new AcpDriver(async () => options.launch);
+    // Bridge.start registers initialModels before any prompt. The live runner
+    // supplies its backend-discovered model; do not register the offline fallback
+    // catalog, which deliberately disables all thinking levels.
+    driver.initialModels.splice(0, driver.initialModels.length, options.model);
     const prepare = driver.prepareSession.bind(driver);
     driver.prepareSession = input => {
       liveSessions.add(input.session);
@@ -149,7 +159,7 @@ export async function createLivePiSession(options: {
     assert.deepEqual(resourceLoader.getExtensions().errors, [], "Live Pi inline extension must load without errors");
     signal.throwIfAborted();
     ({ session } = await createAgentSession({
-      cwd: options.cwd, agentDir, model: options.model, modelRuntime, settingsManager, resourceLoader,
+      cwd: options.cwd, agentDir, model: options.model, thinkingLevel: liveSettings().effort, modelRuntime, settingsManager, resourceLoader,
       sessionManager: SessionManager.create(options.cwd, path.join(scratch, "sessions")),
       tools: [options.tool.name],
       sessionStartEvent: { type: "session_start", reason: "new" },

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import type { TestContext } from "node:test";
+import { observeLiveAccounting } from "./accounting.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { defineTool, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -13,6 +15,7 @@ export async function runLiveToolHandoff(options: {
   launch: { executable: string; args: string[] };
   signal: AbortSignal;
   evidence: unknown[];
+  t: TestContext;
   returnError: boolean;
   onToolCall: (call: { id: string; name: string; arguments: unknown }) => void;
 }): Promise<void> {
@@ -54,7 +57,14 @@ export async function runLiveToolHandoff(options: {
       return { content: [{ type: "text", text: execution.marker }], details: { live: true } };
     },
   });
-  const fixture = await createLivePiSession({ ...options, tool });
+  const accounting = observeLiveAccounting(options.t, options.evidence);
+  let fixture: Awaited<ReturnType<typeof createLivePiSession>>;
+  try {
+    fixture = await createLivePiSession({ ...options, tool });
+  } catch (error) {
+    accounting.restore();
+    throw error;
+  }
   session = fixture.session;
   let unsubscribe: (() => void) | undefined;
 
@@ -94,6 +104,8 @@ export async function runLiveToolHandoff(options: {
     assert.ok(final?.role === "assistant", "The full turn must end with an AGY assistant message");
     assert.equal(final.provider, options.model.provider);
     if (final.stopReason !== "stop") throw new ScenarioFailure("backend", `Pi turn did not complete: ${final.errorMessage ?? final.stopReason}`);
+    accounting.assert(session);
+    options.evidence.push({ handoffContract: "PASS" });
     if (final.content.filter(part => part.type === "text").map(part => part.text).join("") !== execution.marker) {
       throw new ScenarioFailure("model", "AGY did not return the exact handler-only receipt");
     }
@@ -107,7 +119,7 @@ export async function runLiveToolHandoff(options: {
         executions, handlerErrors: handlerErrors.map(String), sessionEvents, piHistory: structuredClone(session.messages),
         piBranch: structuredClone(session.sessionManager.getBranch()) });
     } finally {
-      await fixture.close();
+      try { await fixture.close(); } finally { accounting.restore(); }
     }
   }
 }

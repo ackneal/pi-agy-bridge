@@ -5,7 +5,7 @@ import { runAuthScenario } from "./auth.ts";
 import { ScenarioFailure, ScenarioOutcome } from "./report.ts";
 
 type Id = Parameters<typeof runAuthScenario>[0]["id"];
-const keys = ["PI_AGY_LIVE", "PI_AGY_LIVE_ISOLATED", "PI_AGY_LIVE_AUTH_STATE", "PI_AGY_LIVE_LOGIN", "PI_AGY_LIVE_AUTH_METHOD"] as const;
+const keys = ["PI_AGY_LIVE", "PI_AGY_LIVE_ISOLATED", "PI_AGY_LIVE_AUTH_STATE", "PI_AGY_LIVE_LOGIN", "PI_AGY_LIVE_AUTH_METHOD", "PI_AGY_LIVE_MODE", "PI_AGY_LIVE_LOCAL"] as const;
 type Environment = Partial<Record<typeof keys[number], string>>;
 const consent: Environment = { PI_AGY_LIVE: "1", PI_AGY_LIVE_ISOLATED: "1" };
 const loginConsent: Environment = { ...consent, PI_AGY_LIVE_LOGIN: "1", PI_AGY_LIVE_AUTH_METHOD: "exact-method" };

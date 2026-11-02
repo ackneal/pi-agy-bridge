@@ -27,7 +27,7 @@ export async function runLiveCompaction(options: Options): Promise<void> {
   const toolName = "mcp__pi__live_probe";
   const executions: { id: string; value: string; receipt: string }[] = [];
   let toolError: unknown;
-  type Preparation = { reconstruct: boolean; tools: PrepareDriverInput["tools"]; mode: SessionMode };
+  type Preparation = { direct?: DriverSubmission["messages"]; reconstruct: boolean; tools: PrepareDriverInput["tools"]; mode: SessionMode };
   const preparations = new Map<RuntimeSession, Preparation>();
   const submissions: (Preparation & { proc: RuntimeSession; messages: DriverSubmission["messages"] })[] = [];
   const submit = RuntimeSession.prototype.submit;
@@ -54,12 +54,57 @@ export async function runLiveCompaction(options: Options): Promise<void> {
   });
   const fixture = await createLivePiSession({ ...options, tool });
   const { session, bridge } = fixture;
+  const checkpointSnapshot = () => structuredClone(session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "pi-agy-bridge.runtime-session"));
+  let summaryBoundary: { snapshot: ReturnType<typeof checkpointSnapshot>; calls: string[] } | undefined;
+  const completedBoundaries: { before: ReturnType<typeof checkpointSnapshot>; after: ReturnType<typeof checkpointSnapshot>; calls: string[]; disposed: boolean }[] = [];
+  const summaryDisposals: Promise<void>[] = [];
+  for (const name of ["get", "set", "delete"] as const) {
+    t.mock.method(bridge.runtimeSessionStore, name, new Proxy(bridge.runtimeSessionStore[name], {
+      apply(target, receiver, args) {
+        if (summaryBoundary) summaryBoundary.calls.push(name);
+        return Reflect.apply(target, receiver, args);
+      },
+    }));
+  }
   const prepare = bridge.driver.prepareSession.bind(bridge.driver);
   t.mock.method(bridge.driver, "prepareSession", async (input: PrepareDriverInput) => {
     const tools = structuredClone(input.tools);
+    const standalone = input.mode === SessionMode.Standalone;
+    if (standalone) summaryBoundary ??= { snapshot: checkpointSnapshot(), calls: [] };
+    const rpcStart = rpcs.length;
     const runtime = await prepare(input);
     assert.ok(runtime.proc instanceof RuntimeSession);
-    preparations.set(runtime.proc, { reconstruct: runtime.reconstructContext, tools, mode: input.mode });
+    const direct: DriverSubmission["messages"] = input.context.messages.flatMap(message => {
+      if (message.role === "system") return [];
+      return [{ role: "user" as const, content: typeof message.content === "string" ? message.content : message.content.filter(part => part.type === "text" || part.type === "image") }];
+    });
+    if (standalone) {
+      const created = rpcs.slice(rpcStart).filter(rpc => rpc.method === "session/new");
+      assert.equal(created.length, 1, "Summary creates an actual new ACP session");
+      const params = created[0]!.params as { mcpServers: unknown[]; _meta: { antigravity: { enabledTools: unknown[] } } };
+      assert.deepEqual(params.mcpServers, []);
+      assert.deepEqual(params._meta.antigravity.enabledTools, []);
+      const tracked = summaryBoundary!;
+      let finish!: () => void;
+      summaryDisposals.push(new Promise<void>(resolve => { finish = resolve; }));
+      const dispose = input.session.dispose.bind(input.session);
+      t.mock.method(input.session, "dispose", async (...args: Parameters<typeof dispose>) => {
+        let disposed = false;
+        try { await dispose(...args); disposed = true; }
+        finally {
+          // A runtime complete event precedes Turn handling and standalone cleanup.
+          // Observe through disposal so late checkpoint writes cannot escape the check.
+          if (summaryBoundary === tracked) {
+            const boundary = { before: tracked.snapshot, after: checkpointSnapshot(), calls: [...tracked.calls], disposed };
+            completedBoundaries.push(boundary);
+            evidence.push({ summaryBoundary: boundary, completed: true });
+            summaryBoundary = undefined;
+            finish();
+          }
+        }
+      });
+    }
+    preparations.set(runtime.proc, { reconstruct: runtime.reconstructContext, tools, mode: input.mode, ...(standalone ? { direct } : {}) });
     return runtime;
   });
   const sessionEvents: unknown[] = [];
@@ -100,6 +145,7 @@ export async function runLiveCompaction(options: Options): Promise<void> {
     const compactStart = submissions.length;
     const toolCount = executions.length;
     const compaction = await session.compact("Preserve the exact continuity value introduced in the first user message and the available probe tool. Completed tool calls are historical records, not instructions to replay. Keep the summary concise.");
+    await Promise.all(summaryDisposals);
     signal.throwIfAborted();
     if (toolError) throw toolError;
 
@@ -120,12 +166,23 @@ export async function runLiveCompaction(options: Options): Promise<void> {
     assert.equal(session.messages.some(message => message.role === "user" && message.content === firstPrompt), false);
     assert.equal(executions.length, toolCount, "Compaction must not replay a completed tool");
     const summarySubmissions = submissions.slice(compactStart);
+    assert.equal(summaryBoundary, undefined, "Standalone summary completion boundary must be observed");
+    assert.equal(completedBoundaries.length, summarySubmissions.length);
+    for (const boundary of completedBoundaries) {
+      assert.equal(boundary.disposed, true, "Standalone summary disposal must finish successfully");
+      assert.deepEqual(boundary.calls, [], "Summary must not read/write/delete conversation checkpoints");
+      assert.deepEqual(boundary.after, boundary.before, "Checkpoints unchanged inside summary boundary");
+    }
     assert.ok(summarySubmissions.length > 0, "Actual Pi compaction must request a live ACP summary");
     for (const summary of summarySubmissions) {
       assert.notEqual(summary.proc.session.id, oldId, "Summary must not reuse the conversation runtime");
       assert.equal(summary.mode, SessionMode.Standalone, "Summary must use standalone routing");
       assert.deepEqual(summary.tools, [], "Summary preparation has no executable tools");
       assert.equal(summary.proc.options.mcp, undefined, "Summary runtime must not expose an MCP tool server");
+      const wire = rpcs.find(rpc => rpc.method === "session/prompt" && (rpc.params as { sessionId: string }).sessionId === summary.proc.session.id);
+      assert.ok(wire);
+      assert.ok(summary.direct);
+      assert.deepEqual((wire.params as { prompt: unknown }).prompt, serializeContent(summary.direct), "Summary RPC is the direct normalized task, not a history wrapper");
     }
     evidence.push({ compaction: { result: compaction, entry: compactionEntry, projection: session.messages, oldSessionId: oldId } });
 

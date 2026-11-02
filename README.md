@@ -205,4 +205,4 @@ The pinned Pi packages in `devDependencies` are for local checks only; Pi provid
 
 These commands preserve the existing package scripts: typechecking uses TypeScript, and the test suite uses Node.js with `node:test` and type stripping, not Bun's test runner. A Node.js version supporting the test script's flags is required.
 
-Real ACP compatibility checks use the separate `bun run test:live:acp` command. They skip without explicit opt-in and an isolated disposable environment. See [the live test plan](docs/live-acp.md) for authentication, scenario selection, evidence, and coverage limits. Ordinary tests remain offline-compatible.
+Real ACP compatibility checks use the separate `bun run test:live:acp` command. They skip without explicit opt-in. Use an isolated disposable Linux environment or the separately consented macOS local mode, which is not a sandbox. See [the live test plan](docs/live-acp.md) for authentication, scenario selection, evidence, and coverage limits. Ordinary tests remain offline-compatible.

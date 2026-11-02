@@ -10,6 +10,7 @@ import { Connection as AcpConnection, type ConnectionOptions as AcpConnectionOpt
 import { Driver as AcpDriver } from "../../src/extension/drivers/acp/driver.ts";
 import { createLivePiSession } from "./pi-session.ts";
 import { ScenarioFailure, ScenarioOutcome } from "./report.ts";
+import { executionMode, localScenarioRestriction } from "./environment.ts";
 
 export async function runAuthScenario(options: {
   id: "AUTH-probe" | "AUTH-noauth" | "AUTH-login" | "AUTH-login-cancel";
@@ -26,7 +27,11 @@ export async function runAuthScenario(options: {
   if (state !== "authenticated" && state !== "unauthenticated") {
     throw new ScenarioFailure("setup", "PI_AGY_LIVE_AUTH_STATE must be authenticated or unauthenticated");
   }
-  if (process.env.PI_AGY_LIVE !== "1" || process.env.PI_AGY_LIVE_ISOLATED !== "1") {
+  if (process.env.PI_AGY_LIVE_MODE === "local") {
+    const restriction = localScenarioRestriction(id);
+    if (restriction) throw new ScenarioOutcome("SKIP", restriction);
+    executionMode();
+  } else if (process.env.PI_AGY_LIVE !== "1" || process.env.PI_AGY_LIVE_ISOLATED !== "1") {
     throw new ScenarioOutcome("SKIP", "Set PI_AGY_LIVE=1 and PI_AGY_LIVE_ISOLATED=1 in the dedicated disposable container");
   }
   if (id === "AUTH-noauth" && state !== "unauthenticated") {

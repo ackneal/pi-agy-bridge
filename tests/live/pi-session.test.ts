@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import type { Model } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { BridgeIPC } from "../../src/extension/bridge/ipc.ts";
@@ -11,9 +10,9 @@ import { Driver as AcpDriver } from "../../src/extension/drivers/acp/driver.ts";
 import { SessionMode, type DriverSession, type PrepareDriverInput } from "../../src/extension/drivers/types.ts";
 import { Connection as AcpConnection } from "../../src/extension/drivers/acp/connection.ts";
 import { createLivePiSession } from "./pi-session.ts";
+import { liveModel } from "./settings.ts";
 
-const model = { id: "gemini-3.1-pro", name: "live", provider: "agy", api: "agy", baseUrl: "agy", reasoning: false,
-  input: ["text"], contextWindow: 200_000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } as Model<any>;
+const model = liveModel({});
 const tool = defineTool({ name: "mcp__pi__live_probe", label: "Probe", description: "Harmless probe", parameters: Type.Object({ value: Type.String() }),
   execute: async () => ({ content: [{ type: "text", text: "offline fixture" }], details: {} }) });
 
@@ -27,10 +26,11 @@ for (const scenario of ["close", "cancel", "pre-aborted", "broker-cleanup-failur
     await Promise.all([cwd, directory, gemini, agentDir].map(name => mkdir(name)));
     const sentinel = JSON.stringify({ sentinel: "Do not modify persistent auth" });
     await writeFile(path.join(agentDir, "auth.json"), sentinel);
-    const saved = { GEMINI_HOME: process.env.GEMINI_HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, AGY_ACP_DIR: process.env.AGY_ACP_DIR };
+    const saved = { GEMINI_HOME: process.env.GEMINI_HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, AGY_ACP_DIR: process.env.AGY_ACP_DIR, PI_AGY_LIVE_EFFORT: process.env.PI_AGY_LIVE_EFFORT };
     process.env.GEMINI_HOME = gemini;
     process.env.PI_CODING_AGENT_DIR = agentDir;
     delete process.env.AGY_ACP_DIR;
+    process.env.PI_AGY_LIVE_EFFORT = "low";
     t.after(async () => {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -64,6 +64,7 @@ for (const scenario of ["close", "cancel", "pre-aborted", "broker-cleanup-failur
       const fixture = await createLivePiSession(options);
       t.after(() => fixture.close());
       assert.deepEqual(fixture.session.getActiveToolNames(), [tool.name]);
+      assert.equal(fixture.session.thinkingLevel, "low", "Real Pi session must preserve the requested low effort");
       assert.equal(fixture.session.settingsManager.getCompactionSettings().enabled, false);
       assert.equal(fixture.session.settingsManager.getCompactionSettings().keepRecentTokens, 1);
       assert.equal(fixture.session.settingsManager.getCacheWarmingMode(), "off");

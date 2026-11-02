@@ -23,7 +23,7 @@ for (const row of [
     const cwd = path.join(directory, "project");
     const gemini = path.join(directory, "gemini");
     await Promise.all([cwd, gemini].map(name => mkdir(name)));
-    const env = { PI_AGY_LIVE: "1", PI_AGY_LIVE_ISOLATED: "1", PI_AGY_LIVE_AUTH_STATE: row.state,
+    const env = { PI_AGY_LIVE: "1", PI_AGY_LIVE_ISOLATED: "1", PI_AGY_LIVE_MODE: "isolated", PI_AGY_LIVE_LOCAL: "", PI_AGY_LIVE_AUTH_STATE: row.state,
       PI_AGY_LIVE_LOGIN: "1", PI_AGY_LIVE_AUTH_METHOD: "synthetic-auth", GEMINI_HOME: gemini, PI_CODING_AGENT_DIR: directory };
     const saved = Object.fromEntries([...Object.keys(env), "AGY_ACP_DIR"].map(key => [key, process.env[key]]));
     Object.assign(process.env, env);
