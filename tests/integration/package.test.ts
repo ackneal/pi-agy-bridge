@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 
 const execFileAsync = promisify(execFile);
@@ -17,6 +19,23 @@ describe("Antigravity CLI MCP package", () => {
     assert.equal(typeof api.default, "function");
   });
 
+  it("declares the SDK's zod peer as a production dependency with a resolvable v4 import", async () => {
+    const manifest = JSON.parse(await readFile(path.join(projectDir, "package.json"), "utf8"));
+    const sdkEntry = import.meta.resolve("@agentclientprotocol/sdk");
+    const sdkManifest = JSON.parse(await readFile(new URL("../../../package.json", sdkEntry), "utf8"));
+    const sdkRequire = createRequire(sdkEntry);
+    const zodManifest = JSON.parse(await readFile(sdkRequire.resolve("zod/package.json"), "utf8"));
+
+    // Pin the known-compatible version and peer contract rather than duplicating semver logic.
+    assert.equal(sdkManifest.peerDependencies.zod, "^3.25.76 || ^4.0.0");
+    assert.equal(manifest.dependencies.zod, "4.6.7", "published manifest must provide zod at runtime");
+    assert.equal(zodManifest.version, manifest.dependencies.zod);
+
+    const zod = await import(pathToFileURL(sdkRequire.resolve("zod/v4")).href);
+    assert.equal(typeof zod.z.object, "function");
+    await import(sdkEntry);
+  });
+
   it("packs the plugin payload and executable JavaScript without local artifacts", async () => {
     const cache = await mkdtemp(path.join(os.tmpdir(), "pi-gear-npm-cache-"));
     try {
@@ -25,10 +44,14 @@ describe("Antigravity CLI MCP package", () => {
         ["pack", "--dry-run", "--json", "--ignore-scripts"],
         { cwd: projectDir, env: { ...process.env, npm_config_cache: cache }, maxBuffer: 2_000_000 }
       );
-      const report = JSON.parse(stdout) as Array<{ files: Array<{ path: string }> }>;
-      const files = report[0]?.files.map((file) => file.path) ?? [];
+      type PackEntry = { files: Array<{ path: string }> };
+      const report = JSON.parse(stdout) as PackEntry[] | Record<string, PackEntry>;
+      const packed = Array.isArray(report) ? report[0] : report["@ackneal/pi-agy-bridge"];
+      assert.ok(packed, "npm pack must report the package payload");
+      const files = packed.files.map((file) => file.path);
 
       for (const required of [
+        "package.json",
         "src/extension/index.ts",
         "src/extension/discovery/model.json",
         "src/extension/drivers/acp/registry.json",
