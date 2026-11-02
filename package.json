@@ -47,7 +47,7 @@
     "check:version": "node scripts/check-version.js",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --experimental-transform-types --test --test-timeout=30000 \"**/*.test.ts\"",
-    "test:live:acp": "node --experimental-transform-types --test tests/live/acp.live.ts"
+    "check:acp": "node --experimental-transform-types scripts/check-acp.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
