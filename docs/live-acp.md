@@ -12,19 +12,24 @@ bun run check:acp
 ```
 
 No environment flags or model matrix are required. Prepare backend authentication
-externally. Invocation opts into downloading the pinned backend, billable prompts,
-and possible host backend state writes; cancellation does not guarantee zero cost.
+externally. The pinned managed backend must already be installed by Bridge.
+The diagnostic validates and reuses it; it never downloads or repairs a backend.
+Invocation opts into billable prompts and possible host backend state writes;
+cancellation does not guarantee zero cost.
 `--cancel` optionally adds an activity-gated cancellation check. `--help` is offline
 and does not install, launch a backend, or send prompts.
 
-The script uses production raw `Connection` and `ensureInstallation` with a temporary
-agent home and pinned managed release. Existing host HOME/GEMINI_HOME and authentication
-are reused; the script does not read/copy tokens, log in, log out, or delete credentials.
+The script uses production raw `Connection` and the existing managed installation
+under the normal Pi agent directory: `PI_CODING_AGENT_DIR`, or `~/.pi/agent` by default.
+Production inventory/hash validation is reused with downloads explicitly disabled.
+Missing or invalid installations fail with `ACP_INSTALL_REQUIRED` or
+`ACP_INSTALL_INVALID` before backend launch; install/repair through Bridge separately.
+Existing host HOME/GEMINI_HOME and authentication are reused; the script does not
+read/copy tokens, log in, log out, or delete credentials.
 The whole-run deadline is 15 minutes plus at most 5 seconds for cleanup; prompts have
 60 seconds, or 120 seconds for each bulk offload attempt.
 
-Temporary installation and scratch do not isolate backend cache, sessions, or
-artifacts. Cleanup does not roll back host backend state. Path checks and disabled
+Temporary project scratch does not isolate backend cache, sessions, or artifacts. Cleanup does not roll back host backend state. Path checks and disabled
 native tools are not an OS sandbox or a guarantee against a hostile same-UID process.
 
 ## Basic direct ACP checks
@@ -88,13 +93,21 @@ are recorded separately as `MODEL_MISMATCH` and prevent a successful outcome.
 Private JSON reports retain backend/configuration facts, raw allowlisted usage,
 compact tool/permission/read/artifact facts and execution hashes, not full result
 payloads, auth payloads, backend stderr, or a full RPC trace. Review before sharing.
-Owned connections and scratch are cleaned up on success or failure; the report is
-retained. Installation teardown is joined before scratch removal. Cleanup deadline
-expiry is FAIL with possible retained scratch, not a claim of removal.
+The script prints the current RPC/stage and a waiting heartbeat every 10 seconds.
+The private report exists from startup and is updated while `RUNNING`, including
+current progress and safe error codes/cause codes. Raw exception messages, auth
+payloads, inherited environment and backend stderr are not printed.
+
+Owned connections and project scratch are cleaned up on success or failure;
+the report and existing managed installation are retained. Validation teardown is
+joined before scratch removal. Cleanup deadline expiry is FAIL with possible
+retained scratch, not a claim of removal.
 
 The prior basic direct ACP live run against 1.4.5 passed configuration, instruction,
 memory, red-pixel input, load, and cleanup checks; raw usage was observed. The new
-tool restriction, text offload, and Client Read path has not been run live.
+tool restriction, text offload, and Client Read path has not been verified live.
+The user's existing managed ACP 1.4.5 passed read-only validation without download
+or backend startup after the reuse change.
 Offline tests/typechecking are separate evidence, not live compatibility proof;
-the current offline suite reports 2,171 PASS, 13 SKIP and zero failures. Pi/provider integration, history
+the current offline suite reports 2,176 PASS, 13 SKIP and zero failures. Pi/provider integration, history
 reconstruction, compaction, Pi accounting, and image offload are outside this scope.
