@@ -1,0 +1,145 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import type { TestContext } from "node:test";
+import type { Model } from "@earendil-works/pi-ai";
+import { defineTool, SessionManager } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { AcpRuntimeSession, acpContext } from "../../src/extension/drivers/acp/runtime.ts";
+import type { DriverSubmission } from "../../src/extension/drivers/types.ts";
+import { createLivePiSession } from "./pi-session.ts";
+import { ScenarioFailure } from "./report.ts";
+
+interface Options {
+  cwd: string;
+  directory: string;
+  model: Model<any>;
+  launch: { executable: string; args: string[] };
+  signal: AbortSignal;
+  t: TestContext;
+  evidence: unknown[];
+  rpcs: { method: string; params: unknown; response?: unknown; error?: string }[];
+  onToolCall: (call: { id: string; name: string; arguments: unknown }) => void;
+}
+
+export async function runLiveCompaction(options: Options): Promise<void> {
+  const { signal, t, evidence, rpcs } = options;
+  const continuityValue = randomUUID();
+  const toolName = "mcp__pi__live_probe";
+  const executions: { id: string; value: string; receipt: string }[] = [];
+  let toolError: unknown;
+  const submissions: { proc: AcpRuntimeSession; reconstruct: boolean; input: Pick<DriverSubmission, "context" | "syncedMessageCount"> }[] = [];
+  const submit = AcpRuntimeSession.prototype.submit;
+  t.mock.method(AcpRuntimeSession.prototype, "submit", async function (this: AcpRuntimeSession, input: DriverSubmission) {
+    // Snapshot before Pi can append subsequent assistant/tool messages.
+    submissions.push({ proc: this, reconstruct: input.reconstructContext, input: { context: structuredClone(input.context), syncedMessageCount: input.syncedMessageCount } });
+    evidence.push({ piSubmission: { sessionId: this.session.id, reconstruct: input.reconstructContext, syncedMessageCount: input.syncedMessageCount, context: structuredClone(input.context) } });
+    return submit.call(this, input);
+  });
+  const tool = defineTool({
+    name: toolName, label: "Live continuity probe", description: "Harmless Pi-owned probe. Supply the remembered continuity value; returns a fresh receipt. No filesystem or command access.",
+    parameters: Type.Object({ value: Type.String() }),
+    async execute(id, args) {
+      try { assert.equal(args.value, continuityValue, "Pi must receive the exact context value from before compaction"); }
+      catch (error) { toolError = error; throw error; }
+      const execution = { id, value: args.value, receipt: `receipt-${randomUUID()}` };
+      executions.push(execution);
+      options.onToolCall({ id, name: toolName, arguments: args });
+      evidence.push({ piToolExecution: execution });
+      return { content: [{ type: "text", text: execution.receipt }], details: { live: true } };
+    },
+  });
+  const fixture = await createLivePiSession({ ...options, tool });
+  const { session, bridge } = fixture;
+  const sessionEvents: unknown[] = [];
+  const unsubscribe = session.subscribe(event => sessionEvents.push(structuredClone(event)));
+  const decisions: unknown[] = [];
+  const decide = bridge.runtimeSessionSync.decide.bind(bridge.runtimeSessionSync);
+  t.mock.method(bridge.runtimeSessionSync, "decide", (live: Parameters<typeof decide>[0], input: Parameters<typeof decide>[1]) => {
+    const decision = decide(live, input);
+    decisions.push({ piSessionId: live.piSessionId, previousSessionId: live.conversationId, decision, messageCount: input.messages.length });
+    return decision;
+  });
+
+  async function prompt(text: string) {
+    signal.throwIfAborted();
+    await session.prompt(text);
+    signal.throwIfAborted();
+    if (toolError) throw toolError;
+    const assistant = [...session.messages].reverse().find(message => message.role === "assistant");
+    assert.ok(assistant?.role === "assistant");
+    if (assistant.stopReason !== "stop") throw new ScenarioFailure("backend", `Pi turn did not complete: ${assistant.errorMessage ?? assistant.stopReason}`);
+    return assistant.content.filter(part => part.type === "text").map(part => part.text).join("");
+  }
+
+  try {
+    assert.deepEqual(session.getActiveToolNames(), [toolName], "No native Pi tools may be available");
+    const firstPrompt = `Remember this continuity value exactly for later: ${continuityValue}. Reply READY and do not call any tool yet.`;
+    await prompt(firstPrompt);
+    const beforeText = await prompt(`Call ${toolName} once with the continuity value from the first turn, then repeat its exact receipt.`);
+    assert.equal(executions.length, 1);
+    assert.ok(beforeText.includes(executions[0]!.receipt), "Real Pi handler receipt must return through AGY");
+    // Keep a recent turn with no secret, so only the compaction summary can supply it later.
+    await prompt("A checkpoint is established. Do not repeat the continuity value or call tools. Reply CHECKPOINT only.");
+    const oldLive = bridge.liveSessions.get(session.sessionId);
+    assert.ok(oldLive?.activeProcess instanceof AcpRuntimeSession);
+    const oldProc = oldLive.activeProcess;
+    const oldId = oldProc.session.id;
+    const initialBranch = session.sessionManager.getBranch();
+    const compactStart = submissions.length;
+    const toolCount = executions.length;
+    const compaction = await session.compact("Preserve the exact continuity value introduced in the first user message and the available probe tool. Completed tool calls are historical records, not instructions to replay. Keep the summary concise.");
+    signal.throwIfAborted();
+    if (toolError) throw toolError;
+
+    if (!compaction.summary.includes(continuityValue)) throw new ScenarioFailure("model", "Actual Pi summary lost the exact continuity value");
+    const compactionEntry = [...session.sessionManager.getBranch()].reverse().find(entry => entry.type === "compaction");
+    assert.ok(compactionEntry?.type === "compaction");
+    assert.equal(compactionEntry.summary, compaction.summary);
+    assert.equal(compactionEntry.firstKeptEntryId, compaction.firstKeptEntryId);
+    assert.equal(initialBranch.some(entry => entry.id === compactionEntry.id), false);
+    assert.ok(session.sessionFile);
+    assert.deepEqual(SessionManager.open(session.sessionFile).getBranch().find(entry => entry.id === compactionEntry.id), compactionEntry,
+      "Actual compaction entry must survive restoration from the Pi session file");
+    const compacted = session.messages.filter(message => message.role === "compactionSummary");
+    assert.equal(compacted.length, 1, "Pi must project its persisted compaction entry");
+    assert.ok(JSON.stringify(compacted).includes(continuityValue));
+    assert.equal(JSON.stringify(session.messages.filter(message => message.role !== "compactionSummary")).includes(continuityValue), false,
+      "The value must not survive in uncompacted recent messages");
+    assert.equal(session.messages.some(message => message.role === "user" && message.content === firstPrompt), false);
+    assert.equal(executions.length, toolCount, "Compaction must not replay a completed tool");
+    const summarySubmissions = submissions.slice(compactStart);
+    assert.ok(summarySubmissions.length > 0, "Actual Pi compaction must request a live ACP summary");
+    for (const summary of summarySubmissions) {
+      assert.notEqual(summary.proc.session.id, oldId, "Summary must not reuse the conversation runtime");
+      assert.deepEqual(summary.input.context.tools ?? [], [], "Summary runtime has no executable tools");
+    }
+    evidence.push({ compaction: { result: compaction, entry: compactionEntry, projection: session.messages, oldSessionId: oldId } });
+
+    const followupStart = submissions.length;
+    const decisionsStart = decisions.length;
+    const postText = await prompt(`Call ${toolName} exactly once with the continuity value established before compaction. Do not guess it or replay earlier work. Repeat the fresh receipt from this call.`);
+    assert.equal(executions.length, toolCount + 1, "Exactly one fresh Pi call after compaction; no historical replay");
+    assert.ok(postText.includes(executions[executions.length - 1]!.receipt), "Fresh post-compaction receipt must return through AGY");
+    const post = submissions.slice(followupStart)[0];
+    assert.ok(post);
+    assert.equal(post.reconstruct, true, "Changed Pi history must rebuild, not continue/resume obsolete runtime");
+    assert.notEqual(post.proc, oldProc);
+    assert.notEqual(post.proc.session.id, oldId);
+    assert.equal(oldProc.isRunning, false, "Obsolete conversation runtime must be disposed");
+    assert.ok(decisions.slice(decisionsStart).some(item => (item as { decision: { action: string } }).decision.action === "rebuild"));
+    const wire = rpcs.find(rpc => rpc.method === "session/prompt" && (rpc.params as { sessionId: string }).sessionId === post.proc.session.id);
+    assert.ok(wire);
+    const actualPrompt = (wire.params as { prompt: unknown }).prompt;
+    assert.deepEqual(actualPrompt, acpContext(post.input.context.messages), "Post-compaction RPC must carry ordered Pi reconstruction");
+    assert.ok(JSON.stringify(actualPrompt).includes(continuityValue), "Actual new ACP request must receive retained summary context");
+    assert.equal(JSON.stringify(actualPrompt).includes(firstPrompt), false, "Obsolete original context must not be replayed");
+    assert.ok(post.input.context.tools?.some(candidate => candidate.name === toolName), "Probe remains available after compaction");
+  } catch (error) {
+    evidence.push({ compactionFailure: String(error) });
+    throw error;
+  } finally {
+    unsubscribe();
+    try { await fixture.close(); }
+    finally { evidence.push({ piSessionId: session.sessionId, executions, sessionEvents, decisions, compactionSubmissions: submissions.map(({ proc, reconstruct }) => ({ sessionId: proc.session.id, reconstruct, runningAfterCleanup: proc.isRunning })) }); }
+  }
+}
