@@ -435,6 +435,25 @@ describe("EventProcessor tool allowlist validation and warnings", () => {
     { name: "client title with wrong kind warns", actions: [{ update: { ...client, kind: "other" } }], warned: true },
     { name: "client title without kind warns", actions: [{ update: { toolCallId: "client", title: client.title } }], warned: true },
     { name: "identity cannot transfer across tool IDs", actions: [{ update: { toolCallId: "mcp", _meta: mcp } }, { update: { toolCallId: "other", title: "read", status: "completed" } }], warned: true },
+    { name: "registered lazy Pi MCP tool", actions: [
+      { update: { toolCallId: "lazy", title: "call_mcp_tool", rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "read", Arguments: { path } }, status: "completed" } },
+    ], warned: false },
+    { name: "running lazy Pi MCP tool title", actions: [
+      { update: { toolCallId: "lazy", title: "Running call_mcp_tool", rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "read" }, status: "completed" } },
+    ], warned: false },
+    { name: "lazy Pi MCP partial updates assemble by call ID", actions: [
+      { update: { toolCallId: "lazy", title: "Running call_mcp_tool", status: "in_progress" } },
+      { update: { toolCallId: "lazy", rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "read" }, status: "completed" } },
+    ], warned: false },
+    { name: "lazy MCP foreign server", actions: [
+      { update: { toolCallId: "lazy", title: "call_mcp_tool", rawInput: { ServerName: "other", ToolName: "read" }, status: "completed" } },
+    ], warned: true },
+    { name: "lazy MCP unregistered Pi tool", actions: [
+      { update: { toolCallId: "lazy", title: "call_mcp_tool", rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "unknown" }, status: "completed" } },
+    ], warned: true },
+    { name: "lazy MCP missing ToolName at completion", actions: [
+      { update: { toolCallId: "lazy", title: "call_mcp_tool", rawInput: { ServerName: "pi-agy-bridge_pi" }, status: "completed" } },
+    ], warned: true },
     { name: "replay does not populate allowlist", actions: [{ update: { toolCallId: "mcp", _meta: mcp }, replay: true }, { update: { toolCallId: "mcp", kind: "other", status: "completed" } }], warned: true },
     { name: "foreign session does not populate allowlist", actions: [{ update: { toolCallId: "mcp", _meta: mcp }, sessionId: "other" }, { update: { toolCallId: "mcp", kind: "other", status: "completed" } }], warned: true },
     { name: "status-only orphan update is not an identifiable tool", actions: [{ update: { toolCallId: "orphan", status: "completed" } }], warned: false },
@@ -480,6 +499,7 @@ describe("EventProcessor tool allowlist validation and warnings", () => {
   for (const row of [
     { name: "native canonical name and raw args", call: { toolCallId: "same", title: "Running view_file", rawInput: { absolute_path: path }, status: "completed" }, expectedName: "view_file", args: { absolute_path: path } },
     { name: "MCP tool and unwrapped args", call: { toolCallId: "same", _meta: { mcp: { server: "other", tool: "read" } }, rawInput: { arguments: { path } } }, expectedName: "read", args: { path } },
+    { name: "lazy MCP tool and unwrapped args", call: { toolCallId: "same", title: "Running call_mcp_tool", rawInput: { ServerName: "other", ToolName: "read", Arguments: { path } }, status: "completed" }, expectedName: "read", args: { path } },
   ] satisfies { name: string; call: ToolCallUpdate; expectedName: string; args: unknown }[]) {
     test(`warning facts: ${row.name}`, () => {
       const processor = new EventProcessor("session", new Set(["read"]));

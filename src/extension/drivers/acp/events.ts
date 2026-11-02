@@ -44,6 +44,37 @@ function isClientViewFile(call: ToolCallUpdate): boolean {
     call.kind === "read" && call._meta?.mcp === undefined;
 }
 
+interface LazyMcpCall {
+  server: string;
+  tool: string;
+  args: unknown;
+}
+
+function getLazyMcpCall(call: ToolCallUpdate): LazyMcpCall | undefined {
+  const name = call.name ?? (call.title ? call.title.trim().replace(/^running\s+/i, "") : undefined);
+  if (name?.trim() !== "call_mcp_tool" || !record(call.rawInput)) return undefined;
+
+  const server = typeof call.rawInput.ServerName === "string"
+    ? call.rawInput.ServerName
+    : typeof call.rawInput.server === "string"
+      ? call.rawInput.server
+      : undefined;
+  const tool = typeof call.rawInput.ToolName === "string"
+    ? call.rawInput.ToolName
+    : typeof call.rawInput.tool === "string"
+      ? call.rawInput.tool
+      : undefined;
+  if (!server || !tool) return undefined;
+
+  const args = "Arguments" in call.rawInput
+    ? call.rawInput.Arguments
+    : "arguments" in call.rawInput
+      ? call.rawInput.arguments
+      : call.rawInput;
+
+  return { server, tool, args };
+}
+
 type ObservedCall = { call: ToolCallUpdate; warned?: boolean };
 
 export class EventProcessor {
@@ -120,6 +151,12 @@ export class EventProcessor {
       this.warn(call, emit);
       return;
     }
+    const lazy = getLazyMcpCall(call);
+    if (lazy) {
+      if (lazy.server === "pi-agy-bridge_pi" && this.allowedToolNames.has(lazy.tool)) return;
+      this.warn(call, emit);
+      return;
+    }
     // Notifications describe activity; only the Artifact Reader authorizes client reads.
     // RPC ordering, read failures, and paths do not change this classification.
     if (isClientViewFile(call)) return;
@@ -136,10 +173,13 @@ export class EventProcessor {
     if (entry) entry.warned = true;
 
     const mcp = call._meta?.mcp;
+    const lazy = getLazyMcpCall(call);
     const name = record(mcp) && typeof mcp.tool === "string"
-      ? mcp.tool : (call.title ?? call.name ?? call.kind ?? "unverified ACP tool").replace(/^Running /, "");
+      ? mcp.tool
+      : (lazy ? lazy.tool : (call.title ?? call.name ?? call.kind ?? "unverified ACP tool").replace(/^Running /, ""));
     const args = record(mcp) && record(call.rawInput) && record(call.rawInput.arguments)
-      ? call.rawInput.arguments : call.rawInput;
+      ? call.rawInput.arguments
+      : (lazy && lazy.args !== undefined ? lazy.args : call.rawInput);
     emit({ type: "tool-warning", name, args });
   }
 
