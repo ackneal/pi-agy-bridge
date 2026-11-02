@@ -8,14 +8,15 @@ import type { TestContext } from "node:test";
 import type { AssistantMessage, Message, Model, Tool } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { AcpConnection } from "../../src/extension/drivers/acp/connection.ts";
-import { AcpArtifactReader } from "../../src/extension/drivers/acp/artifact-reader.ts";
-import { acpContext } from "../../src/extension/drivers/acp/runtime.ts";
-import { AcpMcpPermissions } from "../../src/extension/drivers/acp/permissions.ts";
-import { createAcpAuthenticationBackend } from "../../src/extension/drivers/acp/auth.ts";
-import { ensureAcpInstallation } from "../../src/extension/drivers/acp/installation.ts";
-import { resolveAcpRelease } from "../../src/extension/drivers/acp/release.ts";
-import { prepareAcpRuntime } from "../../src/extension/drivers/acp/prepare.ts";
+import { Connection } from "../../src/extension/drivers/acp/connection.ts";
+import { ArtifactReader } from "../../src/extension/drivers/acp/artifact-reader.ts";
+import { serializeContent } from "../../src/extension/drivers/acp/runtime.ts";
+import { McpPermissions } from "../../src/extension/drivers/acp/permissions.ts";
+import { createAuthenticationBackend } from "../../src/extension/drivers/acp/auth.ts";
+import { ensureInstallation } from "../../src/extension/drivers/acp/installation.ts";
+import { resolveRelease } from "../../src/extension/drivers/acp/release.ts";
+import { prepareRuntime } from "../../src/extension/drivers/acp/prepare.ts";
+import { prepareBridgeMessages, prepareSystemMessages } from "../../src/extension/provider/context-prompt.ts";
 import { LiveSession, PiContextAdapter } from "../../src/extension/session/session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "../../src/extension/session/state.ts";
 import type { RuntimeEvent } from "../../src/extension/drivers/types.ts";
@@ -74,10 +75,10 @@ async function setup(signal: AbortSignal) {
   process.env.XDG_CACHE_HOME = path.join(scratch, "cache");
   process.env.XDG_DATA_HOME = path.join(scratch, "data");
   try {
-    const release = resolveAcpRelease();
+    const release = resolveRelease();
     environment.acp = release.version;
     environment.distribution = release.platform;
-    const launch = await ensureAcpInstallation({ agentHome: process.env.PI_CODING_AGENT_DIR, signal });
+    const launch = await ensureInstallation({ agentHome: process.env.PI_CODING_AGENT_DIR, signal });
     const cwd = path.join(scratch, "project");
     await mkdir(cwd);
     const connection = { ...launch, cwd, requestTimeoutMs: Math.min(timeoutMs, 60_000) };
@@ -111,7 +112,7 @@ test("real authenticated ACP compatibility", { timeout: Number.isFinite(timeoutM
           if (!configured) throw setupError;
           if (!id.startsWith("AUTH-")) {
             if (process.env.PI_AGY_LIVE_AUTH_STATE === "unauthenticated") throw new Outcome("SKIP", "This dedicated unauthenticated run only exercises auth scenarios; do not alter credentials to enable other cases");
-            authenticated ??= await createAcpAuthenticationBackend(configured.connection).probe(controller.signal);
+            authenticated ??= await createAuthenticationBackend(configured.connection).probe(controller.signal);
             if (!authenticated) throw new Outcome("SKIP", "No isolated authentication. Authenticate externally in this disposable environment or explicitly select AUTH-login with login consent");
           } else authenticated = undefined;
           result.category = "bridge";
@@ -175,43 +176,43 @@ async function runScenario(id: Id, config: Awaited<ReturnType<typeof setup>>, t:
   const rpcs: { method: string; params: unknown; response?: unknown; error?: string }[] = [];
   const reads: { request: unknown; response?: unknown; error?: string }[] = [];
   const permissions: { request: unknown; response: unknown; native: boolean }[] = [];
-  const notifications: Parameters<AcpMcpPermissions["observe"]>[0][] = [];
+  const notifications: Parameters<McpPermissions["observe"]>[0][] = [];
   let pending = false;
   let handlerError: unknown;
   const expectedValue = randomUUID();
   const resultMarker = `result-${randomUUID()}`;
   let hold = false;
   let cancelling = false;
-  let lastPrepared: Awaited<ReturnType<typeof prepareAcpRuntime>> | undefined;
+  let lastPrepared: Awaited<ReturnType<typeof prepareRuntime>> | undefined;
 
   // Observe the production path without replacing its transport or decisions.
-  const request = AcpConnection.prototype.request;
-  t.mock.method(AcpConnection.prototype, "request", (async function (this: AcpConnection, method, params) {
+  const request = Connection.prototype.request;
+  t.mock.method(Connection.prototype, "request", (async function (this: Connection, method, params) {
     const entry: typeof rpcs[number] = { method, params: structuredClone(params) };
     rpcs.push(entry);
     try { const response = await request.call(this, method, params); entry.response = structuredClone(response); return response; }
     catch (error) { entry.error = String(error); throw error; }
   }) as typeof request);
-  const notify = AcpConnection.prototype.notify;
-  t.mock.method(AcpConnection.prototype, "notify", (async function (this: AcpConnection, method, params) {
+  const notify = Connection.prototype.notify;
+  t.mock.method(Connection.prototype, "notify", (async function (this: Connection, method, params) {
     rpcs.push({ method, params: structuredClone(params) });
     if (method === "session/cancel") evidence.push({ cancelRpc: params, activePromptAtCancel: lastPrepared?.proc.session.hasActivePrompt });
     return notify.call(this, method, params);
   }) as typeof notify);
-  const read = AcpArtifactReader.prototype.read;
-  t.mock.method(AcpArtifactReader.prototype, "read", async function (this: AcpArtifactReader, request: Parameters<typeof read>[0], readSignal: AbortSignal) {
+  const read = ArtifactReader.prototype.read;
+  t.mock.method(ArtifactReader.prototype, "read", async function (this: ArtifactReader, request: Parameters<typeof read>[0], readSignal: AbortSignal) {
     const entry: typeof reads[number] = { request };
     reads.push(entry);
     try { const response = await read.call(this, request, readSignal); entry.response = response; return response; }
     catch (error) { entry.error = String(error); throw error; }
   });
-  const observe = AcpMcpPermissions.prototype.observe;
-  t.mock.method(AcpMcpPermissions.prototype, "observe", function (this: AcpMcpPermissions, notification: Parameters<typeof observe>[0]) {
+  const observe = McpPermissions.prototype.observe;
+  t.mock.method(McpPermissions.prototype, "observe", function (this: McpPermissions, notification: Parameters<typeof observe>[0]) {
     notifications.push(structuredClone(notification));
     return observe.call(this, notification);
   });
-  const reply = AcpMcpPermissions.prototype.reply;
-  t.mock.method(AcpMcpPermissions.prototype, "reply", function (this: AcpMcpPermissions, request: Parameters<typeof reply>[0]) {
+  const reply = McpPermissions.prototype.reply;
+  t.mock.method(McpPermissions.prototype, "reply", function (this: McpPermissions, request: Parameters<typeof reply>[0]) {
     const response = reply.call(this, request);
     permissions.push({ request, response, native: request.toolCall._meta?.mcp === undefined });
     return response;
@@ -224,7 +225,9 @@ async function runScenario(id: Id, config: Awaited<ReturnType<typeof setup>>, t:
     const token = live.beginPreparation();
     const effort = process.env.PI_AGY_LIVE_EFFORT;
     assert.ok(effort === undefined || effort === "low" || effort === "medium" || effort === "high", "PI_AGY_LIVE_EFFORT must be low, medium or high");
-    const prepared = await prepareAcpRuntime(model, { systemPrompt, messages }, tools, { signal, ...(effort ? { reasoning: effort } : {}) },
+    const context = { systemPrompt, messages };
+    const systemMessages = prepareSystemMessages(context);
+    const prepared = await prepareRuntime(model, context, systemMessages, tools, { signal, ...(effort ? { reasoning: effort } : {}) },
       { cwd: config.connection.cwd, resolve: async () => config.connection }, { store, sync, sessionVersion: "acp:v1" }, live, token);
     live.releasePreparation(token);
     lastPrepared = prepared;
@@ -253,7 +256,7 @@ async function runScenario(id: Id, config: Awaited<ReturnType<typeof setup>>, t:
       } catch (error) { handlerError = new Failure("model", `Pi handler assertion: ${String(error)}`, error); abort(); }
     });
     prepared.mcpServer.setTransportFailureHandler(error => { if (!cancelling) { handlerError = new Failure("transport", error.message, error); abort(); } });
-    return prepared;
+    return { ...prepared, systemMessages };
   }
   function addUser(text: string) {
     const message: Message = { role: "user", content: text, timestamp: Date.now() };
@@ -273,10 +276,11 @@ async function runScenario(id: Id, config: Awaited<ReturnType<typeof setup>>, t:
       events.push(event);
       if (event.type === "complete") { complete = true; if (event.reason === "error") completionError = event.error ?? "ACP error"; }
     });
-    const syncedMessageCount = sync.getSyncedMessageCount(live) ?? 0;
-    const expectedPrompt = acpContext(messages.slice(prepared.reconstructContext ? 0 : syncedMessageCount));
-    await prepared.proc.submit({ model, context: { messages }, options: { signal }, reconstructContext: prepared.reconstructContext,
-      syncedMessageCount, beforeInput });
+    const syncedMessageCount = prepared.reconstructContext ? 0 :
+      sync.getSyncedMessageCount(live) ?? Math.max(0, messages.length - 1);
+    const submissionMessages = prepareBridgeMessages({ messages }, prepared.reconstructContext, syncedMessageCount, prepared.systemMessages);
+    const expectedPrompt = serializeContent(submissionMessages);
+    await prepared.proc.submit({ model, messages: submissionMessages, options: { signal }, beforeInput });
     const sent = [...rpcs].reverse().find(r => r.method === "session/prompt");
     assert.ok(sent);
     assert.deepEqual((sent.params as { prompt: unknown }).prompt, expectedPrompt, "Actual RPC must preserve Pi message order");
@@ -346,7 +350,7 @@ async function runScenario(id: Id, config: Awaited<ReturnType<typeof setup>>, t:
       const start = rpcs.length;
       const cancelled = new AbortController();
       cancelled.abort(new Error("Cancel before input"));
-      await prepared.proc.submit({ model, context: { messages }, options: { signal: cancelled.signal }, reconstructContext: true, syncedMessageCount: 0,
+      await prepared.proc.submit({ model, messages: prepareBridgeMessages({ messages }, prepared.reconstructContext, 0, prepared.systemMessages), options: { signal: cancelled.signal },
         beforeInput: () => !cancelled.signal.aborted && live.activeProcess === prepared.proc });
       assert.equal(rpcs.slice(start).filter(r => r.method === "session/prompt").length, 0);
       assert.equal(calls.length, 0);

@@ -4,8 +4,8 @@ import type { TestContext } from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { defineTool, SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { AcpRuntimeSession, acpContext } from "../../src/extension/drivers/acp/runtime.ts";
-import type { DriverSubmission } from "../../src/extension/drivers/types.ts";
+import { RuntimeSession, serializeContent } from "../../src/extension/drivers/acp/runtime.ts";
+import { SessionMode, type DriverSubmission, type PrepareDriverInput } from "../../src/extension/drivers/types.ts";
 import { createLivePiSession } from "./pi-session.ts";
 import { ScenarioFailure } from "./report.ts";
 
@@ -27,12 +27,16 @@ export async function runLiveCompaction(options: Options): Promise<void> {
   const toolName = "mcp__pi__live_probe";
   const executions: { id: string; value: string; receipt: string }[] = [];
   let toolError: unknown;
-  const submissions: { proc: AcpRuntimeSession; reconstruct: boolean; input: Pick<DriverSubmission, "context" | "syncedMessageCount"> }[] = [];
-  const submit = AcpRuntimeSession.prototype.submit;
-  t.mock.method(AcpRuntimeSession.prototype, "submit", async function (this: AcpRuntimeSession, input: DriverSubmission) {
-    // Snapshot before Pi can append subsequent assistant/tool messages.
-    submissions.push({ proc: this, reconstruct: input.reconstructContext, input: { context: structuredClone(input.context), syncedMessageCount: input.syncedMessageCount } });
-    evidence.push({ piSubmission: { sessionId: this.session.id, reconstruct: input.reconstructContext, syncedMessageCount: input.syncedMessageCount, context: structuredClone(input.context) } });
+  type Preparation = { reconstruct: boolean; tools: PrepareDriverInput["tools"]; mode: SessionMode };
+  const preparations = new Map<RuntimeSession, Preparation>();
+  const submissions: (Preparation & { proc: RuntimeSession; messages: DriverSubmission["messages"] })[] = [];
+  const submit = RuntimeSession.prototype.submit;
+  t.mock.method(RuntimeSession.prototype, "submit", async function (this: RuntimeSession, input: DriverSubmission) {
+    const preparation = preparations.get(this);
+    assert.ok(preparation, "Submission must follow observed production preparation");
+    const messages = structuredClone(input.messages);
+    submissions.push({ proc: this, ...preparation, messages });
+    evidence.push({ piSubmission: { sessionId: this.session.id, ...preparation, messages } });
     return submit.call(this, input);
   });
   const tool = defineTool({
@@ -50,6 +54,14 @@ export async function runLiveCompaction(options: Options): Promise<void> {
   });
   const fixture = await createLivePiSession({ ...options, tool });
   const { session, bridge } = fixture;
+  const prepare = bridge.driver.prepareSession.bind(bridge.driver);
+  t.mock.method(bridge.driver, "prepareSession", async (input: PrepareDriverInput) => {
+    const tools = structuredClone(input.tools);
+    const runtime = await prepare(input);
+    assert.ok(runtime.proc instanceof RuntimeSession);
+    preparations.set(runtime.proc, { reconstruct: runtime.reconstructContext, tools, mode: input.mode });
+    return runtime;
+  });
   const sessionEvents: unknown[] = [];
   const unsubscribe = session.subscribe(event => sessionEvents.push(structuredClone(event)));
   const decisions: unknown[] = [];
@@ -81,7 +93,7 @@ export async function runLiveCompaction(options: Options): Promise<void> {
     // Keep a recent turn with no secret, so only the compaction summary can supply it later.
     await prompt("A checkpoint is established. Do not repeat the continuity value or call tools. Reply CHECKPOINT only.");
     const oldLive = bridge.liveSessions.get(session.sessionId);
-    assert.ok(oldLive?.activeProcess instanceof AcpRuntimeSession);
+    assert.ok(oldLive?.activeProcess instanceof RuntimeSession);
     const oldProc = oldLive.activeProcess;
     const oldId = oldProc.session.id;
     const initialBranch = session.sessionManager.getBranch();
@@ -111,7 +123,9 @@ export async function runLiveCompaction(options: Options): Promise<void> {
     assert.ok(summarySubmissions.length > 0, "Actual Pi compaction must request a live ACP summary");
     for (const summary of summarySubmissions) {
       assert.notEqual(summary.proc.session.id, oldId, "Summary must not reuse the conversation runtime");
-      assert.deepEqual(summary.input.context.tools ?? [], [], "Summary runtime has no executable tools");
+      assert.equal(summary.mode, SessionMode.Standalone, "Summary must use standalone routing");
+      assert.deepEqual(summary.tools, [], "Summary preparation has no executable tools");
+      assert.equal(summary.proc.options.mcp, undefined, "Summary runtime must not expose an MCP tool server");
     }
     evidence.push({ compaction: { result: compaction, entry: compactionEntry, projection: session.messages, oldSessionId: oldId } });
 
@@ -130,10 +144,13 @@ export async function runLiveCompaction(options: Options): Promise<void> {
     const wire = rpcs.find(rpc => rpc.method === "session/prompt" && (rpc.params as { sessionId: string }).sessionId === post.proc.session.id);
     assert.ok(wire);
     const actualPrompt = (wire.params as { prompt: unknown }).prompt;
-    assert.deepEqual(actualPrompt, acpContext(post.input.context.messages), "Post-compaction RPC must carry ordered Pi reconstruction");
+    const reconstructed = serializeContent(post.messages);
+    assert.deepEqual(actualPrompt, reconstructed, "Post-compaction RPC must carry ordered normalized reconstruction");
+    assert.ok(reconstructed.filter(part => part.type === "text").map(part => part.text).join("\n").includes(compaction.summary),
+      "Actual reconstruction must retain the full persisted summary");
     assert.ok(JSON.stringify(actualPrompt).includes(continuityValue), "Actual new ACP request must receive retained summary context");
     assert.equal(JSON.stringify(actualPrompt).includes(firstPrompt), false, "Obsolete original context must not be replayed");
-    assert.ok(post.input.context.tools?.some(candidate => candidate.name === toolName), "Probe remains available after compaction");
+    assert.ok(post.tools.some(candidate => candidate.name === toolName), "Probe remains available after compaction");
   } catch (error) {
     evidence.push({ compactionFailure: String(error) });
     throw error;

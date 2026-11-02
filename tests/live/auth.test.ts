@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AcpConnection } from "../../src/extension/drivers/acp/connection.ts";
+import { Connection as AcpConnection } from "../../src/extension/drivers/acp/connection.ts";
 import { runAuthScenario } from "./auth.ts";
 import { ScenarioFailure, ScenarioOutcome } from "./report.ts";
 

@@ -8,7 +8,7 @@ import {
   type AgentSession, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { BridgeIPC } from "../../src/extension/bridge/ipc.ts";
-import { AcpDriver } from "../../src/extension/drivers/acp/driver.ts";
+import { Driver as AcpDriver } from "../../src/extension/drivers/acp/driver.ts";
 import type { DriverSession } from "../../src/extension/drivers/types.ts";
 import { Bridge } from "../../src/extension/provider/provider.ts";
 import { createAgyBridgeCredential } from "../../src/extension/provider/auth.ts";
@@ -32,7 +32,7 @@ export async function createLivePiSession(options: {
     const resolved = await realpath(directory);
     assert.ok(resolved.startsWith(temporaryRoot + path.sep), "Live Pi directories must be scratch directories");
   }
-  assert.ok(!process.env.AGY_ACP_BIN?.trim(), "Unset AGY_ACP_BIN so the supplied launch is used");
+  assert.ok(!process.env.AGY_ACP_DIR?.trim(), "Unset AGY_ACP_DIR so the supplied launch is used");
 
   const scratch = await mkdtemp(path.join(options.directory, "pi-session-"));
   const agentDir = path.join(scratch, "agent");

@@ -7,9 +7,9 @@ import type { Model } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { BridgeIPC } from "../../src/extension/bridge/ipc.ts";
-import { AcpDriver } from "../../src/extension/drivers/acp/driver.ts";
-import type { DriverSession, PrepareDriverInput } from "../../src/extension/drivers/types.ts";
-import { AcpConnection } from "../../src/extension/drivers/acp/connection.ts";
+import { Driver as AcpDriver } from "../../src/extension/drivers/acp/driver.ts";
+import { SessionMode, type DriverSession, type PrepareDriverInput } from "../../src/extension/drivers/types.ts";
+import { Connection as AcpConnection } from "../../src/extension/drivers/acp/connection.ts";
 import { createLivePiSession } from "./pi-session.ts";
 
 const model = { id: "gemini-3.1-pro", name: "live", provider: "agy", api: "agy", baseUrl: "agy", reasoning: false,
@@ -27,10 +27,10 @@ for (const scenario of ["close", "cancel", "pre-aborted", "broker-cleanup-failur
     await Promise.all([cwd, directory, gemini, agentDir].map(name => mkdir(name)));
     const sentinel = JSON.stringify({ sentinel: "Do not modify persistent auth" });
     await writeFile(path.join(agentDir, "auth.json"), sentinel);
-    const saved = { GEMINI_HOME: process.env.GEMINI_HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, AGY_ACP_BIN: process.env.AGY_ACP_BIN };
+    const saved = { GEMINI_HOME: process.env.GEMINI_HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, AGY_ACP_DIR: process.env.AGY_ACP_DIR };
     process.env.GEMINI_HOME = gemini;
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    delete process.env.AGY_ACP_BIN;
+    delete process.env.AGY_ACP_DIR;
     t.after(async () => {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -48,11 +48,11 @@ for (const scenario of ["close", "cancel", "pre-aborted", "broker-cleanup-failur
       t.mock.method(broker, "close", async () => { throw new Error("Injected broker cleanup failure"); });
       const proc: DriverSession = { driver: "acp", isRunning: false, abort: async () => {},
         onRuntimeEvent: () => () => {}, submit: async () => assert.fail("No cleanup probe submission"),
-        formatContextUpdate: () => { throw new Error("No cleanup probe context"); } };
+        serializeContextUpdate: () => { throw new Error("No cleanup probe context"); } };
       t.mock.method(AcpDriver.prototype, "prepareSession", async (_input: PrepareDriverInput) => ({ proc, mcpServer: broker, reconstructContext: true, modelId: model.id }));
       const fixture = await createLivePiSession(options);
       const live = fixture.bridge.liveSessions.getOrCreate(fixture.session.sessionId);
-      await fixture.bridge.driver.prepareSession({ model, context: { messages: [] }, tools: [], options: undefined,
+      await fixture.bridge.driver.prepareSession({ model, context: { messages: [] }, messages: [], mode: SessionMode.Conversation, tools: [], options: undefined,
         session: live, preparationId: live.beginPreparation(), store: fixture.bridge.runtimeSessionStore, sync: fixture.bridge.runtimeSessionSync });
       await assert.rejects(fixture.close(), error => error instanceof AggregateError && error.errors.some(item => String(item).includes("Injected broker cleanup failure")));
       assert.ok(evidence.some(item => (item as { piFixtureClosed?: boolean }).piFixtureClosed === false));

@@ -25,9 +25,9 @@ for (const row of [
     await Promise.all([cwd, gemini].map(name => mkdir(name)));
     const env = { PI_AGY_LIVE: "1", PI_AGY_LIVE_ISOLATED: "1", PI_AGY_LIVE_AUTH_STATE: row.state,
       PI_AGY_LIVE_LOGIN: "1", PI_AGY_LIVE_AUTH_METHOD: "synthetic-auth", GEMINI_HOME: gemini, PI_CODING_AGENT_DIR: directory };
-    const saved = Object.fromEntries([...Object.keys(env), "AGY_ACP_BIN"].map(key => [key, process.env[key]]));
+    const saved = Object.fromEntries([...Object.keys(env), "AGY_ACP_DIR"].map(key => [key, process.env[key]]));
     Object.assign(process.env, env);
-    delete process.env.AGY_ACP_BIN;
+    delete process.env.AGY_ACP_DIR;
     t.after(async () => {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -37,7 +37,7 @@ for (const row of [
     const fetch = t.mock.method(globalThis, "fetch", async () => assert.fail("Local audit must not fetch"));
     const evidence: unknown[] = [];
     const operation = runAuthScenario({ id: row.id, connection: { executable: process.execPath,
-      args: ["--experimental-strip-types", fixture, row.mode], cwd, requestTimeoutMs: 3000 },
+      args: ["--experimental-transform-types", fixture, row.mode], cwd, requestTimeoutMs: 3000 },
       directory, t, signal: AbortSignal.timeout(10_000), evidence });
     if (row.category) await assert.rejects(operation, error => error instanceof ScenarioFailure && error.category === row.category);
     else {

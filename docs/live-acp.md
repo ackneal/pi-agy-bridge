@@ -8,7 +8,7 @@ Use this opt-in checklist when upgrading the managed AGY backend, ACP SDK or Pi 
 
 Production references are `src/extension/drivers/acp/` for installation, authentication, configuration, permissions, artifact reads and image observation, and `src/extension/session/` plus `src/extension/provider/` for history reconstruction and compaction. The pinned release and checksums come from `registry.json` through `release.ts` and `installation.ts`; do not substitute a host binary. Deterministic `*.test.ts` fixtures cover edge cases but never substitute for reached live paths.
 
-Run only in a dedicated disposable Linux container on a supported managed architecture, with Node supporting TypeScript stripping, Bun, repository dependencies and network access. The hard gate requires `PI_AGY_LIVE=1` and `PI_AGY_LIVE_ISOLATED=1`, attesting that no host directories, credentials or keyring are mounted. These assertions and path checks do not create an OS sandbox. This checklist does not authorize using a real user's environment.
+Run only in a dedicated disposable Linux container on a supported managed architecture, with Node supporting `--experimental-transform-types`, Bun, repository dependencies and network access. The hard gate requires `PI_AGY_LIVE=1` and `PI_AGY_LIVE_ISOLATED=1`, attesting that no host directories, credentials or keyring are mounted. These assertions and path checks do not create an OS sandbox. This checklist does not authorize using a real user's environment.
 
 Prepare `PI_AGY_LIVE_WORKSPACE` externally as an absolute, real, current-user-owned directory below the container's temporary directory, with real `home/` and `gemini/` directories. The runner sets `HOME` and `GEMINI_HOME` there, puts Pi agent state and the pinned managed installation in fresh scratch storage, and clears executable overrides and alternate credential/configuration environment variables. `PI_AGY_LIVE_INSTALL=1` separately consents to the download.
 
@@ -64,7 +64,7 @@ The default selection is core only; login cases still require their additional c
 | `IMG-mcp-small` | Real Pi image result | Exactly one Pi execution; persisted exact image result, observed inline/offload route and final visual marker. | Small size does not guarantee an inline route; any observed offload must satisfy recovery assertions. |
 | `IMG-mcp-offload` | Actual AGY image offload/recovery | Real tool image, notified current-session artifact, exact artifact hash, actual Client Read response, independent observer prompt with exact bytes and derived marker, final answer; no replay. | Bounded requested-size sweep: 32 KiB, 256 KiB, 1 MiB, 4 MiB. No offload across bounds is inconclusive, not a threshold claim. |
 | `OFFLOAD-text` | Actual AGY text offload/paging | One real Pi tool execution per attempt; current-session reference/read, first-page continuation, follow-up RPC on same path at advertised line, tail in actual read response and final answer. | Bounded requested-size sweep: 64 KiB, 256 KiB, 1 MiB, 4 MiB; actual text size differs. No offload is inconclusive. |
-| `G-compaction` | Real Pi compaction continuity | `AgentSession.compact()`, separate tool-free summary runtime, persisted/projected summary, fresh-runtime reconstruction and new real Pi receipt using summary-only context; no completed-tool replay. | Disables automatic compaction and keeps minimal recent context; requires several turns. Not interactive startup coverage. |
+| `G-compaction` | Real Pi compaction continuity | `AgentSession.compact()`, standalone preparation with no tools/MCP, separate summary runtime, persisted/projected summary, fresh-runtime reconstruction and new real Pi receipt using summary-only context; no completed-tool replay. | Disables automatic compaction and keeps minimal recent context; requires several turns. Not interactive startup coverage. |
 | `F-pending` | Cancel pending MCP ownership | Pending call and active prompt observed, actual cancel RPC while active, stopped process/empty broker, fresh-runtime successful probe. | Boundary missed before turn ends is inconclusive; driver/runtime cancellation, not full ProviderTurn UI cancellation. |
 | `C-lifecycle` | Short two-turn smoke | First turn learns marker; second uses it in a Pi call with unchanged session ID and no reconstruction. | Continuation only; no disk resume/load or rebuild claim. |
 
@@ -99,6 +99,35 @@ Always attempt cleanup after failure or timeout: stop owned runtimes and observe
 
 Reconcile matrix IDs and tiers with `tests/live/scenarios.ts` and controls with the runner before each upgrade. `bun run test:live:acp` explicitly runs the separate live entry; `bun run test` discovers only `*.test.ts` and stays offline. Run the entry without live opt-in to check skipping without installation/auth/workspace mutation, then run selected live cases only in the attested environment.
 
-Record check results separately from authenticated live reports. In this workspace, typecheck and the full offline suite passed: 1,885 passes, 13 skips, zero failures. The no-opt-in live entry reported all 17 core scenarios SKIP without backend access. The local synthetic auth fixture validates harness auditing/cancellation only; it is not a live auth result. Independent review found no remaining confirmed issues.
+Record check results separately from authenticated live reports. Record the exact commit and dependency versions with each check. Historical offline results do not establish a pass for the current branch. The local synthetic auth fixture validates harness auditing/cancellation only; it is not a live auth result.
 
 No authenticated live compatibility pass is claimed in this document; list unreached subcases and limits even when deterministic fixtures pass.
+
+## Current-version design assessment
+
+The assessment target is Bridge `0.5.1`, managed AGY ACP `1.4.5`, ACP SDK `2.0.1` and Pi SDK `1.4.0`, based on main `ae5a96f`. Resolve the actual managed release at execution time. Backend observations from ACP `1.4.4` are diagnostic history, not compatibility evidence for this target.
+
+The API-adapted harness passes typecheck and the complete offline suite: 2,130 PASS, 13 SKIP, zero failures. The no-opt-in live entry reports all 17 core scenarios SKIP. These checks do not establish authenticated backend compatibility.
+
+The implemented matrix remains 17 core and 3 extended cases. Preparation observations must capture instructions, effective tools, session mode and reconstruction decisions. Submission observations must capture provider-prepared messages and actual ACP payloads. The provider owns history selection; the runtime only serializes prepared content. Low-level runtime cases do not establish real Pi provider behavior.
+
+### Proposed additional evidence — not implemented
+
+| Priority | Scope | Required evidence |
+| --- | --- | --- |
+| P1 | Usage without tools and across `A-success` / `A-error` | Capture final prompt-response usage, context updates, runtime accounting and persisted Pi usage entries. One completed native prompt with valid usage produces exactly one `agy_turn` entry, including after an MCP handoff; context occupancy is separate. Compare input/output/cache/thought fields with the production mapping, retaining raw allowlisted counters for backend-contract review. Do not require thought messages or nonzero cache counts. |
+| P1 | Pending-result steering | Hold a real Pi tool execution, queue a correction through Pi's supported update path, then release the result. Observe the correction in the MCP result appendix, no extra native prompt for that continuation, and a final response or next action that follows the correction. Use a handler-only receipt and execution counts rather than a model claim. |
+| P2 | Rebuild semantics | Extend `D-rebuild` with successful, failed and unconfirmed historical operations. Observe the prepared history and new ACP payload, no completed side-effect replay, correct status interpretation and no invented omitted result body. Keep exhaustive serializer combinations offline. |
+| P2 | Standalone compaction isolation | Extend `G-compaction` with actual tool-free session RPC configuration, direct summary-task payload, and unchanged conversation checkpoints during the summary. Keep persisted summary, fresh-runtime continuity and no-replay assertions. |
+
+Nonzero cache/thought accounting needs an observed backend sample. A run without those fields cannot establish that branch of the backend contract. Do not make every compatibility run force a cache hit or visible reasoning.
+
+### Execution batches
+
+- Start with `AUTH-probe`, `CONFIG-instructions`, `A-success` and `A-error`. Explicitly choose a backend-advertised model; `gemini-3.8-flash` is a candidate from prior diagnostics, not a confirmed ACP `1.4.5` selection. Supply an effort level supported by that model.
+- Run image transport, real MCP image recovery and text offload next. Keep bounded sweeps and distinguish unreached offload from failed recovery.
+- Run native-tool protection, Client Read scope, cancellation, lifecycle, rebuild and compaction after the first batch is stable. Run negative auth and interactive login only in separately prepared environments with their required consent.
+
+### macOS execution — unresolved
+
+The implemented runner supports isolated Linux only. A host-local mode needs separate consent and a distinct report label; setting the isolation flag does not create a sandbox. Any proposed local mode must use temporary Pi/project state, reject executable overrides, resolve the pinned managed release, and identify backend credential/cache/session writes that cannot be isolated while reusing login. Local login and negative-auth mutation must remain disabled by default. No local mode or authenticated execution is authorized by this assessment.

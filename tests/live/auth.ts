@@ -5,9 +5,9 @@ import { syncBuiltinESMExports } from "node:module";
 import * as acp from "@agentclientprotocol/sdk";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { createAcpAuthenticationBackend } from "../../src/extension/drivers/acp/auth.ts";
-import { AcpConnection, type AcpConnectionOptions } from "../../src/extension/drivers/acp/connection.ts";
-import { AcpDriver } from "../../src/extension/drivers/acp/driver.ts";
+import { createAuthenticationBackend as createAcpAuthenticationBackend } from "../../src/extension/drivers/acp/auth.ts";
+import { Connection as AcpConnection, type ConnectionOptions as AcpConnectionOptions } from "../../src/extension/drivers/acp/connection.ts";
+import { Driver as AcpDriver } from "../../src/extension/drivers/acp/driver.ts";
 import { createLivePiSession } from "./pi-session.ts";
 import { ScenarioFailure, ScenarioOutcome } from "./report.ts";
 

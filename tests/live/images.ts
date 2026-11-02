@@ -5,7 +5,7 @@ import type { TestContext } from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { defineTool, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { AcpMcpPermissions } from "../../src/extension/drivers/acp/permissions.ts";
+import { McpPermissions as AcpMcpPermissions } from "../../src/extension/drivers/acp/permissions.ts";
 import { createLivePiSession } from "./pi-session.ts";
 import { ScenarioFailure, ScenarioOutcome } from "./report.ts";
 import { createVisualFixture, imageEvidence } from "./visual-fixture.ts";

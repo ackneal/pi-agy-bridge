@@ -19,11 +19,11 @@ for (const row of [
     t.after(() => rm(directory, { recursive: true, force: true }));
     const env = { ...process.env };
     delete env.NODE_TEST_CONTEXT;
-    const child = spawn(process.execPath, ["--experimental-strip-types", "--test", "tests/live/acp.live.ts"], {
+    const child = spawn(process.execPath, ["--experimental-transform-types", "--test", "tests/live/acp.live.ts"], {
       env: { ...env, PI_AGY_LIVE: row.optIn, PI_AGY_LIVE_ISOLATED: row.isolated,
         PI_AGY_LIVE_WORKSPACE: "", PI_AGY_LIVE_SCENARIOS: row.selected, PI_AGY_LIVE_REPORT_DIR: directory,
         PI_AGY_LIVE_EXTENDED: row.extended, PI_AGY_LIVE_AUTH_STATE: "authenticated", PI_AGY_LIVE_LOGIN: "",
-        PI_AGY_LIVE_INSTALL: "1", AGY_ACP_BIN: "/must-not-be-executed", PI_AGY_LIVE_TIMEOUT_MS: "1000" },
+        PI_AGY_LIVE_INSTALL: "1", AGY_ACP_DIR: "/must-not-be-executed", PI_AGY_LIVE_TIMEOUT_MS: "1000" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
