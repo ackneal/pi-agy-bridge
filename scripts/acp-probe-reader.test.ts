@@ -30,6 +30,7 @@ const signal = (): AbortSignal => new AbortController().signal;
 
 const invalidCases: { name: string; arrange: (f: Fixture) => Promise<void> | void; reason: string }[] = [
   { name: "inactive", arrange: f => { f.reader.active = false; }, reason: "inactive" },
+  { name: "RPC path must not be a file URI", arrange: f => { f.request.path = pathToFileURL(f.target).href; }, reason: "invalid path" },
   { name: "other session", arrange: f => { f.request.sessionId = "other"; }, reason: "invalid session" },
   { name: "unsafe configured session", arrange: f => { f.reader = new ProbeReader({ home: f.home, sessionId: "../bad" }); f.reader.active = true; f.request.sessionId = "../bad"; }, reason: "invalid session" },
   ...["line", "limit"].flatMap(field => [0, -1, 1.5, NaN, Infinity, 0x100000000].map(value => ({

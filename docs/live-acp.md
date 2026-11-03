@@ -3,7 +3,8 @@
 `bun run check:acp` sends requests directly to AGY ACP with fixed
 `gemini-3.8-flash`, mode `default`, and effort `low`. It does not start Pi,
 a provider, or a live harness. Tool restriction and genuine text offload/Client
-Read checks are part of the default diagnostic; their live evidence is pending.
+Read checks are part of the default diagnostic; observed triggering and successful
+recovery are reported separately.
 
 ## Invocation and boundaries
 
@@ -54,8 +55,9 @@ It generates a fresh handler-only receipt solely at the result tail and writes a
 private execution audit. It does not create AGY artifacts or implement offload.
 
 The default restriction challenge requests a small, roughly 64-byte-class result
-and sends `enabledTools: []`. It asks for a native write to a scratch canary, then
-MCP recovery. Only the registered MCP tool may receive `allow_once`; other permission
+and sends `enabledTools: []`. Its temporary workspace contains the native-write
+canary, so an outside-workspace denial cannot substitute for the intended challenge.
+It asks for that native write, then MCP recovery. Only the registered MCP tool may receive `allow_once`; other permission
 requests are denied. Actual tool and permission notifications, the execution audit,
 recovered receipt, and unchanged canary are checked.
 
@@ -68,14 +70,19 @@ a denied operation nor confinement.
 Bulk attempts request 64 KiB, 256 KiB, 1 MiB, then 4 MiB, stopping at actual offload.
 Each attempt gets a new source and session. A source permits at most two successful
 calls to expose retry while bounding amplification; the diagnostic requires exactly
-one audited execution. Prompts, seeded files, and invented references are not evidence.
+one audited execution. Offload sessions use Bridge's native workspace,
+`GEMINI_HOME/antigravity-acp`, so generated brain artifacts fall inside AGY's own
+workspace guard. Each attempt records its actual cwd. Prompts, seeded files, and
+invented references are not evidence.
 
 The text-only reader accepts only current-session generated steps and exact MCP
 metadata paths. It rejects other paths and unsafe files, uses immutable bounded
 snapshots/pages and the production `start_line` continuation footer. AGY may read
 its own tool metadata before execution; each callback records the execution count.
 Such reads cannot prove result offload. Recovery must match the tail receipt from
-exactly one actual MCP execution.
+exactly one actual MCP execution. The system instructions explicitly require
+converting a local `file://` reference to an absolute filesystem path. The reader
+still rejects URI-valued RPC paths; it does not normalize them to make a check pass.
 
 Client Read PASS requires an observed offload reference/read, an AGY artifact
 containing the handler-only receipt, an actual first-page RPC followed by a later
@@ -104,10 +111,17 @@ joined before scratch removal. Cleanup deadline expiry is FAIL with possible
 retained scratch, not a claim of removal.
 
 The prior basic direct ACP live run against 1.4.5 passed configuration, instruction,
-memory, red-pixel input, load, and cleanup checks; raw usage was observed. The new
-tool restriction, text offload, and Client Read path has not been verified live.
+memory, red-pixel input, load, and cleanup checks; raw usage was observed. A later
+run produced a real offload from a 64 KiB-class MCP result. Its first Client Read
+RPC passed a `file://` URI and was rejected; later workspace-file reads were also
+rejected. The saved artifact's tail matches the source audit, but manual artifact
+inspection is not a successful ACP Client Read. Native enforcement was NOT_REACHED.
+
+That run used a temporary offload cwd and omitted the explicit URI-conversion
+instruction, unlike Bridge. The corrected workspace/instructions have passed only
+offline checks; no new live recovery pass is claimed.
 The user's existing managed ACP 1.4.5 passed read-only validation without download
 or backend startup after the reuse change.
 Offline tests/typechecking are separate evidence, not live compatibility proof;
-the current offline suite reports 2,176 PASS, 13 SKIP and zero failures. Pi/provider integration, history
+the current offline suite reports 2,177 PASS, 13 SKIP and zero failures. Pi/provider integration, history
 reconstruction, compaction, Pi accounting, and image offload are outside this scope.
