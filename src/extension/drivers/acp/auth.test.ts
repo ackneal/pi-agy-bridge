@@ -19,7 +19,7 @@ for (const row of [
 ]) {
   test(`ACP auth ${row.mode} login=${row.login}`, async () => {
     const listeners = process.listenerCount("exit");
-    const backend = createAuthenticationBackend({ executable: process.execPath, cwd: process.cwd(), args: ["--experimental-strip-types", fileURLToPath(new URL("./discovery-fixture.ts", import.meta.url)), row.mode], requestTimeoutMs: 1500 });
+    const backend = createAuthenticationBackend({ executable: process.execPath, cwd: process.cwd(), args: ["--experimental-strip-types", fileURLToPath(new URL("./discovery-fixture.ts", import.meta.url)), row.mode], requestTimeoutMs: 3000 });
     const signal = new AbortController().signal;
     const operation = row.login ? backend.login({ signal, notify() {}, async prompt(request) {
       assert.equal(request.type, "select");

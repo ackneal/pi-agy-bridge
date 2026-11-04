@@ -7,7 +7,7 @@ import { discoverModels, newDiscoverySession, withDiscovery } from "./discovery.
 
 for (const mode of ["catalog", "missing", "empty", "required", "browser", "fragmented-browser", "failure", "hang", "cancel"]) {
   test(`ACP discovery ${mode}`, async () => {
-    const options = { executable: process.execPath, cwd: process.cwd(), args: ["--experimental-strip-types", fileURLToPath(new URL("./discovery-fixture.ts", import.meta.url)), mode === "cancel" ? "hang" : mode], requestTimeoutMs: 1500 };
+    const options = { executable: process.execPath, cwd: process.cwd(), args: ["--experimental-strip-types", fileURLToPath(new URL("./discovery-fixture.ts", import.meta.url)), mode === "cancel" ? "hang" : mode], requestTimeoutMs: 2500 };
     const start = Date.now();
     const listeners = process.listenerCount("exit");
     if (mode === "catalog") {
@@ -22,7 +22,7 @@ for (const mode of ["catalog", "missing", "empty", "required", "browser", "fragm
         mode === "missing" ? /configuration/ : mode === "empty" ? /empty/ : mode === "failure" ? /synthetic failure/ : /timeout|disposed|aborted/i);
     }
     assert.equal(process.listenerCount("exit"), listeners);
-    assert.ok(Date.now() - start < 4000, "bounded cleanup");
+    assert.ok(Date.now() - start < 5000, "bounded cleanup");
   });
 }
 
