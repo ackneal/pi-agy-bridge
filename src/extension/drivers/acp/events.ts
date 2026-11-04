@@ -1,7 +1,7 @@
 import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { PromptResponse, Usage } from "@agentclientprotocol/sdk/unstable";
 import type { RuntimeEvent } from "../types.ts";
-import { isRegisteredPiMcpTool, PI_MCP_SERVER } from "./permissions.ts";
+import { PI_MCP_SERVER } from "./permissions.ts";
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -44,38 +44,49 @@ function isClientViewFile(call: ToolCallUpdate): boolean {
     call.kind === "read" && call._meta?.mcp === undefined;
 }
 
-interface LazyMcpCall {
-  server: string;
-  tool: string;
-  args: unknown;
+type McpIdentity = { server?: string; tool?: string };
+
+function lazyTool(call: ToolCallUpdate): boolean {
+  const name = call.name ?? call.title?.trim().replace(/^running\\s+/i, "");
+  return name?.trim() === "call_mcp_tool";
 }
 
-function getLazyMcpCall(call: ToolCallUpdate, identity?: Pick<LazyMcpCall, "server" | "tool">): LazyMcpCall | undefined {
-  const name = call.name ?? (call.title ? call.title.trim().replace(/^running\s+/i, "") : undefined);
-  if (name?.trim() !== "call_mcp_tool" || !record(call.rawInput)) return undefined;
-
-  const server = (typeof call.rawInput.ServerName === "string"
-    ? call.rawInput.ServerName
-    : typeof call.rawInput.server === "string"
-      ? call.rawInput.server
-      : undefined) || identity?.server;
-  const tool = (typeof call.rawInput.ToolName === "string"
-    ? call.rawInput.ToolName
-    : typeof call.rawInput.tool === "string"
-      ? call.rawInput.tool
-      : undefined) || identity?.tool;
-  if (!server || !tool) return undefined;
-
-  const args = "Arguments" in call.rawInput
-    ? call.rawInput.Arguments
-    : "arguments" in call.rawInput
-      ? call.rawInput.arguments
-      : call.rawInput;
-
-  return { server, tool, args };
+function mcpIdentity(value: unknown): McpIdentity | undefined {
+  if (!record(value)) return undefined;
+  const server = typeof value.server === "string" ? value.server : undefined;
+  const tool = typeof value.tool === "string" ? value.tool : undefined;
+  return server !== undefined || tool !== undefined ? { server, tool } : undefined;
 }
 
-type ObservedCall = { call: ToolCallUpdate; lazyIdentity?: Pick<LazyMcpCall, "server" | "tool">; warned?: boolean };
+function lazyIdentity(value: unknown): McpIdentity | undefined {
+  if (!record(value)) return undefined;
+  const server = typeof value.ServerName === "string" ? value.ServerName : undefined;
+  const tool = typeof value.ToolName === "string" ? value.ToolName : undefined;
+  return server !== undefined || tool !== undefined ? { server, tool } : undefined;
+}
+
+function conflicts(a?: McpIdentity, b?: McpIdentity): boolean {
+  return !!(a && b && (a.server !== undefined && b.server !== undefined && a.server !== b.server ||
+    a.tool !== undefined && b.tool !== undefined && a.tool !== b.tool));
+}
+
+function identity(call: ToolCallUpdate): { value?: McpIdentity; conflict: boolean } {
+  const standard = mcpIdentity(call._meta?.mcp);
+  const lazy = lazyTool(call) ? lazyIdentity(call.rawInput) : undefined;
+  return {
+    conflict: conflicts(standard, lazy),
+    value: standard || lazy ? { ...lazy, ...standard } : undefined,
+  };
+}
+
+export function validateMcpIdentity(value: McpIdentity | undefined, allowed: ReadonlySet<string>): "allowed" | "rejected" | "incomplete" {
+  if (!value) return "incomplete";
+  if (value.server !== undefined && value.server !== PI_MCP_SERVER) return "rejected";
+  if (value.tool !== undefined && !allowed.has(value.tool)) return "rejected";
+  return value.server !== undefined && value.tool !== undefined ? "allowed" : "incomplete";
+}
+
+type ObservedCall = { call: ToolCallUpdate; warned?: boolean };
 
 export class EventProcessor {
   private readonly calls = new Map<string, ObservedCall>();
@@ -122,18 +133,20 @@ export class EventProcessor {
       if (prior?.warned) return;
       const before = prior?.call._meta?.mcp;
       const after = update._meta?.mcp;
-      if (record(before) && record(after) && ["server", "tool"].some((key) =>
-        before[key] !== undefined && after[key] !== undefined && before[key] !== after[key])) {
-        this.warn({ ...prior!.call, ...update, _meta: { ...prior!.call._meta, ...update._meta, mcp: { ...before, ...after } } }, emit);
-        return;
-      }
+      const previousIdentity = prior ? identity(prior.call).value : undefined;
+      const incomingStandard = mcpIdentity(after);
+      const incomingLazy = lazyTool({ ...prior?.call, ...update }) ? lazyIdentity(update.rawInput) : undefined;
       const call = { ...prior?.call, ...update };
       if (prior?.call._meta) call._meta = { ...prior.call._meta, ...update._meta };
-      // Malformed increments must not erase an established identity before a later conflict.
       if (record(before)) call._meta = { ...call._meta, mcp: record(after) ? { ...before, ...after } : before };
       if (record(prior?.call.rawInput) && record(update.rawInput)) call.rawInput = { ...prior.call.rawInput, ...update.rawInput };
       this.calls.set(id, { ...prior, call });
-      this.check(id, emit, update.status === "completed" || update.status === "failed");
+      if (conflicts(previousIdentity, incomingStandard) || conflicts(previousIdentity, incomingLazy) ||
+        conflicts(incomingStandard, incomingLazy) || identity(call).conflict) {
+        this.warn(call, emit);
+      } else {
+        this.check(id, emit, update.status === "completed" || update.status === "failed");
+      }
     } else if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
       emit({ type: "session-reference", reference: this.sessionId });
       if (update.content.text.length > 0) emit({ type: "text-delta", delta: update.content.text });
@@ -145,30 +158,13 @@ export class EventProcessor {
     if (!entry || entry.warned) return;
 
     const { call } = entry;
-    const mcp = call._meta?.mcp;
-    const lazy = getLazyMcpCall(call, entry.lazyIdentity);
-    if (lazy && entry.lazyIdentity &&
-      (lazy.server !== entry.lazyIdentity.server || lazy.tool !== entry.lazyIdentity.tool)) {
+    const parsed = identity(call);
+    const decision = validateMcpIdentity(parsed.value, this.allowedToolNames);
+    if (parsed.conflict || decision === "rejected") {
       this.warn(call, emit);
       return;
     }
-    if (lazy && lazy.server === PI_MCP_SERVER && this.allowedToolNames.has(lazy.tool)) {
-      entry.lazyIdentity = { server: lazy.server, tool: lazy.tool };
-    }
-
-    if (isRegisteredPiMcpTool(mcp, this.allowedToolNames)) return;
-
-    if (record(mcp) && (typeof mcp.server === "string" && mcp.server !== PI_MCP_SERVER ||
-      typeof mcp.server === "string" && typeof mcp.tool === "string")) {
-      this.warn(call, emit);
-      return;
-    }
-
-    if (lazy) {
-      if (lazy.server === PI_MCP_SERVER && this.allowedToolNames.has(lazy.tool)) return;
-      this.warn(call, emit);
-      return;
-    }
+    if (decision === "allowed") return;
 
     // Notifications describe activity; only the Artifact Reader authorizes client reads.
     // RPC ordering, read failures, and paths do not change this classification.
@@ -186,22 +182,11 @@ export class EventProcessor {
     if (entry?.warned) return;
     if (entry) entry.warned = true;
 
-    const mcp = call._meta?.mcp;
-    const lazy = getLazyMcpCall(call, entry?.lazyIdentity);
-
-    let name = (call.title ?? call.name ?? call.kind ?? "unverified ACP tool").replace(/^Running /, "");
-    if (record(mcp) && typeof mcp.tool === "string") {
-      name = mcp.tool;
-    } else if (lazy) {
-      name = lazy.tool;
-    }
-
-    let args = call.rawInput;
-    if (record(mcp) && record(call.rawInput) && record(call.rawInput.arguments)) {
-      args = call.rawInput.arguments;
-    } else if (lazy && lazy.args !== undefined) {
-      args = lazy.args;
-    }
+    const parsed = identity(call).value;
+    const name = parsed?.tool ?? (call.title ?? call.name ?? call.kind ?? "unverified ACP tool").replace(/^Running /, "");
+    const raw = call.rawInput;
+    const args = record(raw) && lazyTool(call) && "Arguments" in raw ? raw.Arguments
+      : record(raw) && record(raw.arguments) ? raw.arguments : raw;
 
     emit({ type: "tool-warning", name, args });
   }
