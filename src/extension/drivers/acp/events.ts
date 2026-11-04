@@ -75,7 +75,7 @@ function identity(call: ToolCallUpdate): { value?: McpIdentity; conflict: boolea
   const lazy = lazyTool(call) ? lazyIdentity(call.rawInput) : undefined;
   return {
     conflict: conflicts(standard, lazy),
-    value: standard || lazy ? { ...lazy, ...standard } : undefined,
+    value: standard || lazy ? { server: standard?.server ?? lazy?.server, tool: standard?.tool ?? lazy?.tool } : undefined,
   };
 }
 
