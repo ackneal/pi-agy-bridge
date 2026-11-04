@@ -55,7 +55,7 @@ function mcpIdentity(value: unknown): McpIdentity | undefined {
   if (!record(value)) return undefined;
   const server = typeof value.server === "string" ? value.server : undefined;
   const tool = typeof value.tool === "string" ? value.tool : undefined;
-  return server !== undefined || tool !== undefined ? { server, tool } : undefined;
+  return server !== undefined || tool !== undefined ? { ...(server !== undefined ? { server } : {}), ...(tool !== undefined ? { tool } : {}) } : undefined;
 }
 
 function lazyIdentity(value: unknown): McpIdentity | undefined {
@@ -73,9 +73,14 @@ function conflicts(a?: McpIdentity, b?: McpIdentity): boolean {
 function identity(call: ToolCallUpdate): { value?: McpIdentity; conflict: boolean } {
   const standard = mcpIdentity(call._meta?.mcp);
   const lazy = lazyTool(call) ? lazyIdentity(call.rawInput) : undefined;
+  const server = standard?.server ?? lazy?.server;
+  const tool = standard?.tool ?? lazy?.tool;
   return {
     conflict: conflicts(standard, lazy),
-    value: standard || lazy ? { server: standard?.server ?? lazy?.server, tool: standard?.tool ?? lazy?.tool } : undefined,
+    ...(standard || lazy ? { value: {
+      ...(server !== undefined ? { server } : {}),
+      ...(tool !== undefined ? { tool } : {}),
+    } } : {}),
   };
 }
 
@@ -147,7 +152,9 @@ export class EventProcessor {
       const incomingLazy = lazyTool({ ...prior?.call, ...update }) ? lazyIdentity(update.rawInput) : undefined;
       const call = { ...prior?.call, ...update };
       for (const key of ["name", "title"] as const) {
-        if (call[key] === undefined || call[key] === null || call[key] === "") call[key] = prior?.call[key];
+        if ((call[key] === undefined || call[key] === null || call[key] === "") && prior?.call[key] !== undefined) {
+          call[key] = prior.call[key];
+        }
       }
       if (prior?.call._meta) call._meta = { ...prior.call._meta, ...update._meta };
       if (record(before)) call._meta = { ...call._meta, mcp: record(after)
