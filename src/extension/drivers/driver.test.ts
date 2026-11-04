@@ -8,6 +8,7 @@ import { Driver as AcpDriver } from "./acp/driver.ts";
 import { prepareRuntime as prepareAcpRuntime } from "./acp/prepare.ts";
 import { Driver as CliDriver } from "./cli/driver.ts";
 import { prepareRuntime as prepareCliRuntime, resolveModelAndEffort } from "./cli/session.ts";
+import { Driver as CliAcpDriver } from "./cli-acp/driver.ts";
 import { createBridgeDriver } from "./driver.ts";
 import { parseModelsOutput } from "../discovery/models.ts";
 import { LiveSession } from "../session/session.ts";
@@ -17,7 +18,8 @@ describe("createBridgeDriver", () => {
     { name: "default", id: undefined, expected: "acp" },
     { name: "ACP", id: "acp", expected: "acp" },
     { name: "CLI", id: "cli", expected: "cli" },
-  ] satisfies { name: string; id: DriverId | undefined; expected: "cli" | "acp" }[]) {
+    { name: "CLI-ACP", id: "cli-acp", expected: "cli-acp" },
+  ] satisfies { name: string; id: DriverId | undefined; expected: DriverId }[]) {
     test(`driver selection does not detect or fall back: ${scenario.name}`, (t) => {
       const unexpected = () => { throw new Error("Selection must not inspect executables or authentication"); };
       const inspections = [
@@ -34,7 +36,7 @@ describe("createBridgeDriver", () => {
 
       assert.equal(driver.id, scenario.expected);
       assert.equal(driver.sessionVersion, `${scenario.expected}:v1`);
-      assert.ok(driver instanceof (scenario.expected === "acp" ? AcpDriver : CliDriver));
+      assert.ok(driver instanceof (scenario.expected === "acp" ? AcpDriver : scenario.expected === "cli" ? CliDriver : CliAcpDriver));
       for (const inspection of inspections) assert.equal(inspection.mock.callCount(), 0);
       if (scenario.expected === "acp") {
         assert.ok(driver.initialModels.some((model) => model.id === "gemini-3.8-flash"));

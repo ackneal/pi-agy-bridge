@@ -70,7 +70,7 @@ export interface BridgeDriver {
   detectExecutable(): string | undefined;
 }
 
-export type DriverId = "cli" | "acp";
+export type DriverId = "cli" | "acp" | "cli-acp";
 
 export interface DriverSubmission {
   model: Model<any>;

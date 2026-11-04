@@ -64,6 +64,7 @@ async function handleLine(line, socket, inFlight) {
 
   try {
     switch (request.method) {
+      case "server/discover":
       case "initialize":
         writeResult(id, {
           protocolVersion: protocolVersion(request.params),
@@ -133,9 +134,13 @@ function requestId(value) {
 }
 
 function protocolVersion(params) {
-  return isRecord(params) && typeof params.protocolVersion === "string"
-    ? params.protocolVersion
-    : "2025-06-18";
+  if (isRecord(params)) {
+    if (typeof params.protocolVersion === "string") return params.protocolVersion;
+    if (isRecord(params._meta) && typeof params._meta["io.modelcontextprotocol/protocolVersion"] === "string") {
+      return params._meta["io.modelcontextprotocol/protocolVersion"];
+    }
+  }
+  return "2025-06-18";
 }
 
 function debugLog(...args) {
