@@ -47,7 +47,7 @@ function isClientViewFile(call: ToolCallUpdate): boolean {
 type McpIdentity = { server?: string; tool?: string };
 
 function lazyTool(call: ToolCallUpdate): boolean {
-  const name = call.name ?? call.title?.trim().replace(/^running\\s+/i, "");
+  const name = call.name === "call_mcp_tool" ? call.name : call.title?.trim().replace(/^running\s+/i, "");
   return name?.trim() === "call_mcp_tool";
 }
 
@@ -79,7 +79,7 @@ function identity(call: ToolCallUpdate): { value?: McpIdentity; conflict: boolea
   };
 }
 
-export function validateMcpIdentity(value: McpIdentity | undefined, allowed: ReadonlySet<string>): "allowed" | "rejected" | "incomplete" {
+function validateMcpIdentity(value: McpIdentity | undefined, allowed: ReadonlySet<string>): "allowed" | "rejected" | "incomplete" {
   if (!value) return "incomplete";
   if (value.server !== undefined && value.server !== PI_MCP_SERVER) return "rejected";
   if (value.tool !== undefined && !allowed.has(value.tool)) return "rejected";
@@ -137,9 +137,17 @@ export class EventProcessor {
       const incomingStandard = mcpIdentity(after);
       const incomingLazy = lazyTool({ ...prior?.call, ...update }) ? lazyIdentity(update.rawInput) : undefined;
       const call = { ...prior?.call, ...update };
+      for (const key of ["name", "title"] as const) {
+        if (call[key] === undefined || call[key] === null || call[key] === "") call[key] = prior?.call[key];
+      }
       if (prior?.call._meta) call._meta = { ...prior.call._meta, ...update._meta };
-      if (record(before)) call._meta = { ...call._meta, mcp: record(after) ? { ...before, ...after } : before };
-      if (record(prior?.call.rawInput) && record(update.rawInput)) call.rawInput = { ...prior.call.rawInput, ...update.rawInput };
+      if (record(before)) call._meta = { ...call._meta, mcp: record(after)
+        ? { ...before, ...Object.fromEntries(Object.entries(after).filter(([, value]) => value !== undefined)) } : before };
+      if (record(prior?.call.rawInput)) {
+        call.rawInput = record(update.rawInput)
+          ? { ...prior.call.rawInput, ...Object.fromEntries(Object.entries(update.rawInput).filter(([, value]) => value !== undefined)) }
+          : prior.call.rawInput;
+      }
       this.calls.set(id, { ...prior, call });
       if (conflicts(previousIdentity, incomingStandard) || conflicts(previousIdentity, incomingLazy) ||
         conflicts(incomingStandard, incomingLazy) || identity(call).conflict) {
