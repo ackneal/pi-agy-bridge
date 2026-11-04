@@ -86,6 +86,15 @@ function validateMcpIdentity(value: McpIdentity | undefined, allowed: ReadonlySe
   return value.server !== undefined && value.tool !== undefined ? "allowed" : "incomplete";
 }
 
+// Keep known identity fields when an incremental notification omits or malforms them.
+function mergeFields(previous: Record<string, unknown>, incoming: Record<string, unknown>, identityKeys: readonly string[]): Record<string, unknown> {
+  const merged = { ...previous, ...incoming };
+  for (const key of identityKeys) {
+    if (typeof previous[key] === "string" && typeof incoming[key] !== "string") merged[key] = previous[key];
+  }
+  return merged;
+}
+
 type ObservedCall = { call: ToolCallUpdate; warned?: boolean };
 
 export class EventProcessor {
@@ -142,10 +151,10 @@ export class EventProcessor {
       }
       if (prior?.call._meta) call._meta = { ...prior.call._meta, ...update._meta };
       if (record(before)) call._meta = { ...call._meta, mcp: record(after)
-        ? { ...before, ...Object.fromEntries(Object.entries(after).filter(([, value]) => value !== undefined)) } : before };
+        ? mergeFields(before, after, ["server", "tool"]) : before };
       if (record(prior?.call.rawInput)) {
         call.rawInput = record(update.rawInput)
-          ? { ...prior.call.rawInput, ...Object.fromEntries(Object.entries(update.rawInput).filter(([, value]) => value !== undefined)) }
+          ? mergeFields(prior.call.rawInput, update.rawInput, ["ServerName", "ToolName"])
           : prior.call.rawInput;
       }
       this.calls.set(id, { ...prior, call });
