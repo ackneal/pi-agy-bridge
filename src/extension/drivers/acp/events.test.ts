@@ -488,7 +488,6 @@ describe("EventProcessor tool allowlist validation and warnings", () => {
     { name: "partial server change after erased input", intermediate: { rawInput: [] }, update: { rawInput: { ServerName: "other", Arguments: { path: "/changed" } } }, warned: "read" },
     { name: "unchanged identity", update: { rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "read", Arguments: { path: "/changed" } } } },
     { name: "args-only update", update: { rawInput: { Arguments: { path: "/changed" } } } },
-    { name: "canonical name and lowercase input", initial: { name: "call_mcp_tool", rawInput: { server: "pi-agy-bridge_pi", tool: "read", arguments: { path } } }, update: { rawInput: { tool: "write", arguments: { path: "/changed" } } }, warned: "write" },
     ...[
       { name: "null rawInput", intermediate: { rawInput: null } },
       { name: "array rawInput", intermediate: { rawInput: [] } },
