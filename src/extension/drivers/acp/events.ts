@@ -50,20 +50,20 @@ interface LazyMcpCall {
   args: unknown;
 }
 
-function getLazyMcpCall(call: ToolCallUpdate): LazyMcpCall | undefined {
+function getLazyMcpCall(call: ToolCallUpdate, identity?: Pick<LazyMcpCall, "server" | "tool">): LazyMcpCall | undefined {
   const name = call.name ?? (call.title ? call.title.trim().replace(/^running\s+/i, "") : undefined);
   if (name?.trim() !== "call_mcp_tool" || !record(call.rawInput)) return undefined;
 
-  const server = typeof call.rawInput.ServerName === "string"
+  const server = (typeof call.rawInput.ServerName === "string"
     ? call.rawInput.ServerName
     : typeof call.rawInput.server === "string"
       ? call.rawInput.server
-      : undefined;
-  const tool = typeof call.rawInput.ToolName === "string"
+      : undefined) || identity?.server;
+  const tool = (typeof call.rawInput.ToolName === "string"
     ? call.rawInput.ToolName
     : typeof call.rawInput.tool === "string"
       ? call.rawInput.tool
-      : undefined;
+      : undefined) || identity?.tool;
   if (!server || !tool) return undefined;
 
   const args = "Arguments" in call.rawInput
@@ -75,7 +75,7 @@ function getLazyMcpCall(call: ToolCallUpdate): LazyMcpCall | undefined {
   return { server, tool, args };
 }
 
-type ObservedCall = { call: ToolCallUpdate; warned?: boolean };
+type ObservedCall = { call: ToolCallUpdate; lazyIdentity?: Pick<LazyMcpCall, "server" | "tool">; warned?: boolean };
 
 export class EventProcessor {
   private readonly calls = new Map<string, ObservedCall>();
@@ -132,7 +132,7 @@ export class EventProcessor {
       // Malformed increments must not erase an established identity before a later conflict.
       if (record(before)) call._meta = { ...call._meta, mcp: record(after) ? { ...before, ...after } : before };
       if (record(prior?.call.rawInput) && record(update.rawInput)) call.rawInput = { ...prior.call.rawInput, ...update.rawInput };
-      this.calls.set(id, { call });
+      this.calls.set(id, { ...prior, call });
       this.check(id, emit, update.status === "completed" || update.status === "failed");
     } else if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
       emit({ type: "session-reference", reference: this.sessionId });
@@ -146,6 +146,16 @@ export class EventProcessor {
 
     const { call } = entry;
     const mcp = call._meta?.mcp;
+    const lazy = getLazyMcpCall(call, entry.lazyIdentity);
+    if (lazy && entry.lazyIdentity &&
+      (lazy.server !== entry.lazyIdentity.server || lazy.tool !== entry.lazyIdentity.tool)) {
+      this.warn(call, emit);
+      return;
+    }
+    if (lazy && lazy.server === PI_MCP_SERVER && this.allowedToolNames.has(lazy.tool)) {
+      entry.lazyIdentity = { server: lazy.server, tool: lazy.tool };
+    }
+
     if (isRegisteredPiMcpTool(mcp, this.allowedToolNames)) return;
 
     if (record(mcp) && (typeof mcp.server === "string" && mcp.server !== PI_MCP_SERVER ||
@@ -154,7 +164,6 @@ export class EventProcessor {
       return;
     }
 
-    const lazy = getLazyMcpCall(call);
     if (lazy) {
       if (lazy.server === PI_MCP_SERVER && this.allowedToolNames.has(lazy.tool)) return;
       this.warn(call, emit);
@@ -178,7 +187,7 @@ export class EventProcessor {
     if (entry) entry.warned = true;
 
     const mcp = call._meta?.mcp;
-    const lazy = getLazyMcpCall(call);
+    const lazy = getLazyMcpCall(call, entry?.lazyIdentity);
 
     let name = (call.title ?? call.name ?? call.kind ?? "unverified ACP tool").replace(/^Running /, "");
     if (record(mcp) && typeof mcp.tool === "string") {

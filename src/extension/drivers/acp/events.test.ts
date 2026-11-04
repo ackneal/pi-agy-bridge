@@ -481,6 +481,84 @@ describe("EventProcessor tool allowlist validation and warnings", () => {
     });
   }
 
+  for (const row of [
+    { name: "allowed read changes to allowed write", update: { rawInput: { ToolName: "write", Arguments: { path: "/changed" } } }, warned: "write" },
+    { name: "server changes", update: { rawInput: { ServerName: "other", Arguments: { path: "/changed" } } }, warned: "read" },
+    { name: "partial tool change after erased input", intermediate: { rawInput: null }, update: { rawInput: { ToolName: "write", Arguments: { path: "/changed" } } }, warned: "write" },
+    { name: "partial server change after erased input", intermediate: { rawInput: [] }, update: { rawInput: { ServerName: "other", Arguments: { path: "/changed" } } }, warned: "read" },
+    { name: "unchanged identity", update: { rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "read", Arguments: { path: "/changed" } } } },
+    { name: "args-only update", update: { rawInput: { Arguments: { path: "/changed" } } } },
+    { name: "canonical name and lowercase input", initial: { name: "call_mcp_tool", rawInput: { server: "pi-agy-bridge_pi", tool: "read", arguments: { path } } }, update: { rawInput: { tool: "write", arguments: { path: "/changed" } } }, warned: "write" },
+    ...[
+      { name: "null rawInput", intermediate: { rawInput: null } },
+      { name: "array rawInput", intermediate: { rawInput: [] } },
+      { name: "malformed identity fields", intermediate: { rawInput: { ServerName: null, ToolName: [] } } },
+      { name: "empty title", intermediate: { title: "" } },
+      { name: "empty canonical name", intermediate: { name: "" } },
+    ].map(({ name, intermediate }) => ({
+      name: `${name} cannot erase confirmed identity`, intermediate,
+      update: { name: "call_mcp_tool", title: "Running call_mcp_tool", rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "write", Arguments: { path: "/changed" } } }, warned: "write",
+    })),
+  ] satisfies { name: string; initial?: Partial<ToolCallUpdate>; intermediate?: Partial<ToolCallUpdate>; update: Partial<ToolCallUpdate>; warned?: string }[]) {
+    test(`lazy MCP identity stability: ${row.name}`, () => {
+      const processor = new EventProcessor("session", new Set(["read", "write"]));
+      const events: RuntimeEvent[] = [];
+      const emit = (event: RuntimeEvent) => events.push(event);
+      const process = (update: Partial<ToolCallUpdate>) => processor.process({ sessionId: "session", update: {
+        sessionUpdate: "tool_call_update", toolCallId: "lazy", ...update,
+      } }, "live", emit);
+
+      process("initial" in row ? row.initial : { title: "Running call_mcp_tool", rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "read", Arguments: { path } } });
+      assert.deepEqual(events, [], "initial allowed identity must not warn");
+      if ("intermediate" in row) {
+        process(row.intermediate);
+        assert.deepEqual(events, [], "malformed increment must not warn before a valid conflict");
+      }
+      process(row.update);
+
+      const expected: RuntimeEvent[] = "warned" in row ? [{ type: "tool-warning", name: row.warned, args: { path: "/changed" } }] : [];
+      assert.deepEqual(events, expected, "identity conflicts must warn immediately with the changed tool and unwrapped args");
+      process(row.update);
+      process({ status: "completed" });
+      processor.complete({ stopReason: "end_turn" }, emit);
+      assert.deepEqual(events, [...expected, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }], "repeated updates and completion must not duplicate warnings");
+    });
+  }
+
+  for (const scope of ["next prompt", "another ID"] as const) {
+    test(`lazy MCP identity is isolated from ${scope}`, () => {
+      const processor = new EventProcessor("session", new Set(["read", "write"]));
+      const events: RuntimeEvent[] = [];
+      const emit = (event: RuntimeEvent) => events.push(event);
+      const process = (toolCallId: string, tool: string) => processor.process({ sessionId: "session", update: {
+        sessionUpdate: "tool_call_update", toolCallId, title: "call_mcp_tool",
+        rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: tool, Arguments: { path } },
+      } }, "live", emit);
+
+      process("first", "read");
+      if (scope === "next prompt") {
+        process("first", "write");
+        assert.deepEqual(events, [{ type: "tool-warning", name: "write", args: { path } }]);
+        processor.complete({ stopReason: "end_turn" }, emit);
+        events.length = 0;
+      }
+      const id = scope === "next prompt" ? "first" : "second";
+      process(id, "write");
+      assert.deepEqual(events, [], "a fresh call must inherit neither identity nor warning state");
+      process(id, "read");
+      assert.deepEqual(events, [{ type: "tool-warning", name: "read", args: { path } }]);
+      if (scope === "another ID") {
+        process("first", "write");
+        assert.deepEqual(events, [
+          { type: "tool-warning", name: "read", args: { path } },
+          { type: "tool-warning", name: "write", args: { path } },
+        ], "warning one ID must not suppress conflicts on another");
+      }
+      processor.complete({ stopReason: "end_turn" }, emit);
+      assert.equal(Array.from<RuntimeEvent>(events).filter((event) => event.type === "tool-warning").length, scope === "next prompt" ? 1 : 2);
+    });
+  }
+
   for (const replacement of [null, "", []]) {
     test(`malformed MCP metadata cannot erase prior identity: ${JSON.stringify(replacement)}`, () => {
       const processor = new EventProcessor("session", new Set(["read", "write"]));
