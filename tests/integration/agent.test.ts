@@ -56,13 +56,13 @@ tools: [view_file]
     assert.doesNotMatch(markdown, /session ID|conversation ID|PTY ID|socket|tool snapshot/i);
   });
 
-  it("keeps standalone frontmatter and output-only instructions exact", async () => {
+  it("keeps standalone selectable as a CLI main agent with no tools and output-only instructions", async () => {
     const markdown = await readFile(`${pluginDir}/agents/pi-standalone.md`, "utf-8");
 
     assert.equal(markdown, `---
 name: pi-standalone
 description: Pi capability bridge standalone runtime without tools
-mainAgent: false
+mainAgent: true
 subagent: false
 commandExecutionPolicy: sandbox
 excludeDefaultComponents: true
