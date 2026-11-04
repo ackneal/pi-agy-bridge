@@ -1,7 +1,7 @@
 ---
 name: pi-standalone
 description: Pi capability bridge standalone runtime without tools
-mainAgent: false
+mainAgent: true
 subagent: false
 commandExecutionPolicy: sandbox
 excludeDefaultComponents: true
