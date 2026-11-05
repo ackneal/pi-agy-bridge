@@ -1,7 +1,7 @@
 import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { PromptResponse, Usage } from "@agentclientprotocol/sdk/unstable";
 import type { RuntimeEvent } from "../types.ts";
-import { isRegisteredPiMcpTool, PI_MCP_SERVER } from "./permissions.ts";
+import { isRegisteredPiMcpTool, PI_MCP_SERVER } from "../mcp-identity.ts";
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

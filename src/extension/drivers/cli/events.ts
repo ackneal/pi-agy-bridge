@@ -1,6 +1,7 @@
 import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { PromptResponse, Usage } from "@agentclientprotocol/sdk/unstable";
 import type { RuntimeEvent } from "../types.ts";
+import { isRegisteredPiMcpTool, PI_MCP_SERVER } from "../mcp-identity.ts";
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -44,11 +45,25 @@ function isAllowedNativeTool(call: ToolCallUpdate): boolean {
   return normalized === "view_file" || normalized === "running view_file";
 }
 
-function isRegisteredPiMcpTool(mcp: unknown, allowedToolNames: ReadonlySet<string>): boolean {
-  return record(mcp) && mcp.server === "pi-agy-bridge_pi" && typeof mcp.tool === "string" && allowedToolNames.has(mcp.tool);
+function getMcpCall(call: ToolCallUpdate): { server: string; tool: string; args: unknown; displayTool: string | undefined } | undefined {
+  if (!record(call.rawInput)) return undefined;
+
+  const { ServerName: server, ToolName: tool } = call.rawInput;
+  if (typeof server !== "string" || !server || typeof tool !== "string" || !tool) return undefined;
+
+  const title = call.title?.trim().replace(/^running\s+/i, "");
+  const displayTool = title?.startsWith("MCP Tool ") ? title.slice("MCP Tool ".length) : undefined;
+  if (call.name !== "call_mcp_tool" && title !== "call_mcp_tool" && displayTool === undefined) return undefined;
+
+  return { server, tool, args: "Arguments" in call.rawInput ? call.rawInput.Arguments : call.rawInput, displayTool };
 }
 
-type ObservedCall = { call: ToolCallUpdate; warned?: boolean };
+type ObservedCall = {
+  call: ToolCallUpdate;
+  // Keep the first identity even when a replacement snapshot is incomplete.
+  identity: { server: string; tool: string } | undefined;
+  warned?: boolean;
+};
 
 export class EventProcessor {
   private readonly calls = new Map<string, ObservedCall>();
@@ -98,11 +113,20 @@ export class EventProcessor {
         this.warn({ ...prior!.call, ...update, _meta: { ...prior!.call._meta, ...update._meta, mcp: { ...before, ...after } } }, emit);
         return;
       }
-      const call = { ...prior?.call, ...update };
+      // ACP null fields preserve prior values; rawInput is a replacement snapshot.
+      const call: ToolCallUpdate = {
+        ...prior?.call, ...Object.fromEntries(Object.entries(update).filter(([, value]) => value !== null)), toolCallId: id,
+      };
       if (prior?.call._meta) call._meta = { ...prior.call._meta, ...update._meta };
       if (record(before)) call._meta = { ...call._meta, mcp: record(after) ? { ...before, ...after } : before };
-      if (record(prior?.call.rawInput) && record(update.rawInput)) call.rawInput = { ...prior.call.rawInput, ...update.rawInput };
-      this.calls.set(id, { call });
+      const currentMcp = getMcpCall(call) ??
+        (isRegisteredPiMcpTool(call._meta?.mcp, this.allowedToolNames) ? call._meta.mcp : undefined);
+      const identity = prior?.identity ?? (currentMcp && { server: currentMcp.server, tool: currentMcp.tool });
+      this.calls.set(id, { call, identity });
+      if (identity && currentMcp && (identity.server !== currentMcp.server || identity.tool !== currentMcp.tool)) {
+        this.warn(call, emit);
+        return;
+      }
       this.check(id, emit, update.status === "completed" || update.status === "failed");
     } else if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
       emit({ type: "session-reference", reference: this.sessionId });
@@ -115,12 +139,25 @@ export class EventProcessor {
     if (!entry || entry.warned) return;
     const { call } = entry;
     const mcp = call._meta?.mcp;
-    if (isRegisteredPiMcpTool(mcp, this.allowedToolNames)) return;
-    if (record(mcp) && (typeof mcp.server === "string" && mcp.server !== "pi-agy-bridge_pi" ||
-      typeof mcp.server === "string" && typeof mcp.tool === "string")) {
+    if (record(mcp) && !isRegisteredPiMcpTool(mcp, this.allowedToolNames) &&
+      (typeof mcp.server === "string" && mcp.server !== PI_MCP_SERVER ||
+        typeof mcp.server === "string" && typeof mcp.tool === "string")) {
       this.warn(call, emit);
       return;
     }
+
+    const wrapped = getMcpCall(call);
+    if (wrapped) {
+      if (!isRegisteredPiMcpTool(wrapped, this.allowedToolNames) ||
+        wrapped.displayTool !== undefined && wrapped.displayTool !== wrapped.tool ||
+        record(mcp) && (mcp.server !== undefined && mcp.server !== wrapped.server ||
+          mcp.tool !== undefined && mcp.tool !== wrapped.tool)) {
+        this.warn(call, emit);
+      }
+      return;
+    }
+
+    if (isRegisteredPiMcpTool(mcp, this.allowedToolNames)) return;
     if (isAllowedNativeTool(call)) return;
     if (final && (call.title !== undefined || call.kind !== undefined || call.rawInput !== undefined || call._meta !== undefined || call.name !== undefined)) {
       this.warn(call, emit);
@@ -133,10 +170,11 @@ export class EventProcessor {
     if (entry) entry.warned = true;
 
     const mcp = call._meta?.mcp;
+    const wrapped = getMcpCall(call);
     const name = record(mcp) && typeof mcp.tool === "string"
-      ? mcp.tool : (call.title ?? call.name ?? call.kind ?? "unverified tool").replace(/^Running /, "");
+      ? mcp.tool : wrapped?.tool ?? (call.title ?? call.name ?? call.kind ?? "unverified tool").replace(/^Running /, "");
     const args = record(mcp) && record(call.rawInput) && record(call.rawInput.arguments)
-      ? call.rawInput.arguments : call.rawInput;
+      ? call.rawInput.arguments : wrapped ? wrapped.args : call.rawInput;
     emit({ type: "tool-warning", name, args });
   }
 

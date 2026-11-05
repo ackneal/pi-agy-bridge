@@ -28,7 +28,7 @@ import { debugArtifact, debugLog } from "../shared/debug.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { synchronizeAgyAuthentication } from "./auth-sync.ts";
 import { collectDoctorReport, type DoctorOptions } from "./doctor.ts";
-import { formatAcpToolWarning } from "./tool-warning.ts";
+import { formatToolWarning } from "./tool-warning.ts";
 import { AcpInstallationProgress } from "./installation-progress.ts";
 import { ProgressStatus } from "./progress.ts";
 import { prepareBridgeMessages, prepareSystemMessages } from "./context-prompt.ts";
@@ -281,13 +281,13 @@ export class Bridge {
   }
 
   public warnTool(name: string, args: unknown): void {
-    const message = formatAcpToolWarning(name, args);
+    const message = formatToolWarning(this.driver.id, name, args);
     if (this.ui) {
       try {
         this.ui.notify(message, "warning");
         return;
       } catch (error) {
-        debugLog("warning", "Could not display ACP tool warning in Pi:", error);
+        debugLog("warning", "Could not display tool warning in Pi:", error);
       }
     }
     process.stderr.write(`${message}\n`);

@@ -1,4 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
+import type { DriverId } from "../drivers/types.ts";
 
 const MAX_NAME_LENGTH = 120;
 const MAX_ARGS_LENGTH = 1000;
@@ -22,10 +23,10 @@ function renderArgs(args: unknown): string {
   }
 }
 
-export function formatAcpToolWarning(name: string, args: unknown): string {
+export function formatToolWarning(driver: DriverId, name: string, args: unknown): string {
   const tool = bounded(stripVTControlCharacters(name)
     .replace(/[\r\n\t]/g, " ")
     .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ""), MAX_NAME_LENGTH);
 
-  return `Antigravity ACP: unverified tool activity — ${tool} ${renderArgs(args)}`;
+  return `Antigravity ${driver.toUpperCase()}: unverified tool activity — ${tool} ${renderArgs(args)}`;
 }

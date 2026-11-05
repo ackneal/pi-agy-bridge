@@ -103,6 +103,86 @@ describe("EventProcessor", () => {
     });
   }
 
+  const wrappedRead = {
+    toolCallId: "wrapped", title: "MCP Tool read", status: "in_progress",
+    rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "read", Arguments: { path: "README.md" } },
+  } satisfies ToolCallUpdate;
+  const wrappedCases: { name: string; calls: ToolCallUpdate[]; warned: boolean; replay?: boolean; sessionId?: string }[] = [
+    { name: "CLI read wrapper", calls: [wrappedRead], warned: false },
+    { name: "CLI bash wrapper", calls: [{ ...wrappedRead, title: "MCP Tool bash", rawInput: {
+      ServerName: "pi-agy-bridge_pi", ToolName: "bash", Arguments: { command: "git status" },
+    } }], warned: false },
+    { name: "running CLI wrapper", calls: [{ ...wrappedRead, title: " Running MCP Tool read " }], warned: false },
+    { name: "canonical lazy title", calls: [{ ...wrappedRead, title: "call_mcp_tool" }], warned: false },
+    { name: "canonical lazy name", calls: [{ ...wrappedRead, name: "call_mcp_tool", title: "Read a file" }], warned: false },
+    { name: "unrelated title cannot claim MCP", calls: [{ ...wrappedRead, title: "read" }], warned: true },
+    { name: "display tool must match raw identity", calls: [{ ...wrappedRead, title: "MCP Tool bash" }], warned: true },
+    { name: "canonical name cannot hide mismatched display", calls: [{ ...wrappedRead, name: "call_mcp_tool", title: "MCP Tool bash" }], warned: true },
+    { name: "metadata cannot hide mismatched foreign wrapper", calls: [{
+      ...wrappedRead, title: "MCP Tool bash", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } },
+      rawInput: { ...wrappedRead.rawInput, ServerName: "other" },
+    }], warned: true },
+    { name: "foreign server", calls: [{ ...wrappedRead, rawInput: { ...wrappedRead.rawInput, ServerName: "other" } }], warned: true },
+    { name: "unknown tool", calls: [{ ...wrappedRead, title: "MCP Tool unknown", rawInput: { ...wrappedRead.rawInput, ToolName: "unknown" } }], warned: true },
+    { name: "missing server", calls: [{ ...wrappedRead, rawInput: { ToolName: "read" } }], warned: true },
+    { name: "missing tool", calls: [{ ...wrappedRead, rawInput: { ServerName: "pi-agy-bridge_pi" } }], warned: true },
+    { name: "non-string identity", calls: [{ ...wrappedRead, rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: 42 } }], warned: true },
+    { name: "incremental title then input", calls: [
+      { toolCallId: "wrapped", title: wrappedRead.title }, wrappedRead, { toolCallId: "wrapped", status: "completed" },
+    ], warned: false },
+    { name: "null completion preserves identity", calls: [wrappedRead, {
+      toolCallId: "wrapped", title: null, name: null, rawInput: null, status: "completed",
+    }], warned: false },
+    { name: "replacement snapshot cannot inherit identity", calls: [wrappedRead, {
+      toolCallId: "wrapped", rawInput: { Arguments: { path: "package.json" } }, status: "completed",
+    }], warned: true },
+    { name: "partial raw snapshots cannot assemble identity", calls: [
+      { ...wrappedRead, rawInput: { ServerName: "pi-agy-bridge_pi" } },
+      { toolCallId: "wrapped", rawInput: { ToolName: "read" }, status: "completed" },
+    ], warned: true },
+    { name: "split title and input identity change warns", calls: [wrappedRead,
+      { toolCallId: "wrapped", title: "MCP Tool bash" },
+      { toolCallId: "wrapped", rawInput: { ...wrappedRead.rawInput, ToolName: "bash" }, status: "completed" },
+    ], warned: true },
+    { name: "incomplete snapshot cannot erase established identity", calls: [wrappedRead,
+      { toolCallId: "wrapped", rawInput: {} },
+      { ...wrappedRead, title: "MCP Tool bash", rawInput: { ...wrappedRead.rawInput, ToolName: "bash" }, status: "completed" },
+    ], warned: true },
+    { name: "metadata route cannot replace established wrapper identity", calls: [wrappedRead, {
+      toolCallId: "wrapped", title: "bash", rawInput: {},
+      _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "bash" } }, status: "completed",
+    }], warned: true },
+    { name: "registered tool identity change warns", calls: [wrappedRead, {
+      ...wrappedRead, title: "MCP Tool bash", rawInput: { ...wrappedRead.rawInput, ToolName: "bash" },
+    }], warned: true },
+    { name: "foreign metadata cannot be bypassed", calls: [{ ...wrappedRead, _meta: { mcp: { server: "other", tool: "read" } } }], warned: true },
+    { name: "registered metadata cannot hide foreign wrapper", calls: [{
+      ...wrappedRead, _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } },
+      rawInput: { ...wrappedRead.rawInput, ServerName: "other" },
+    }], warned: true },
+    { name: "registered metadata must match wrapper tool", calls: [{ ...wrappedRead, _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "bash" } } }], warned: true },
+    { name: "matching metadata", calls: [{ ...wrappedRead, _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } }], warned: false },
+    { name: "replay ignored", calls: [wrappedRead], replay: true, warned: false },
+    { name: "foreign session ignored", calls: [wrappedRead], sessionId: "other", warned: false },
+    { name: "identity cannot cross call IDs", calls: [wrappedRead, { toolCallId: "other", title: "MCP Tool read", status: "completed" }], warned: true },
+  ];
+
+  for (const row of wrappedCases) {
+    test(`CLI MCP wrapper: ${row.name}`, () => {
+      const processor = new EventProcessor("session-123", new Set(["read", "bash"]));
+      const events: RuntimeEvent[] = [];
+      const emit = (event: RuntimeEvent) => events.push(event);
+
+      for (const call of row.calls) processor.process({ sessionId: row.sessionId ?? "session-123", update: {
+        ...call, sessionUpdate: "tool_call_update",
+      } }, row.replay ? "replay" : "live", emit);
+      processor.complete({ stopReason: "end_turn" }, emit);
+
+      assert.equal(events.filter((event) => event.type === "tool-warning").length, row.warned ? 1 : 0);
+      assert.deepEqual(events.filter((event) => event.type === "complete"), [{ type: "complete", reason: "stop", resumable: true }]);
+    });
+  }
+
   const warningCases: { name: string; updates: SessionNotification["update"][]; warning: string }[] = [
     {
       name: "terminal updates and completion warn once",

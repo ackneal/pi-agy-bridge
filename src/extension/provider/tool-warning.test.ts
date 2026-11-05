@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import type { DriverSession, RuntimeEvent } from "../drivers/types.ts";
+import type { DriverId, DriverSession, RuntimeEvent } from "../drivers/types.ts";
 import { LiveSession, PiContextAdapter } from "../session/session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { PiRuntimeOutput } from "./output.ts";
-import { formatAcpToolWarning } from "./tool-warning.ts";
+import { formatToolWarning } from "./tool-warning.ts";
 import { Turn } from "./turn.ts";
 
 for (const row of [
@@ -56,8 +56,7 @@ for (const row of [
   });
 }
 
-describe("formatAcpToolWarning", () => {
-  const prefix = "Antigravity ACP: unverified tool activity — ";
+describe("formatToolWarning", () => {
   const circular: Record<string, unknown> = {};
   circular.self = circular;
   const unchanged = { nested: { secret: "keep original", path: "file" } };
@@ -89,13 +88,19 @@ describe("formatAcpToolWarning", () => {
     { title: "unicode line separators", name: "tool", args: "a\u2028b\u2029c", expected: 'tool "a\\u2028b\\u2029c"' },
   ];
 
-  for (const row of cases) {
-    test(row.title, () => {
-      const result = formatAcpToolWarning(row.name, row.args);
+  for (const { driver, label } of [
+    { driver: "acp", label: "ACP" },
+    { driver: "cli", label: "CLI" },
+  ] satisfies { driver: DriverId; label: string }[]) {
+    for (const row of cases) {
+      test(`${driver}: ${row.title}`, () => {
+        const prefix = `Antigravity ${label}: unverified tool activity — `;
+        const result = formatToolWarning(driver, row.name, row.args);
 
-      assert.equal(result, prefix + row.expected);
-      assert.ok(result.length <= prefix.length + 120 + 1 + 1000);
-      row.verify?.();
-    });
+        assert.equal(result, prefix + row.expected);
+        assert.ok(result.length <= prefix.length + 120 + 1 + 1000);
+        row.verify?.();
+      });
+    }
   }
 });

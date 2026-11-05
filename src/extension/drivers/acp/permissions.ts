@@ -1,12 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import type { RequestPermissionRequest, RequestPermissionResponse, SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import { isRegisteredPiMcpTool, PI_MCP_SERVER } from "../mcp-identity.ts";
 
 const LIMIT = 1024;
-export const PI_MCP_SERVER = "pi-agy-bridge_pi";
-
-export function isRegisteredPiMcpTool(mcp: unknown, allowedToolNames: ReadonlySet<string>): mcp is { server: string; tool: string } {
-  return record(mcp) && mcp.server === PI_MCP_SERVER && typeof mcp.tool === "string" && allowedToolNames.has(mcp.tool);
-}
 
 /** Permits only MCP transport; the Pi gateway still owns execution and policy.
  * Callers must not feed replay notifications into this gate.
