@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import type { RequestPermissionRequest, RequestPermissionResponse, SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
 
-const SERVER = "pi-agy-bridge_pi";
 const LIMIT = 1024;
+export const PI_MCP_SERVER = "pi-agy-bridge_pi";
 
 export function isRegisteredPiMcpTool(mcp: unknown, allowedToolNames: ReadonlySet<string>): mcp is { server: string; tool: string } {
-  return record(mcp) && mcp.server === SERVER && typeof mcp.tool === "string" && allowedToolNames.has(mcp.tool);
+  return record(mcp) && mcp.server === PI_MCP_SERVER && typeof mcp.tool === "string" && allowedToolNames.has(mcp.tool);
 }
 
 /** Permits only MCP transport; the Pi gateway still owns execution and policy.
@@ -82,13 +82,13 @@ export class McpPermissions {
     if (update.rawInput !== undefined && (!record(update.rawInput) || !record(update.rawInput.arguments))) return null;
     const merged = { ...prior, ...update };
     const mcp = merged._meta?.mcp;
-    if (merged.title !== undefined && (typeof merged.title !== "string" || (record(mcp) && merged.title !== `${SERVER}_${String(mcp.tool)}`))) return null;
+    if (merged.title !== undefined && (typeof merged.title !== "string" || (record(mcp) && merged.title !== `${PI_MCP_SERVER}_${String(mcp.tool)}`))) return null;
     return merged;
   }
 
   private complete(call: ToolCallUpdate): boolean {
     const mcp = call._meta?.mcp;
-    return isRegisteredPiMcpTool(mcp, this.allowedToolNames) && call.title === `${SERVER}_${mcp.tool}` &&
+    return isRegisteredPiMcpTool(mcp, this.allowedToolNames) && call.title === `${PI_MCP_SERVER}_${mcp.tool}` &&
       record(call.rawInput) && record(call.rawInput.arguments);
   }
 }
