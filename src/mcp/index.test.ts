@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import readline from "node:readline";
 import { it } from "node:test";
 import { formatBridgeUri } from "./socket.js";
+
+const { version } = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
 
 // Replace only the OS transport; the child runs the real MCP and socket modules.
 const transport = `
@@ -130,7 +133,7 @@ for (const row of [
       result: {
         protocolVersion: row.version,
         capabilities: { tools: {} },
-        serverInfo: { name: "pi-agy-bridge", version: "0.5.1" },
+        serverInfo: { name: "pi-agy-bridge", version },
       },
     });
   });
