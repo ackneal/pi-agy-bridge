@@ -32,9 +32,11 @@ async function assertPluginAssetsEqual(actual: string, source: string): Promise<
   const sourcePlugin = await fs.readFile(path.join(source, "plugin.json"), "utf8");
   assert.equal(actualPlugin, sourcePlugin, "plugin.json must match source");
 
-  const actualPrompt = await fs.readFile(path.join(actual, "agents", "pi-bridge.md"), "utf8");
-  const sourcePrompt = await fs.readFile(path.join(source, "agents", "pi-bridge.md"), "utf8");
-  assert.equal(actualPrompt, sourcePrompt, "agents/pi-bridge.md must match source");
+  for (const agent of ["pi-bridge.md", "pi-bridge-acp.md"]) {
+    const actualPrompt = await fs.readFile(path.join(actual, "agents", agent), "utf8");
+    const sourcePrompt = await fs.readFile(path.join(source, "agents", agent), "utf8");
+    assert.equal(actualPrompt, sourcePrompt, `agents/${agent} must match source`);
+  }
 
   const actualConfig = JSON.parse(await fs.readFile(path.join(actual, "mcp_config.json"), "utf8"));
   assert.equal(actualConfig.mcpServers["pi"].command, "sh");
@@ -132,6 +134,26 @@ for (const failureStage of ["backup", "replacement", "restoration"] as const) {
     });
   });
 }
+
+test("same-version plugin missing the required ACP agent synchronizes once without invoking the CLI", async (t) => {
+  await withTemporaryHome(async (home) => {
+    const target = path.join(home, ".gemini", "config", "plugins", "pi-agy-bridge");
+    await fs.cp(DEFAULT_AGY_PLUGIN_DIR, target, { recursive: true });
+    await fs.rm(path.join(target, "agents", "pi-bridge-acp.md"));
+    const cp = t.mock.method(fs, "cp");
+
+    await ensureAgyPluginInstalled(path.join(home, "missing-agy"), DEFAULT_AGY_PLUGIN_DIR);
+
+    await assertPluginAssetsEqual(target, DEFAULT_AGY_PLUGIN_DIR);
+    assert.equal(cp.mock.callCount(), 1);
+    const beforeMetadata = await readFileMetadata(target);
+
+    await ensureAgyPluginInstalled(path.join(home, "missing-agy"), DEFAULT_AGY_PLUGIN_DIR);
+
+    assert.equal(cp.mock.callCount(), 1, "the repaired installation must be cached");
+    assert.deepEqual(await readFileMetadata(target), beforeMetadata);
+  });
+});
 
 test("same-version ensures are a true no-op and never rewrite the static tree", async () => {
   await withTemporaryHome(async (home) => {

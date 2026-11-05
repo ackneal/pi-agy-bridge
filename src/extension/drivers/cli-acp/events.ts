@@ -38,7 +38,10 @@ function mapUsage(raw: Usage | null | undefined): Extract<RuntimeEvent, { type: 
 
 function isAllowedNativeTool(call: ToolCallUpdate): boolean {
   const name = call.title ?? call.name ?? call.kind;
-  return typeof name === "string" && name.trim().toLowerCase().includes("view_file");
+  if (typeof name !== "string") return false;
+
+  const normalized = name.trim().toLowerCase();
+  return normalized === "view_file" || normalized === "running view_file";
 }
 
 function isRegisteredPiMcpTool(mcp: unknown, allowedToolNames: ReadonlySet<string>): boolean {

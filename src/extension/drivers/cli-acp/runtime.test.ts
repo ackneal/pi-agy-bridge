@@ -1,211 +1,243 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { AcpSessionClient, RuntimeSession, serializeContent } from "./runtime.ts";
+import type * as acp from "@agentclientprotocol/sdk";
+import type { Model } from "@earendil-works/pi-ai";
+import { AcpSessionClient, RuntimeSession, serializeContent, type RuntimeConnection } from "./runtime.ts";
 import type { BridgeMessage, RuntimeEvent } from "../types.ts";
 
-function createMockConnection(handlers?: {
-  onRequest?: (method: string, params: any) => Promise<any>;
-  onNotify?: (method: string, params: any) => Promise<void>;
-}) {
-  const requests: { method: string; params: any }[] = [];
-  const notifications: { method: string; params: any }[] = [];
-  let isRunning = true;
-
-  return {
-    requests,
-    notifications,
-    get isRunning() {
-      return isRunning;
-    },
-    async start() {
-      return {
-        protocolVersion: 1,
-        agentCapabilities: {
-          loadSession: true,
-          _meta: { antigravity: { systemPrompt: { append: true } } },
-        },
-      };
-    },
-    async request(method: string, params: any) {
-      requests.push({ method, params });
-      if (handlers?.onRequest) return handlers.onRequest(method, params);
-
-      if (method === "session/new") {
-        return {
-          sessionId: "mock-session-id",
-          configOptions: [
-            { id: "model", type: "select", options: [{ value: "gemini-3.8-flash" }] },
-            { id: "thought_level", type: "select", options: [{ value: "high" }] },
-          ],
-        };
-      }
-      if (method === "session/set_config_option" || method === "session/setConfigOption") {
-        return {
-          configOptions: [
-            { id: "model", type: "select", currentValue: params.value, options: [{ value: "gemini-3.8-flash" }] },
-            { id: "thought_level", type: "select", currentValue: params.value, options: [{ value: "high" }] },
-          ],
-        };
-      }
-      if (method === "session/prompt") {
-        return { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
-      }
-      return {};
-    },
-    async notify(method: string, params: any) {
-      notifications.push({ method, params });
-      if (handlers?.onNotify) await handlers.onNotify(method, params);
-    },
-    async dispose() {
-      isRunning = false;
-    },
-  } as any;
+function option(id: string, value: string): Extract<acp.SessionConfigOption, { type: "select" }> {
+  return { id, name: id, type: "select", currentValue: "default", options: [{ name: value, value }] };
 }
 
+class MockConnection implements RuntimeConnection {
+  isRunning = true;
+  configOptions: acp.SessionConfigOption[] = [option("model", "gemini-3.8-flash"), option("thought_level", "high")];
+  initialized: acp.InitializeResponse = { protocolVersion: 1, agentCapabilities: { loadSession: true } };
+  requests: { method: string; params: unknown }[] = [];
+  notifications: { method: string; params: unknown }[] = [];
+  listeners = new Set<(notification: acp.SessionNotification) => void | Promise<void>>();
+  setConfig: (params: acp.SetSessionConfigOptionRequest, method: string) => acp.SetSessionConfigOptionResponse = (params) => {
+    this.configOptions = this.configOptions.map((entry) => entry.type === "select" && entry.id === params.configId && typeof params.value === "string" ? { ...entry, currentValue: params.value } : entry);
+    return { configOptions: this.configOptions };
+  };
+  onSession: (() => Promise<void>) | undefined;
+  onPrompt: (() => Promise<acp.PromptResponse>) | undefined;
+
+  async start(): Promise<acp.InitializeResponse> { return this.initialized; }
+
+  onSessionUpdate(handler: (notification: acp.SessionNotification) => void | Promise<void>): () => void {
+    this.listeners.add(handler);
+    return () => { this.listeners.delete(handler); };
+  }
+
+  async update(sessionId = "mock-session-id", text = "hello"): Promise<void> {
+    for (const listener of this.listeners) {
+      await listener({ sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
+    }
+  }
+
+  request(method: "session/new", params: acp.NewSessionRequest): Promise<acp.NewSessionResponse>;
+  request(method: "session/load", params: acp.LoadSessionRequest): Promise<acp.LoadSessionResponse>;
+  request(method: "session/set_config_option" | "session/setConfigOption", params: acp.SetSessionConfigOptionRequest): Promise<acp.SetSessionConfigOptionResponse>;
+  request(method: "session/prompt", params: acp.PromptRequest): Promise<acp.PromptResponse>;
+  async request(method: string, params: acp.NewSessionRequest | acp.LoadSessionRequest | acp.SetSessionConfigOptionRequest | acp.PromptRequest): Promise<acp.NewSessionResponse | acp.LoadSessionResponse | acp.SetSessionConfigOptionResponse | acp.PromptResponse> {
+    this.requests.push({ method, params });
+    if (method === "session/new" || method === "session/load") {
+      await this.onSession?.();
+      return { sessionId: "mock-session-id", configOptions: this.configOptions };
+    }
+    if ("configId" in params) return this.setConfig(params, method);
+    if (method === "session/prompt") return this.onPrompt?.() ?? { stopReason: "end_turn" };
+    throw new Error(`Unexpected request: ${method}`);
+  }
+
+  async notify(method: string, params: unknown): Promise<void> { this.notifications.push({ method, params }); }
+  async dispose(): Promise<void> { this.isRunning = false; }
+}
+
+const options = { cwd: "/mock/cwd", model: "gemini-3.8-flash" };
+const model: Model<"google-generative-ai"> = {
+  id: options.model, name: options.model, api: "google-generative-ai", provider: "google", baseUrl: "https://example.com",
+  reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100,
+};
+
+const configCases: { name: string; arrange: (connection: MockConnection) => void; effort?: "high"; error?: RegExp }[] = [
+  { name: "applies model and thought_level", arrange: () => {}, effort: "high" },
+  { name: "supports thinking_level alias", arrange: (c) => { c.configOptions[1] = option("thinking_level", "high"); }, effort: "high" },
+  { name: "accepts grouped options", arrange: (c) => { c.configOptions[0] = { ...option("model", options.model), options: [{ group: "models", name: "Models", options: [{ name: options.model, value: options.model }] }] }; } },
+  { name: "rejects missing model", arrange: (c) => { c.configOptions = []; }, error: /required configuration is unavailable: model/ },
+  { name: "rejects non-select model", arrange: (c) => { c.configOptions[0] = { id: "model", name: "Model", type: "boolean", currentValue: false }; }, error: /required configuration is unavailable: model/ },
+  { name: "rejects unsupported model", arrange: (c) => { c.configOptions[0] = option("model", "other"); }, error: /unsupported model: gemini/ },
+  { name: "rejects missing effort", arrange: (c) => { c.configOptions = [option("model", options.model)]; }, effort: "high", error: /required configuration is unavailable: thinking_level/ },
+  { name: "rejects unsupported effort", arrange: (c) => { c.configOptions[1] = option("thought_level", "low"); }, effort: "high", error: /unsupported thought_level: high/ },
+  { name: "rejects unapplied model", arrange: (c) => { c.setConfig = () => ({ configOptions: c.configOptions }); }, error: /did not apply the requested model/ },
+  { name: "rejects missing returned option", arrange: (c) => { c.setConfig = () => ({ configOptions: [] }); }, error: /did not apply the requested model/ },
+  { name: "rejects unapplied effort", arrange: (c) => { c.setConfig = (p) => ({ configOptions: c.configOptions.map((o) => o.type === "select" && o.id === "model" && typeof p.value === "string" ? { ...o, currentValue: p.value } : o) }); }, effort: "high", error: /did not apply the requested thought_level/ },
+  { name: "detects effort resetting model", arrange: (c) => { c.setConfig = (p) => { c.configOptions = c.configOptions.map((o) => o.type === "select" && typeof p.value === "string" ? { ...o, currentValue: o.id === p.configId ? p.value : "default" } : o); return { configOptions: c.configOptions }; }; }, effort: "high", error: /did not apply the requested model/ },
+  { name: "falls back for method not found", arrange: (c) => { const apply = c.setConfig; c.setConfig = (p, method) => { if (method === "session/set_config_option") throw new Error("Method not found: -32601"); return apply(p, method); }; } },
+  { name: "does not swallow other RPC errors", arrange: (c) => { c.setConfig = () => { throw new Error("permission denied"); }; }, error: /permission denied/ },
+  { name: "verifies legacy response too", arrange: (c) => { c.setConfig = (_, method) => { if (method === "session/set_config_option") throw new Error("Method not found: -32601"); return { configOptions: c.configOptions }; }; }, error: /did not apply the requested model/ },
+];
+
+describe("AcpSessionClient configuration", () => {
+  for (const row of configCases) {
+    test(row.name, async (t) => {
+      const connection = new MockConnection();
+      row.arrange(connection);
+      const client = new AcpSessionClient({ ...options, connection, effort: row.effort, onUpdate: () => {} });
+      t.after(() => client.dispose());
+
+      if (row.error) {
+        await assert.rejects(client.prepare(), row.error);
+        assert.equal(client.isRunning, false);
+        assert.equal(connection.isRunning, false);
+        assert.equal(connection.listeners.size, 0);
+      } else {
+        await client.prepare();
+        assert.equal(client.isRunning, true);
+        assert.equal(connection.configOptions.find((o) => o.id === "model")?.currentValue, options.model);
+        assert.ok(connection.requests.some((r) => r.method === "session/set_config_option"));
+        if (row.effort) {
+          const effort = connection.configOptions.find((o) => o.id === "thought_level" || o.id === "thinking_level");
+          assert.equal(effort?.currentValue, row.effort);
+        }
+        if (row.name === "falls back for method not found") {
+          assert.ok(connection.requests.some((r) => r.method === "session/setConfigOption"));
+        }
+      }
+    });
+  }
+});
+
+describe("AcpSessionClient lifecycle", () => {
+  for (const standalone of [false, true]) {
+    for (const restored of [false, true]) {
+      test(`prepare and cancel: standalone=${standalone}, restored=${restored}`, async (t) => {
+        const connection = new MockConnection();
+        const updates: acp.SessionNotification[] = [];
+        connection.onSession = () => connection.update();
+        const client = new AcpSessionClient({ ...options, connection, standalone, sessionId: restored ? "mock-session-id" : undefined, systemPrompt: "instructions", onUpdate: (n) => { updates.push(n); } });
+        t.after(() => client.dispose());
+
+        await Promise.all([client.prepare(), client.prepare()]);
+        assert.equal(client.id, "mock-session-id");
+        assert.equal(connection.requests.filter((r) => r.method === (restored ? "session/load" : "session/new")).length, 1);
+        assert.deepEqual(connection.requests[0]?.params, {
+          cwd: options.cwd, mcpServers: [], _meta: { antigravity: { enabledTools: standalone ? [] : ["view_file"], systemPrompt: { append: "instructions" } } },
+          ...(restored ? { sessionId: "mock-session-id" } : {}),
+        });
+        assert.deepEqual(updates, []);
+        await connection.update("other-session");
+        assert.equal(updates.length, 0);
+        await connection.update();
+        assert.equal(updates.length, 1);
+        assert.equal((await client.prompt([{ type: "text", text: "hi" }])).stopReason, "end_turn");
+        await assert.rejects(client.prompt([]), /must not be empty/);
+        await client.cancel();
+        await connection.update();
+        assert.equal(updates.length, 1);
+        assert.equal(connection.listeners.size, 0);
+        assert.deepEqual(connection.notifications, [{ method: "session/cancel", params: { sessionId: client.id } }]);
+        assert.equal(client.isRunning, false);
+      });
+    }
+  }
+});
+
+describe("AcpSessionClient preparation guards", () => {
+  const cases = [
+    { name: "pre-aborted preparation", abort: true, load: true, error: /cancelled/ },
+    { name: "unsupported session loading", abort: false, load: false, error: /does not support session loading/ },
+  ];
+  for (const row of cases) {
+    test(row.name, async (t) => {
+      const connection = new MockConnection();
+      connection.initialized = { protocolVersion: 1, agentCapabilities: { loadSession: row.load } };
+      const controller = new AbortController();
+      if (row.abort) controller.abort(new Error("cancelled"));
+      const client = new AcpSessionClient({ ...options, connection, sessionId: "existing", onUpdate: () => {} });
+      t.after(() => client.dispose());
+
+      await assert.rejects(client.prepare(controller.signal), row.error);
+      assert.equal(connection.requests.length, 0);
+      assert.equal(connection.listeners.size, 0);
+      assert.equal(connection.isRunning, false);
+    });
+  }
+});
+
 describe("serializeContent", () => {
-  test("serializes text messages and ignores system messages", () => {
-    const messages: BridgeMessage[] = [
-      { role: "system", content: "ignore system" },
-      { role: "user", content: "hello user" },
-      { role: "user", content: [{ type: "text", text: "part text" }] },
-    ];
-    const blocks = serializeContent(messages);
-    assert.deepEqual(blocks, [
-      { type: "text", text: "hello user" },
-      { type: "text", text: "part text" },
-    ]);
-  });
+  const cases: { name: string; messages: BridgeMessage[]; expected: acp.ContentBlock[] }[] = [
+    { name: "omits system and empty text", messages: [{ role: "system", content: "secret" }, { role: "user", content: "" }], expected: [] },
+    { name: "preserves text order and image data", messages: [{ role: "user", content: "hello" }, { role: "user", content: [{ type: "text", text: "" }, { type: "text", text: "part" }, { type: "image", mimeType: "image/png", data: "aGVsbG8=" }] }], expected: [{ type: "text", text: "hello" }, { type: "text", text: "part" }, { type: "image", mimeType: "image/png", data: "aGVsbG8=" }] },
+  ];
+  for (const row of cases) test(row.name, () => assert.deepEqual(serializeContent(row.messages), row.expected));
 });
 
-describe("AcpSessionClient", () => {
-  test("prepare initializes session and sets config options using snake_case RPC", async () => {
-    const connection = createMockConnection();
-    const client = new AcpSessionClient({
-      connection,
-      cwd: "/mock/cwd",
-      model: "gemini-3.8-flash",
-      effort: "high",
-      systemPrompt: "Mock instructions",
-      onUpdate: () => {},
+describe("RuntimeSession image payloads", () => {
+  for (const row of [
+    { name: "message image", hook: false, invalid: false },
+    { name: "payload-hook image", hook: true, invalid: false },
+    { name: "rejects missing image data", hook: true, invalid: true },
+  ]) {
+    test(row.name, async (t) => {
+      const connection = new MockConnection();
+      const runtime = new RuntimeSession(connection, options);
+      t.after(() => runtime.abort());
+      await runtime.prepare();
+      const image = { type: "image" as const, mimeType: "image/png", data: "aGVsbG8=" };
+      const submit = runtime.submit({
+        model,
+        messages: [{ role: "user", content: row.hook ? "image from hook" : [image] }],
+        options: row.hook ? { onPayload: () => ({ sessionId: runtime.id, prompt: [row.invalid ? { type: "image", mimeType: "image/png" } : image] }) } : undefined,
+        beforeInput: () => true,
+      });
+
+      if (row.invalid) {
+        await assert.rejects(submit, /ACP payload supports text and image content blocks/);
+        assert.equal(connection.requests.some((request) => request.method === "session/prompt"), false);
+      } else {
+        await submit;
+        assert.deepEqual(connection.requests.find((request) => request.method === "session/prompt")?.params, {
+          sessionId: "mock-session-id", prompt: [image],
+        });
+      }
     });
-
-    await client.prepare();
-
-    assert.equal(client.id, "mock-session-id");
-    assert.ok(client.isRunning);
-
-    // Verify session/new was called with append systemPrompt and enabledTools: ["view_file"] in primary mode
-    const newSession = connection.requests.find((r: any) => r.method === "session/new");
-    assert.ok(newSession);
-    assert.equal(newSession.params._meta.antigravity.systemPrompt.append, "Mock instructions");
-    assert.deepEqual(newSession.params._meta.antigravity.enabledTools, ["view_file"]);
-
-    // Verify session/set_config_option was called for model and thought_level
-    const configCalls = connection.requests.filter((r: any) => r.method === "session/set_config_option");
-    assert.equal(configCalls.length, 2);
-    assert.deepEqual(configCalls[0]?.params, { sessionId: "mock-session-id", configId: "model", value: "gemini-3.8-flash" });
-    assert.deepEqual(configCalls[1]?.params, { sessionId: "mock-session-id", configId: "thought_level", value: "high" });
-  });
-
-  test("prepare falls back to session/setConfigOption if session/set_config_option returns method not found", async () => {
-    const connection = createMockConnection({
-      onRequest: async (method, params) => {
-        if (method === "session/new") {
-          return {
-            sessionId: "legacy-session-id",
-            configOptions: [{ id: "model", type: "select", options: [{ value: "gemini-3.8-flash" }] }],
-          };
-        }
-        if (method === "session/set_config_option") {
-          throw new Error("Method not found: -32601");
-        }
-        if (method === "session/setConfigOption") {
-          return { configOptions: [{ id: "model", type: "select", currentValue: params.value, options: [{ value: "gemini-3.8-flash" }] }] };
-        }
-        return {};
-      },
-    });
-
-    const client = new AcpSessionClient({
-      connection,
-      cwd: "/mock/cwd",
-      model: "gemini-3.8-flash",
-      onUpdate: () => {},
-    });
-
-    await client.prepare();
-
-    const camelCall = connection.requests.find((r: any) => r.method === "session/setConfigOption");
-    assert.ok(camelCall);
-    assert.equal(camelCall.params.configId, "model");
-  });
-
-  test("prompt and cancel lifecycle", async () => {
-    const connection = createMockConnection();
-    const client = new AcpSessionClient({
-      connection,
-      cwd: "/mock/cwd",
-      model: "gemini-3.8-flash",
-      onUpdate: () => {},
-    });
-
-    await client.prepare();
-
-    const response = await client.prompt([{ type: "text", text: "Say hello" }]);
-    assert.equal(response.stopReason, "end_turn");
-
-    await client.cancel();
-    assert.ok(connection.notifications.some((n: any) => n.method === "session/cancel"));
-    assert.ok(!client.isRunning);
-  });
-
-  test("prepare sends enabledTools: [] only when standalone is true", async () => {
-    const connection = createMockConnection();
-    const client = new AcpSessionClient({
-      connection,
-      cwd: "/mock/cwd",
-      model: "gemini-3.8-flash",
-      standalone: true,
-      onUpdate: () => {},
-    });
-
-    await client.prepare();
-
-    const newSession = connection.requests.find((r: any) => r.method === "session/new");
-    assert.ok(newSession);
-    assert.deepEqual(newSession.params._meta.antigravity.enabledTools, []);
-  });
+  }
 });
 
-describe("RuntimeSession", () => {
-  test("submit dispatches prompt and emits events", async () => {
-    const connection = createMockConnection();
-    const runtime = new RuntimeSession(
-      connection,
-      {
-        cwd: "/mock/cwd",
-        model: "gemini-3.8-flash",
-      },
-      new Set(["read"]),
-      "compat-key"
-    );
+describe("RuntimeSession notifications", () => {
+  for (const outcome of ["success", "failure"] as const) {
+    test(`routes live notifications and cleans up on ${outcome}`, async (t) => {
+      const connection = new MockConnection();
+      connection.onSession = () => connection.update("mock-session-id", "replay");
+      const runtime = new RuntimeSession(connection, options);
+      t.after(() => runtime.abort());
+      const events: RuntimeEvent[] = [];
+      runtime.onRuntimeEvent((event) => { events.push(event); });
+      await runtime.prepare();
+      assert.equal(events.length, 0);
+      const done = new Promise<void>((resolve) => {
+        runtime.onRuntimeEvent((event) => { if (event.type === "complete") resolve(); });
+      });
+      connection.onPrompt = async () => {
+        await connection.update("other-session", "wrong");
+        await connection.update("mock-session-id", "live");
+        if (outcome === "failure") throw new Error("prompt failed");
+        return { stopReason: "end_turn" };
+      };
 
-    await runtime.prepare();
-
-    const events: RuntimeEvent[] = [];
-    runtime.onRuntimeEvent((e) => events.push(e));
-
-    await runtime.submit({
-      model: { id: "gemini-3.8-flash" } as any,
-      options: undefined,
-      messages: [{ role: "user", content: "Test message" }],
-      beforeInput: () => true,
+      await runtime.submit({ model, options: undefined, messages: [{ role: "user", content: "Test" }], beforeInput: () => true });
+      await done;
+      assert.deepEqual(events.filter((e) => e.type === "text-delta"), [{ type: "text-delta", delta: "live" }]);
+      assert.ok(events.some((e) => e.type === "start"));
+      assert.ok(events.some((e) => e.type === "session-reference" && e.reference === "mock-session-id"));
+      assert.ok(events.some((e) => e.type === "complete" && e.reason === (outcome === "failure" ? "error" : "stop")));
+      if (outcome !== "failure") await runtime.abort();
+      assert.equal(connection.listeners.size, 0);
+      const count = events.length;
+      await connection.update();
+      assert.equal(events.length, count);
     });
-
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    assert.ok(events.some((e) => e.type === "start"));
-    assert.ok(events.some((e) => e.type === "session-reference" && e.reference === "mock-session-id"));
-    assert.ok(events.some((e) => e.type === "complete" && e.reason === "stop"));
-  });
+  }
 });

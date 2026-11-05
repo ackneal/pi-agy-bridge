@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import { EventProcessor } from "./events.ts";
 import type { RuntimeEvent } from "../types.ts";
 
@@ -16,7 +17,7 @@ describe("EventProcessor", () => {
           sessionUpdate: "agent_message_chunk",
           content: { type: "text", text: "Hello world" },
         },
-      } as any,
+      },
       "live",
       emit
     );
@@ -36,7 +37,7 @@ describe("EventProcessor", () => {
       {
         sessionId: "other-session",
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Ignore" } },
-      } as any,
+      },
       "live",
       emit
     );
@@ -45,7 +46,7 @@ describe("EventProcessor", () => {
       {
         sessionId: "session-123",
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Ignore" } },
-      } as any,
+      },
       "replay",
       emit
     );
@@ -61,8 +62,8 @@ describe("EventProcessor", () => {
     processor.process(
       {
         sessionId: "session-123",
-        update: { sessionUpdate: "usage_update", used: 150 },
-      } as any,
+        update: { sessionUpdate: "usage_update", used: 150, size: 1000 },
+      },
       "live",
       emit
     );
@@ -74,62 +75,103 @@ describe("EventProcessor", () => {
     }
   });
 
-  test("warns on unallowed native tools and permits view_file and allowed MCP tools", () => {
-    const processor = new EventProcessor("session-123", new Set(["read", "bash"]));
+  const toolCases: { name: string; call: Omit<ToolCallUpdate, "toolCallId">; warning?: string }[] = [
+    ...["view_file", "Running view_file", " \tRUNNING VIEW_FILE\n"].map((title) => ({ name: title, call: { title } })),
+    ...["not_view_file", "view_file_extra", "Running view_file_extra", "Other Running view_file", "Running  view_file", "client_view_file"].map((title) => ({
+      name: title, call: { title }, warning: title.replace(/^Running /, ""),
+    })),
+    { name: "name fallback", call: { name: "view_file" } },
+    { name: "title takes precedence", call: { title: "edit_file", name: "view_file" }, warning: "edit_file" },
+    { name: "kind alone does not identify a native tool", call: { kind: "read" }, warning: "read" },
+    { name: "registered MCP tool", call: { title: "read", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } } },
+    { name: "unregistered MCP tool", call: { title: "view_file", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "unknown" } } }, warning: "unknown" },
+    { name: "foreign MCP tool", call: { title: "Running view_file", _meta: { mcp: { server: "other", tool: "read" } } }, warning: "read" },
+  ];
+
+  for (const row of toolCases) {
+    test(`tool warning identity: ${row.name}`, () => {
+      const processor = new EventProcessor("session-123", new Set(["read", "bash"]));
+      const events: RuntimeEvent[] = [];
+      const rawInput = { file: "foo.txt" };
+
+      processor.process({
+        sessionId: "session-123",
+        update: { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed", rawInput, ...row.call },
+      }, "live", (event) => events.push(event));
+
+      assert.deepEqual(events, row.warning === undefined ? [] : [{ type: "tool-warning", name: row.warning, args: rawInput }]);
+    });
+  }
+
+  const warningCases: { name: string; updates: SessionNotification["update"][]; warning: string }[] = [
+    {
+      name: "terminal updates and completion warn once",
+      updates: [
+        { sessionUpdate: "tool_call", toolCallId: "call", title: "edit_file", status: "in_progress" },
+        { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
+        { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
+      ],
+      warning: "edit_file",
+    },
+    {
+      name: "completion checks unfinished calls",
+      updates: [{ sessionUpdate: "tool_call", toolCallId: "call", title: "edit_file", status: "in_progress" }],
+      warning: "edit_file",
+    },
+    {
+      name: "conflicting MCP identity warns once",
+      updates: [
+        { sessionUpdate: "tool_call", toolCallId: "call", title: "read", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } },
+        { sessionUpdate: "tool_call_update", toolCallId: "call", _meta: { mcp: { server: "other" } } },
+        { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
+      ],
+      warning: "read",
+    },
+  ];
+
+  for (const row of warningCases) {
+    test(`warning deduplication: ${row.name}`, () => {
+      const processor = new EventProcessor("session-123", new Set(["read"]));
+      const events: RuntimeEvent[] = [];
+      const emit = (event: RuntimeEvent) => events.push(event);
+
+      for (const update of row.updates) processor.process({ sessionId: "session-123", update }, "live", emit);
+      processor.complete({ stopReason: "end_turn" }, emit);
+
+      assert.deepEqual(events.filter((event) => event.type === "tool-warning"), [
+        { type: "tool-warning", name: row.warning, args: undefined },
+      ]);
+    });
+  }
+
+  test("overflow warns once per turn without dropping updates to tracked calls", () => {
+    const processor = new EventProcessor("session-123");
     const events: RuntimeEvent[] = [];
-    const emit = (e: RuntimeEvent) => events.push(e);
+    const emit = (event: RuntimeEvent) => events.push(event);
 
-    // Allowed native tool (view_file)
-    processor.process(
-      {
-        sessionId: "session-123",
-        update: {
-          sessionUpdate: "tool_call",
-          toolCallId: "call-1",
-          title: "view_file",
-          status: "completed",
-        },
-      } as any,
-      "live",
-      emit
-    );
+    for (let turn = 0; turn < 2; turn++) {
+      events.length = 0;
+      for (let i = 0; i < 1024; i++) {
+        processor.process({ sessionId: "session-123", update: {
+          sessionUpdate: "tool_call", toolCallId: String(i), title: "view_file",
+        } }, "live", emit);
+      }
+      assert.equal(events.length, 0);
 
-    // Allowed MCP tool
-    processor.process(
-      {
-        sessionId: "session-123",
-        update: {
-          sessionUpdate: "tool_call",
-          toolCallId: "call-2",
-          title: "read",
-          _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } },
-          status: "completed",
-        },
-      } as any,
-      "live",
-      emit
-    );
+      for (const id of ["overflow", "overflow", "another-overflow"]) {
+        processor.process({ sessionId: "session-123", update: {
+          sessionUpdate: "tool_call", toolCallId: id, title: "edit_file", status: "completed",
+        } }, "live", emit);
+      }
+      processor.process({ sessionId: "session-123", update: {
+        sessionUpdate: "tool_call_update", toolCallId: "0", title: "edit_file", status: "completed",
+      } }, "live", emit);
+      processor.complete({ stopReason: "end_turn" }, emit);
 
-    // Unallowed native tool (e.g. edit_file)
-    processor.process(
-      {
-        sessionId: "session-123",
-        update: {
-          sessionUpdate: "tool_call",
-          toolCallId: "call-3",
-          title: "edit_file",
-          rawInput: { file: "foo.txt" },
-          status: "completed",
-        },
-      } as any,
-      "live",
-      emit
-    );
-
-    const warnings = events.filter((e) => e.type === "tool-warning");
-    assert.equal(warnings.length, 1);
-    if (warnings[0]?.type === "tool-warning") {
-      assert.equal(warnings[0].name, "edit_file");
+      assert.deepEqual(events.filter((event) => event.type === "tool-warning"), [
+        { type: "tool-warning", name: "ACP tool notification limit exceeded", args: undefined },
+        { type: "tool-warning", name: "edit_file", args: undefined },
+      ]);
     }
   });
 
@@ -149,7 +191,7 @@ describe("EventProcessor", () => {
           thoughtTokens: 10,
           totalTokens: 160,
         },
-      } as any,
+      },
       emit
     );
 

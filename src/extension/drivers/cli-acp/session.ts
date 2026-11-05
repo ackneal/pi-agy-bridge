@@ -117,11 +117,13 @@ export async function prepareRuntime(
     }
     const proc = liveSession.activeProcess;
     if (!(proc instanceof RuntimeSession)) throw new Error("AgyAcp cannot reuse another driver's runtime");
+
+    const modelMatches = proc.options.model === baseModel && proc.options.effort === effort;
     return {
       proc,
       mcpServer: liveSession.activeMcpServer,
       reconstructContext: false,
-      modelId: model.id,
+      modelId: modelMatches ? model.id : latestAssistant?.model ?? proc.options.model,
     };
   }
 
@@ -139,7 +141,6 @@ export async function prepareRuntime(
   const startRuntime = async (conversationId?: string) => {
     const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
     let connection: Connection | null = null;
-    let proc: RuntimeSession | null = null;
 
     const abortStartup = () => {
       void mcpServer.close().catch((err) => debugLog("session", "Error closing cancelled MCP startup:", err));
@@ -174,7 +175,7 @@ export async function prepareRuntime(
         environment,
       });
 
-      proc = new RuntimeSession(
+      const proc = new RuntimeSession(
         connection,
         {
           cwd,

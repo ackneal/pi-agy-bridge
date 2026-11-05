@@ -23,6 +23,7 @@ export class Connection {
   private stopped = false;
   private termination: Promise<void> = Promise.resolve();
   private hostExitHandler: (() => void) | undefined;
+  private readonly updateHandlers = new Set<(notification: acp.SessionNotification) => void | Promise<void>>();
   private readonly shutdown = new AbortController();
   private readonly options: ConnectionOptions;
 
@@ -37,7 +38,15 @@ export class Connection {
     return !!this.child && !this.stopped && !this.sdk?.signal.aborted;
   }
 
+  onSessionUpdate(handler: (notification: acp.SessionNotification) => void | Promise<void>): () => void {
+    if (this.stopped) return () => {};
+
+    this.updateHandlers.add(handler);
+    return () => { this.updateHandlers.delete(handler); };
+  }
+
   start(signal?: AbortSignal): Promise<acp.InitializeResponse> {
+    if (this.stopped) return Promise.reject(this.shutdown.signal.reason);
     if (this.startup) return this.startup;
     this.startup = this.initialize(signal);
     return this.startup;
@@ -81,8 +90,15 @@ export class Connection {
     });
 
     this.sdk = acp.client({ name: "pi-agy-bridge" })
-      .onNotification(acp.methods.client.session.update, ({ params }) => {
-        if (!this.stopped) return this.options.onUpdate?.(params);
+      .onNotification(acp.methods.client.session.update, async ({ params }) => {
+        if (this.stopped) return;
+
+        const handlers = [...this.updateHandlers];
+        await this.options.onUpdate?.(params);
+        for (const handler of handlers) {
+          if (this.stopped) return;
+          if (this.updateHandlers.has(handler)) await handler(params);
+        }
       })
       .connect(acp.ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>));
 
@@ -145,6 +161,7 @@ export class Connection {
   private stop(error: unknown): void {
     if (this.stopped) return;
     this.stopped = true;
+    this.updateHandlers.clear();
     this.shutdown.abort(error);
 
     const pid = this.child?.pid;

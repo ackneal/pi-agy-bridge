@@ -6,6 +6,7 @@ import { ModelRuntime, type ExtensionAPI, type ExtensionCommandContext, type Ext
 import type { Credential, Provider } from "@earendil-works/pi-ai";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
+import { Driver as CliAcpDriver } from "../drivers/cli-acp/driver.ts";
 import { Connection as AcpConnection } from "../drivers/acp/connection.ts";
 import { useExecutable } from "../drivers/acp/executable-fixture.ts";
 import { AgyAuthentication, createAgyBridgeCredential } from "./auth.ts";
@@ -53,6 +54,7 @@ for (const failure of ["installation", "initialization", "session", "authenticat
 
 for (const scenario of [
   { name: "saved CLI", credential: createAgyBridgeCredential("cli"), expected: "cli" },
+  { name: "saved CLI ACP", credential: createAgyBridgeCredential("cli-acp"), expected: "cli-acp" },
   { name: "saved ACP", credential: createAgyBridgeCredential("acp"), expected: "acp" },
   { name: "OAuth without driver", credential: createAgyBridgeCredential(), expected: "acp" },
   { name: "legacy marker", credential: { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1" } }, expected: "acp" },
@@ -60,7 +62,7 @@ for (const scenario of [
   { name: "unsupported driver", credential: { ...createAgyBridgeCredential(), driver: "unsupported" }, expected: "acp" },
   { name: "injected ACP overrides saved CLI", credential: createAgyBridgeCredential("cli"), injected: "acp", expected: "acp" },
   { name: "injected CLI overrides saved ACP", credential: createAgyBridgeCredential("acp"), injected: "cli", expected: "cli" },
-] satisfies { name: string; credential?: Credential; injected?: "cli" | "acp"; expected: "cli" | "acp" }[]) {
+] satisfies { name: string; credential?: Credential; injected?: "cli" | "acp"; expected: "cli" | "acp" | "cli-acp" }[]) {
   test(`startup driver selection: ${scenario.name}`, async (t) => {
     const directory = await registerAuthHomeFixture(t);
     if (scenario.credential) await writeFile(path.join(directory, "auth.json"), JSON.stringify({ agy: scenario.credential }));
@@ -148,6 +150,7 @@ for (const scenario of driverMenuScenarios) {
       },
     } as unknown as ExtensionAPI;
     const acpDetection = t.mock.method(AcpDriver.prototype, "detectExecutable", () => scenario.outcome === "status" ? "/mock/acp" : undefined);
+    t.mock.method(CliAcpDriver.prototype, "detectExecutable", () => undefined);
     const cliDetection = t.mock.method(CliDriver.prototype, "detectExecutable", () => {
       if (scenario.outcome === "doctorFailure") throw new Error("synthetic diagnostics failure");
       return undefined;
@@ -181,7 +184,7 @@ for (const scenario of driverMenuScenarios) {
     if (menu) {
       assert.deepEqual(select.mock.calls[0]!.arguments, [
         "Select Antigravity driver",
-        current === "acp" ? ["ACP (current)", "CLI"] : ["ACP", "CLI (current)"],
+        current === "acp" ? ["ACP (current)", "CLI", "CLI-ACP"] : ["ACP", "CLI (current)", "CLI-ACP"],
       ]);
     }
     assert.equal(switchDriver.mock.callCount(), scenario.target ? 1 : 0);
@@ -207,12 +210,12 @@ for (const scenario of driverMenuScenarios) {
     const contents = {
       failure: "Failed to switch driver: synthetic switch failure",
       same: `Already using driver: **${label}** (${current}).`,
-      invalid: 'Unknown driver "other". Available: cli, acp.',
+      invalid: 'Unknown driver "other". Available: cli, acp, cli-acp.',
       status: [
         `Current driver: **${label}** (${current})`,
         "Default: ACP. Driver changes are explicit; automatic fallback is disabled.",
-        "", "Available drivers:", "- **acp**: ✓ Found (/mock/acp)", "- **cli**: ✗ Not found", "",
-        "Usage: `/agy-bridge:driver cli` or `/agy-bridge:driver acp`",
+        "", "Available drivers:", "- **acp**: ✓ Found (/mock/acp)", "- **cli**: ✗ Not found", "- **cli-acp**: ✗ Not found", "",
+        "Usage: `/agy-bridge:driver cli`, `/agy-bridge:driver acp`, or `/agy-bridge:driver cli-acp`",
       ].join("\n"),
     };
     const [report, severity] = (ctx.hasUI ? notify : stderr).mock.calls[0]!.arguments;

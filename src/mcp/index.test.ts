@@ -88,47 +88,51 @@ for (const [method, key] of [["notifications/cancelled", "requestId"], ["$/cance
   });
 }
 
-it("handles server/discover probe from agy CLI", async (t) => {
-  const child = spawn(process.execPath, [
-    "--import", `data:text/javascript,${encodeURIComponent(transport)}`,
-    fileURLToPath(new URL("./index.js", import.meta.url)),
-    "--endpoint", formatBridgeUri({ endpoint: "/mock/bridge.sock", sessionId: "test" }),
-  ], { stdio: "pipe" });
-  const exited = once(child, "exit");
-  const lines = readline.createInterface({ input: child.stdout });
-  let response: Record<string, unknown> | undefined;
-  const waited = new Promise<void>((resolve) => {
-    lines.on("line", (line) => {
-      response = JSON.parse(line);
-      resolve();
+for (const row of [
+  { name: "CLI discovery metadata", method: "server/discover", params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }, version: "2026-07-28" },
+  { name: "explicit version takes precedence", method: "server/discover", params: { protocolVersion: "2025-06-18", _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }, version: "2025-06-18" },
+  { name: "missing params", method: "server/discover", params: undefined, version: "2025-06-18" },
+  { name: "invalid metadata", method: "server/discover", params: { _meta: { "io.modelcontextprotocol/protocolVersion": 42 } }, version: "2025-06-18" },
+  { name: "initialize retains explicit version", method: "initialize", params: { protocolVersion: "2024-11-05" }, version: "2024-11-05" },
+]) {
+  it(`negotiates MCP version: ${row.name}`, async (t) => {
+    const child = spawn(process.execPath, [
+      "--import", `data:text/javascript,${encodeURIComponent(transport)}`,
+      fileURLToPath(new URL("./index.js", import.meta.url)),
+      "--endpoint", formatBridgeUri({ endpoint: "/mock/bridge.sock", sessionId: "test" }),
+    ], { stdio: "pipe" });
+    const exited = once(child, "exit");
+    const lines = readline.createInterface({ input: child.stdout });
+    let response: Record<string, unknown> | undefined;
+    const waited = new Promise<void>((resolve) => {
+      lines.on("line", (line) => {
+        response = JSON.parse(line);
+        resolve();
+      });
+    });
+    t.after(async () => {
+      lines.close();
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await exited;
+    });
+
+    child.stdin.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: row.method,
+      params: row.params,
+    }) + "\n");
+    await waited;
+
+    assert.deepEqual(response, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        protocolVersion: row.version,
+        capabilities: { tools: {} },
+        serverInfo: { name: "pi-agy-bridge", version: "0.5.1" },
+      },
     });
   });
-  t.after(async () => {
-    lines.close();
-    if (child.exitCode === null && child.signalCode === null) child.kill();
-    await exited;
-  });
-
-  child.stdin.write(JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "server/discover",
-    params: {
-      _meta: {
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-      },
-    },
-  }) + "\n");
-  await waited;
-
-  assert.deepEqual(response, {
-    jsonrpc: "2.0",
-    id: 1,
-    result: {
-      protocolVersion: "2026-07-28",
-      capabilities: { tools: {} },
-      serverInfo: { name: "pi-agy-bridge", version: "0.5.1" },
-    },
-  });
-});
+}
 

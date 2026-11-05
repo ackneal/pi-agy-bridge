@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgyUsage } from "../../runtime/usage.ts";
-import { createAuthenticationBackend, isAuthRequiredError } from "./auth.ts";
+import { createAuthenticationBackend, isAuthRequiredError, withAcpConnection } from "./auth.ts";
 import { Connection } from "./connection.ts";
 
 const mockUsage: AgyUsage = {
@@ -30,6 +30,9 @@ describe("AgyAcp isAuthRequiredError", () => {
     { label: "error with 'not authenticated' message", error: new Error("User is not authenticated"), expected: true },
     { label: "generic RequestError (-32603)", error: new acp.RequestError(-32603, "Internal error"), expected: false },
     { label: "generic Error", error: new Error("network timeout"), expected: false },
+    { label: "authorization failure is not missing authentication", error: new Error("Authorization denied"), expected: false },
+    { label: "unrelated login path", error: new Error("Cannot read /tmp/login/config"), expected: false },
+    { label: "structured non-auth error overrides message", error: new acp.RequestError(-32603, "Authentication required"), expected: false },
     { label: "non-error primitive", error: "some string", expected: false },
   ]) {
     test(`${label} -> ${expected}`, () => {
@@ -133,6 +136,103 @@ describe("AgyAcp Auth Backend probe", () => {
   });
 });
 
+for (const stage of ["select", "secret", "confirmation", "probe usage", "login usage"] as const) {
+  test(`authentication cancellation during ${stage} preserves the reason and cleans up`, async (t) => {
+    const controller = new AbortController();
+    const reason = new Error("user cancelled");
+    const onUsage = t.mock.fn();
+    t.mock.method(Connection.prototype, "start", async () => ({
+      protocolVersion: acp.PROTOCOL_VERSION,
+      authMethods: [{ id: "gemini-api-key", name: "API key" }],
+    }));
+    const requests: string[] = [];
+    t.mock.method(Connection.prototype, "request", async (method: string) => {
+      requests.push(method);
+      if (method === acp.methods.agent.session.new) {
+        if (stage === "confirmation") {
+          controller.abort(reason);
+          throw new Error("transport closed");
+        }
+        return { sessionId: "session-1" };
+      }
+      return {};
+    });
+    const disposal = t.mock.method(Connection.prototype, "dispose", async () => {});
+    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp", async () => {
+      controller.abort(reason);
+      throw new Error("usage interrupted");
+    });
+
+    const operation = stage === "probe usage"
+      ? backend.probe(controller.signal, onUsage)
+      : backend.login({
+        signal: controller.signal,
+        notify: () => {},
+        prompt: async ({ type }) => {
+          if (type === stage) {
+            controller.abort(reason);
+            return new Promise<string>(() => {});
+          }
+          return type === "select" ? "gemini-api-key" : "key";
+        },
+      }, onUsage);
+
+    await assert.rejects(operation, (error) => error === reason);
+    assert.ok(disposal.mock.callCount() >= 1);
+    assert.equal(onUsage.mock.callCount(), 0);
+    if (stage === "select" || stage === "secret") assert.deepEqual(requests, []);
+  });
+}
+
+for (const outcome of ["success", "startup error", "operation error", "already cancelled"] as const) {
+  test(`withAcpConnection lifecycle: ${outcome}`, async (t) => {
+    const failure = new Error(outcome);
+    const controller = new AbortController();
+    if (outcome === "already cancelled") controller.abort(failure);
+    const start = t.mock.method(Connection.prototype, "start", async () => {
+      if (outcome === "startup error") throw failure;
+      return { protocolVersion: acp.PROTOCOL_VERSION };
+    });
+    const dispose = t.mock.method(Connection.prototype, "dispose", async () => {});
+    const operation = t.mock.fn(async () => {
+      if (outcome === "operation error") throw failure;
+      return 42;
+    });
+
+    const result = withAcpConnection({ executable: "/bin/agy", cwd: "/tmp" }, controller.signal, operation);
+    if (outcome === "success") assert.equal(await result, 42);
+    else await assert.rejects(result, (error) => error === failure);
+
+    assert.equal(start.mock.callCount(), outcome === "already cancelled" ? 0 : 1);
+    assert.equal(dispose.mock.callCount(), outcome === "already cancelled" ? 0 : 1);
+    assert.equal(operation.mock.callCount(), outcome === "success" || outcome === "operation error" ? 1 : 0);
+  });
+}
+
+for (const choice of ["unadvertised", "rejected prompt"] as const) {
+  test(`login rejects ${choice} without authenticating`, async (t) => {
+    t.mock.method(Connection.prototype, "start", async () => ({
+      protocolVersion: acp.PROTOCOL_VERSION,
+      authMethods: [{ id: "oauth-personal", name: "Google" }],
+    }));
+    const request = t.mock.method(Connection.prototype, "request", async () => {});
+    const dispose = t.mock.method(Connection.prototype, "dispose", async () => {});
+    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp");
+    const failure = new Error("prompt failed");
+
+    await assert.rejects(backend.login({
+      signal: new AbortController().signal,
+      notify: () => {},
+      prompt: async () => {
+        if (choice === "rejected prompt") throw failure;
+        return "gemini-api-key";
+      },
+    }, () => {}), choice === "rejected prompt" ? (error: unknown) => error === failure : /not advertised/);
+    assert.equal(request.mock.callCount(), 0);
+    assert.equal(dispose.mock.callCount(), 1);
+  });
+}
+
 describe("AgyAcp Auth Backend login", () => {
   test("throws if executable is not detected", async () => {
     const backend = createAuthenticationBackend(() => undefined, () => "/tmp");
@@ -151,10 +251,10 @@ describe("AgyAcp Auth Backend login", () => {
     }));
 
     const requestedMethods: string[] = [];
-    t.mock.method(Connection.prototype, "request", async (method: string, params: any) => {
+    t.mock.method(Connection.prototype, "request", async (method: string, params: unknown) => {
       requestedMethods.push(method);
       if (method === acp.methods.agent.authenticate) {
-        assert.equal(params.methodId, "oauth-personal");
+        assert.deepEqual(params, { methodId: "oauth-personal" });
         return {};
       }
       if (method === acp.methods.agent.session.new) {
@@ -199,8 +299,8 @@ describe("AgyAcp Auth Backend login", () => {
       ],
     }));
 
-    let authenticatedPayload: any;
-    t.mock.method(Connection.prototype, "request", async (method: string, params: any) => {
+    let authenticatedPayload: unknown;
+    t.mock.method(Connection.prototype, "request", async (method: string, params: unknown) => {
       if (method === acp.methods.agent.authenticate) {
         authenticatedPayload = params;
         return {};

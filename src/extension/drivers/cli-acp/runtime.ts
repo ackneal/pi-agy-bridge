@@ -2,13 +2,26 @@ import type { ContentBlock, SessionConfigOption, SessionNotification } from "@ag
 import * as acp from "@agentclientprotocol/sdk";
 import type { Message } from "@earendil-works/pi-ai";
 import type { BridgeMessage, DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
-import { Connection } from "./connection.ts";
+import type { Connection } from "./connection.ts";
 import { EventProcessor } from "./events.ts";
 import { debugArtifact, debugLog } from "../../shared/debug.ts";
 import { serializeContextUpdate } from "../../provider/context-prompt.ts";
 
+type SessionRequests = {
+  "session/new": [acp.NewSessionRequest, acp.NewSessionResponse];
+  "session/load": [acp.LoadSessionRequest, acp.LoadSessionResponse];
+  "session/set_config_option": [acp.SetSessionConfigOptionRequest, acp.SetSessionConfigOptionResponse];
+  "session/setConfigOption": [acp.SetSessionConfigOptionRequest, acp.SetSessionConfigOptionResponse];
+  "session/prompt": [acp.PromptRequest, acp.PromptResponse];
+};
+
+export interface RuntimeConnection extends Pick<Connection, "start" | "isRunning" | "notify" | "dispose"> {
+  request<M extends keyof SessionRequests>(method: M, params: SessionRequests[M][0]): Promise<SessionRequests[M][1]>;
+  onSessionUpdate(handler: (notification: SessionNotification) => void | Promise<void>): () => void;
+}
+
 export interface AcpSessionClientOptions {
-  connection: Connection;
+  connection: RuntimeConnection;
   cwd: string;
   model: string;
   effort?: "low" | "medium" | "high" | undefined;
@@ -19,16 +32,24 @@ export interface AcpSessionClientOptions {
 }
 
 export class AcpSessionClient {
-  private readonly connection: Connection;
+  private readonly connection: RuntimeConnection;
   private readonly options: AcpSessionClientOptions;
   private sessionId: string | undefined;
   private configOptions: SessionConfigOption[] = [];
   private activePrompt: Promise<acp.PromptResponse> | undefined;
   private preparing = true;
+  private preparation: Promise<void> | undefined;
+  private readonly unsubscribe: () => void;
 
   constructor(options: AcpSessionClientOptions) {
     this.connection = options.connection;
     this.options = options;
+    this.unsubscribe = this.connection.onSessionUpdate((notification) => {
+      // Loading replays history before the response; it is not live output.
+      if (!this.preparing && notification.sessionId === this.sessionId) {
+        return options.onUpdate(notification);
+      }
+    });
   }
 
   get id(): string {
@@ -44,7 +65,30 @@ export class AcpSessionClient {
     return this.activePrompt !== undefined;
   }
 
-  async prepare(signal?: AbortSignal): Promise<void> {
+  prepare(signal?: AbortSignal): Promise<void> {
+    this.preparation ??= this.prepareSession(signal);
+    return this.preparation;
+  }
+
+  private async prepareSession(signal?: AbortSignal): Promise<void> {
+    const abort = () => { void this.dispose().catch((error: unknown) => debugLog("session", "ACP preparation cleanup failed:", error)); };
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      signal?.throwIfAborted();
+      await this.initializeSession(signal);
+    } catch (error) {
+      try {
+        await this.dispose();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "ACP preparation and cleanup failed");
+      }
+      throw error;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
+  }
+
+  private async initializeSession(signal?: AbortSignal): Promise<void> {
     const initialized = await this.connection.start(signal);
     signal?.throwIfAborted();
 
@@ -60,7 +104,7 @@ export class AcpSessionClient {
     };
 
     if (this.options.sessionId) {
-      if (!initialized.agentCapabilities?.loadSession && !(initialized.agentCapabilities as any)?.load_session) {
+      if (!initialized.agentCapabilities?.loadSession) {
         throw new Error("ACP server does not support session loading");
       }
       const loaded = await this.connection.request(acp.methods.agent.session.load, { ...params, sessionId: this.options.sessionId });
@@ -77,29 +121,25 @@ export class AcpSessionClient {
     await this.applyConfiguration("model", this.options.model);
     signal?.throwIfAborted();
 
+    const effortKey = this.configOptions.some((opt) => opt.id === "thought_level") ? "thought_level" : "thinking_level";
     if (this.options.effort !== undefined) {
-      const thoughtKey = this.configOptions.find((opt) => opt.id === "thought_level")
-        ? "thought_level"
-        : this.configOptions.find((opt) => opt.id === "thinking_level")
-          ? "thinking_level"
-          : undefined;
-      if (thoughtKey) {
-        await this.applyConfiguration(thoughtKey, this.options.effort);
-      }
+      await this.applyConfiguration(effortKey, this.options.effort);
     }
     signal?.throwIfAborted();
+
+    this.verifyConfiguration("model", this.options.model);
+    if (this.options.effort !== undefined) this.verifyConfiguration(effortKey, this.options.effort);
 
     this.preparing = false;
   }
 
   private async applyConfiguration(id: string, value: string): Promise<void> {
     const option = this.configOptions.find((entry) => entry.id === id);
-    if (!option || option.type !== "select") return;
+    if (!option || option.type !== "select") throw new Error(`ACP required configuration is unavailable: ${id}`);
 
     const values = option.options.flatMap((entry) => "group" in entry ? entry.options : [entry]);
     if (!values.some((entry) => entry.value === value)) {
-      debugLog("acp", `ACP unsupported ${id}: ${value}; retaining default`);
-      return;
+      throw new Error(`ACP unsupported ${id}: ${value}`);
     }
 
     try {
@@ -108,7 +148,7 @@ export class AcpSessionClient {
         configId: id,
         value,
       });
-      if (response?.configOptions) this.configOptions = response.configOptions;
+      this.configOptions = response.configOptions;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (msg.includes("-32601") || msg.includes("Method not found")) {
@@ -117,10 +157,17 @@ export class AcpSessionClient {
           configId: id,
           value,
         });
-        if (response?.configOptions) this.configOptions = response.configOptions;
+        this.configOptions = response.configOptions;
       } else {
         throw error;
       }
+    }
+    this.verifyConfiguration(id, value);
+  }
+
+  private verifyConfiguration(id: string, value: string): void {
+    if (this.configOptions.find((entry) => entry.id === id)?.currentValue !== value) {
+      throw new Error(`ACP did not apply the requested ${id}: ${value}`);
     }
   }
 
@@ -138,19 +185,22 @@ export class AcpSessionClient {
   }
 
   async cancel(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (this.connection.isRunning && this.sessionId) {
         await Promise.race([
           this.connection.notify("session/cancel", { sessionId: this.sessionId }),
-          new Promise<void>((resolve) => setTimeout(resolve, 200)),
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, 200); }),
         ]);
       }
     } finally {
-      await this.connection.dispose();
+      clearTimeout(timer);
+      await this.dispose();
     }
   }
 
   dispose(): Promise<void> {
+    this.unsubscribe();
     return this.connection.dispose();
   }
 }
@@ -174,7 +224,7 @@ export function serializeContent(messages: readonly BridgeMessage[]): ContentBlo
           blocks.push({ type: "text", text: part.text });
         }
       } else if (part.type === "image") {
-        blocks.push({ type: "text", text: `[Image attached: ${part.mimeType}]` });
+        blocks.push(part);
       }
     }
   }
@@ -194,8 +244,8 @@ export class RuntimeSession implements DriverSession {
   private failure: Promise<void> | undefined;
 
   constructor(
-    connection: Connection,
-    options: Omit<AcpSessionClientOptions, "connection" | "onUpdate">,
+    connection: RuntimeConnection,
+    readonly options: Omit<AcpSessionClientOptions, "connection" | "onUpdate">,
     allowedToolNames: ReadonlySet<string> = new Set(),
     compatibilityKey?: string,
   ) {
@@ -276,11 +326,13 @@ export class RuntimeSession implements DriverSession {
         throw new Error("Invalid ACP payload");
       }
 
-      const prompt: ContentBlock[] = (payload as any).prompt.map((block: unknown) => {
+      const prompt: ContentBlock[] = payload.prompt.map((block: unknown) => {
         if (!block || typeof block !== "object" || !("type" in block)) throw new Error("Invalid ACP content block");
-        if ((block as any).type === "text" && "text" in block && typeof (block as any).text === "string") return { type: "text", text: (block as any).text };
-        if ((block as any).type === "image") return { type: "text", text: `[Image attached: ${(block as any).mimeType ?? "image"}]` };
-        throw new Error("ACP payload supports text content blocks");
+        if (block.type === "text" && "text" in block && typeof block.text === "string") return { type: "text", text: block.text };
+        if (block.type === "image" && "data" in block && typeof block.data === "string" && "mimeType" in block && typeof block.mimeType === "string") {
+          return { type: "image", data: block.data, mimeType: block.mimeType };
+        }
+        throw new Error("ACP payload supports text and image content blocks");
       });
 
       debugArtifact("cli-acp-payload", {

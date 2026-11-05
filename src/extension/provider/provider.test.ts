@@ -10,6 +10,8 @@ import { syncBuiltinESMExports } from "node:module";
 import { AgyRuntime } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
+import { Driver as CliAcpDriver } from "../drivers/cli-acp/driver.ts";
+import { createBridgeDriver } from "../drivers/driver.ts";
 import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
 import { AgyAuthentication, createAgyBridgeCredential, getAgyBridgeAuthEnvironment } from "./auth.ts";
 import { SessionMode } from "../drivers/types.ts";
@@ -121,6 +123,89 @@ describe("Bridge.start registration", () => {
     assert.equal(execFile.mock.callCount(), 0);
     assert.equal(runtimeStart.mock.callCount(), 0);
   });
+});
+
+describe("driver command", () => {
+  for (const row of [
+    { name: "explicit CLI", current: "acp", args: "cli", selected: undefined, target: "cli" },
+    { name: "explicit ACP", current: "cli", args: "acp", selected: undefined, target: "acp" },
+    { name: "explicit CLI ACP normalizes input", current: "acp", args: " CLI-ACP ", selected: undefined, target: "cli-acp" },
+    { name: "UI CLI", current: "acp", args: "", selected: "CLI", target: "cli" },
+    { name: "UI ACP", current: "cli", args: "", selected: "ACP", target: "acp" },
+    { name: "UI CLI ACP", current: "acp", args: "", selected: "CLI-ACP", target: "cli-acp" },
+    { name: "UI cancellation", current: "acp", args: "", selected: undefined, target: undefined },
+    { name: "UI current CLI ACP", current: "cli-acp", args: "", selected: "CLI-ACP (current)", target: undefined },
+    { name: "explicit current CLI ACP", current: "cli-acp", args: "cli-acp", selected: undefined, target: undefined },
+    { name: "unknown driver", current: "acp", args: "unknown", selected: undefined, target: undefined },
+  ] as const) {
+    test(row.name, async (t) => {
+      const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
+      let shutdown: (() => Promise<void>) | undefined;
+      const bridge = new Bridge({
+        on: (event: string, handler: () => Promise<void>) => { if (event === "session_shutdown") shutdown = handler; },
+        registerCommand: (name: string, command: Parameters<ExtensionAPI["registerCommand"]>[1]) => commands.set(name, command),
+        registerProvider: () => {},
+      } as unknown as ExtensionAPI, createBridgeDriver(row.current));
+      t.after(async () => { await shutdown?.(); });
+      // Keep command selection isolated from the follow-up diagnostics.
+      const switchDriver = t.mock.method(bridge, "switchDriver", async () => ({ signal: AbortSignal.abort() }));
+      const select = t.mock.fn(async () => row.selected);
+      const notify = t.mock.fn();
+      const setStatus = t.mock.fn();
+      const ctx = { hasUI: true, ui: { select, notify, setStatus } } as unknown as ExtensionCommandContext;
+      bridge.start();
+      const command = commands.get("agy-bridge:driver")!;
+
+      await command.handler(row.args, ctx);
+
+      assert.ok(command.description);
+      assert.match(command.description, /\[cli\|acp\|cli-acp\]/);
+      if (!row.args) {
+        assert.deepEqual(select.mock.calls[0]?.arguments, ["Select Antigravity driver",
+          ["acp", "cli", "cli-acp"].map((id) => `${id.toUpperCase()}${id === row.current ? " (current)" : ""}`)]);
+      } else assert.equal(select.mock.callCount(), 0);
+      assert.equal(switchDriver.mock.callCount(), row.target ? 1 : 0);
+      if (row.target) {
+        assert.deepEqual(switchDriver.mock.calls[0]?.arguments, [row.target, undefined]);
+        assert.deepEqual(setStatus.mock.calls.map((call) => call.arguments), [
+          ["agy-bridge", `Switching to ${createBridgeDriver(row.target).label}…`], ["agy-bridge", undefined],
+        ]);
+        assert.equal(notify.mock.callCount(), 0);
+      } else if (row.args === "unknown") {
+        assert.deepEqual(notify.mock.calls[0]?.arguments, ['Unknown driver "unknown". Available: cli, acp, cli-acp.', "warning"]);
+      } else if (row.current === "cli-acp") {
+        assert.deepEqual(notify.mock.calls[0]?.arguments, ["Already using driver: **Antigravity CLI ACP** (cli-acp).", "info"]);
+      } else assert.equal(notify.mock.callCount(), 0);
+    });
+  }
+
+  for (const executable of [undefined, "/mock/agy"] as const) {
+    test(`non-UI status includes CLI ACP ${executable ? "installed" : "missing"}`, async (t) => {
+      const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
+      let shutdown: (() => Promise<void>) | undefined;
+      t.mock.method(AcpDriver.prototype, "detectExecutable", () => "/mock/acp");
+      t.mock.method(CliDriver.prototype, "detectExecutable", () => "/mock/cli");
+      const detect = t.mock.method(CliAcpDriver.prototype, "detectExecutable", () => executable);
+      const output = t.mock.method(console, "error", () => {});
+      const bridge = new Bridge({
+        on: (event: string, handler: () => Promise<void>) => { if (event === "session_shutdown") shutdown = handler; },
+        registerCommand: (name: string, command: Parameters<ExtensionAPI["registerCommand"]>[1]) => commands.set(name, command),
+        registerProvider: () => {},
+      } as unknown as ExtensionAPI);
+      t.after(async () => { await shutdown?.(); });
+      bridge.start();
+
+      await commands.get("agy-bridge:driver")!.handler("", { hasUI: false } as ExtensionCommandContext);
+
+      assert.equal(bridge.driver.id, "acp");
+      assert.equal(detect.mock.callCount(), 1);
+      const status = output.mock.calls[0]?.arguments[0];
+      assert.equal(typeof status, "string");
+      assert.ok(status.includes(`- **cli-acp**: ${executable ? `✓ Found (${executable})` : "✗ Not found"}`));
+      assert.match(status, /Default: ACP\./);
+      assert.match(status, /`\/agy-bridge:driver cli-acp`/);
+    });
+  }
 });
 
 describe("startup subscription", () => {
