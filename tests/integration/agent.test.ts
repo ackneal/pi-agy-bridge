@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { composeSystemPrompt } from "../../src/extension/drivers/acp/instructions.ts";
+import { composeSystemPrompt as composeAcpSystemPrompt } from "../../src/extension/drivers/acp/instructions.ts";
+import { composeSystemPrompt as composeCliSystemPrompt } from "../../src/extension/drivers/cli/instructions.ts";
 import { BridgeIPC } from "../../src/extension/bridge/ipc.ts";
 import { buildCliProcessEnvironment } from "../../src/extension/discovery/plugin-install.ts";
 import { mkdtemp, symlink, writeFile, rm, readFile } from "node:fs/promises";
@@ -47,13 +48,6 @@ tools: [view_file]
     assert.match(markdown, /\nexcludeDefaultComponents: true\n/);
     assert.match(markdown, /\ninheritMcp: true\n/);
     assert.match(markdown, /\ntools: \[view_file\]\n/);
-    assert.match(markdown, /model runtime delegated by Pi/);
-    const body = markdown.split("---\n")[2];
-    assert.ok(body, "CLI prompt must contain a body after YAML frontmatter");
-
-    assert.doesNotMatch(body, /client_view_file|absolute_path|start_line|Workspace Instructions|isolated image observer|brain\//);
-    assert.doesNotMatch(markdown, /incremental XML|<pi_context|reconstructed_conversation|pending_tool_continuation|contentOmitted|Tools \(completed\)/);
-    assert.doesNotMatch(markdown, /session ID|conversation ID|PTY ID|socket|tool snapshot/i);
   });
 
   it("keeps standalone selectable as a CLI main agent with no tools and output-only instructions", async () => {
@@ -162,16 +156,12 @@ Provide only the requested output.
         {
           section: "Read the conversation",
           clauses: [
-            /conversation context as plain Markdown, or a single user message as plain text/,
-            /Initial and rebuilt context include the full system instructions/,
             /Image placeholders record MIME types, not image content\. Do not infer image details from a placeholder/,
           ],
         },
         {
           section: "Use the available tools",
           clauses: [
-            /Pi supplies tools through the MCP server `pi-agy-bridge_pi`/,
-            /Determine availability from Pi's current tool declarations and the matching MCP tool list/,
             /Call Pi tools through `call_mcp_tool` with `ServerName: "pi-agy-bridge_pi"`/,
             /Set `ToolName` to the exact plain Pi tool name, such as `"read"` or `"bash"`/,
             /Do not add a server prefix/,
@@ -253,8 +243,8 @@ Provide only the requested output.
     for (const backend of ["CLI", "ACP"] as const) {
       async function readPrompt() {
         const prompt = backend === "CLI"
-          ? (await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8")).split("---\n")[2]
-          : composeSystemPrompt([]);
+          ? composeCliSystemPrompt([])
+          : composeAcpSystemPrompt([]);
 
         assert.ok(prompt, `${backend} prompt must contain an instruction body`);
         return prompt;
@@ -319,17 +309,17 @@ Provide only the requested output.
     }
 
     it("CLI: scopes native view_file before its path parameters", async () => {
-      const markdown = await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8");
+      const markdown = composeCliSystemPrompt([]);
       const references = markdown.split("## Read referenced content\n")[1]?.split("\n## ")[0];
       assert.ok(references, "References section must exist");
 
-      assert.match(references, /Use native `view_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files\.\nSet `AbsolutePath`/);
+      assert.match(references, /Use native `view_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files\.\n- Set `AbsolutePath`/);
       assert.doesNotMatch(references, /Use it only/);
     });
 
     it("keeps runtime identity and current ACP system-instruction provenance", async () => {
-      const cli = await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8");
-      const acp = composeSystemPrompt([{ role: "system", content: "Current Pi policy" }]);
+      const cli = composeCliSystemPrompt([]);
+      const acp = composeAcpSystemPrompt([{ role: "system", content: "Current Pi policy" }]);
 
       assert.match(cli, /Follow Pi's instructions and answer as Pi's assistant/);
       assert.match(acp, /Workspace Instructions, when present, contain Pi's current system instructions and define the work and policies/);

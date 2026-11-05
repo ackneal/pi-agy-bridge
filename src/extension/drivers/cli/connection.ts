@@ -183,9 +183,9 @@ export class Connection {
     }
 
     this.sdk?.close(error);
-    this.child?.stdin.destroy();
-    this.child?.stdout.destroy();
-    this.child?.stderr.destroy();
+    this.child?.stdin?.destroy();
+    this.child?.stdout?.destroy();
+    this.child?.stderr?.destroy();
     this.options.onClose?.(error);
   }
 

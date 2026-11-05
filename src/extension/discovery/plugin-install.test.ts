@@ -32,7 +32,7 @@ async function assertPluginAssetsEqual(actual: string, source: string): Promise<
   const sourcePlugin = await fs.readFile(path.join(source, "plugin.json"), "utf8");
   assert.equal(actualPlugin, sourcePlugin, "plugin.json must match source");
 
-  for (const agent of ["pi-bridge.md", "pi-bridge-acp.md"]) {
+  for (const agent of ["pi-bridge.md", "pi-standalone.md"]) {
     const actualPrompt = await fs.readFile(path.join(actual, "agents", agent), "utf8");
     const sourcePrompt = await fs.readFile(path.join(source, "agents", agent), "utf8");
     assert.equal(actualPrompt, sourcePrompt, `agents/${agent} must match source`);
@@ -139,7 +139,7 @@ test("same-version plugin missing the required ACP agent synchronizes once witho
   await withTemporaryHome(async (home) => {
     const target = path.join(home, ".gemini", "config", "plugins", "pi-agy-bridge");
     await fs.cp(DEFAULT_AGY_PLUGIN_DIR, target, { recursive: true });
-    await fs.rm(path.join(target, "agents", "pi-bridge-acp.md"));
+    await fs.rm(path.join(target, "agents", "pi-bridge.md"));
     const cp = t.mock.method(fs, "cp");
 
     await ensureAgyPluginInstalled(path.join(home, "missing-agy"), DEFAULT_AGY_PLUGIN_DIR);

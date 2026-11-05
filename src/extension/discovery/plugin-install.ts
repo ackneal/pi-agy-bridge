@@ -65,7 +65,7 @@ async function installPlugin(agyPath: string | undefined, pluginDir: string): Pr
   if (installedManifest?.version === sourceManifest.version) {
     try {
       // This required agent was added without changing the plugin version.
-      await fs.access(path.join(targetDir, "agents", "pi-bridge-acp.md"));
+      await fs.access(path.join(targetDir, "agents", "pi-bridge.md"));
       return;
     } catch (error) {
       if (!isNodeError(error, "ENOENT")) throw error;

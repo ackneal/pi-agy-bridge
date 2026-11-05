@@ -21,6 +21,8 @@ import {
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
+import { DEFAULT_AGY_PLUGIN_DIR } from "../discovery/plugin-install.ts";
 import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
@@ -190,8 +192,8 @@ export class Bridge {
   constructor(pi: ExtensionAPI, driver?: BridgeDriver) {
     this.pi = pi;
     const credential = driver ? undefined : readStoredCredential("agy", path.join(getAgentDir(), "auth.json"));
-    const initialDriver = credential?.type === "oauth" && (credential.driver === "cli" || credential.driver === "cli-acp")
-      ? credential.driver
+    const initialDriver = credential?.type === "oauth" && credential.driver === "cli"
+      ? "cli"
       : "acp";
     this.driver = driver ?? createBridgeDriver(initialDriver);
     this.driver.onInstallationProgress = (progress) => this.installationProgress.update(progress);
@@ -243,6 +245,13 @@ export class Bridge {
     driver.onInstallationProgress = (progress) => this.installationProgress.update(progress);
     if (driver.id === "cli" && !driver.detectExecutable()) throw new Error(`${driver.label} executable not found`);
     const lifetime = this.runtimeLifetime.signal;
+    if (driver instanceof CliDriver) {
+      lifetime.throwIfAborted();
+      await driver.installPlugin(DEFAULT_AGY_PLUGIN_DIR);
+      this.lifetime.signal.throwIfAborted();
+      lifetime.throwIfAborted();
+    }
+
     const models = await driver.discoverModels(lifetime) ?? driver.initialModels;
     lifetime.throwIfAborted();
 
@@ -372,11 +381,11 @@ export class Bridge {
     });
 
     this.pi.registerCommand("agy-bridge:driver", {
-      description: "Select or switch the Antigravity driver (/agy-bridge:driver [cli|acp|cli-acp])",
+      description: "Select or switch the Antigravity driver (/agy-bridge:driver [cli|acp])",
       handler: async (args, ctx) => {
         let target = args?.trim().toLowerCase();
         if (!target && ctx?.hasUI) {
-          const drivers = ["acp", "cli", "cli-acp"] as const;
+          const drivers = ["acp", "cli"] as const;
           const labels = drivers.map((id) => `${id.toUpperCase()}${id === this.driver.id ? " (current)" : ""}`);
           const selected = await ctx.ui.select("Select Antigravity driver", labels);
           if (selected === undefined) return;
@@ -388,7 +397,6 @@ export class Bridge {
         if (!target) {
           const acpPath = createBridgeDriver("acp").detectExecutable();
           const cliPath = createBridgeDriver("cli").detectExecutable();
-          const cliAcpPath = createBridgeDriver("cli-acp").detectExecutable();
           let acpStatus = acpPath ? `✓ Found (${acpPath})` : "Not installed — downloads automatically on first ACP use";
           if (!acpPath) {
             if (process.env.AGY_ACP_DIR?.trim()) acpStatus = "✗ Invalid AGY_ACP_DIR — check its absolute path, required files, and permissions, or unset it";
@@ -404,17 +412,16 @@ export class Bridge {
             "Available drivers:",
             `- **acp**: ${acpStatus}`,
             `- **cli**: ${cliPath ? `✓ Found (${cliPath})` : "✗ Not found"}`,
-            `- **cli-acp**: ${cliAcpPath ? `✓ Found (${cliAcpPath})` : "✗ Not found"}`,
             "",
-            "Usage: `/agy-bridge:driver cli`, `/agy-bridge:driver acp`, or `/agy-bridge:driver cli-acp`",
+            "Usage: `/agy-bridge:driver cli` or `/agy-bridge:driver acp`",
           ].join("\n");
 
           this.notifyUser(ctx, status);
           return;
         }
 
-        if (target !== "cli" && target !== "acp" && target !== "cli-acp") {
-          this.notifyUser(ctx, `Unknown driver "${target}". Available: cli, acp, cli-acp.`, "warning");
+        if (target !== "cli" && target !== "acp") {
+          this.notifyUser(ctx, `Unknown driver "${target}". Available: cli, acp.`, "warning");
           return;
         }
 

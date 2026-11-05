@@ -1,11 +1,11 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { BridgeDriver, DriverAuthentication, DriverFailure, PrepareDriverInput } from "../types.ts";
-import { ensureAgyPluginInstalled } from "../../discovery/plugin-install.ts";
+import { DEFAULT_AGY_PLUGIN_DIR, ensureAgyPluginInstalled } from "../../discovery/plugin-install.ts";
 import { discoverAgyModels } from "../../discovery/models.ts";
 import { fetchAgyUsage } from "../../runtime/usage.ts";
 import { detectCliExecutable } from "../../runtime/version.ts";
-import { loginAgyAuthentication, probeAgyAuthentication } from "../../runtime/auth.ts";
 import { prepareDriverCwd } from "../cwd.ts";
+import { createAuthenticationBackend } from "./auth.ts";
 import { prepareRuntime, resolveModelAndEffort } from "./session.ts";
 import { SessionMode } from "../types.ts";
 
@@ -14,15 +14,15 @@ export class Driver implements BridgeDriver {
   readonly label = "Antigravity CLI";
   readonly sessionVersion = "cli:v1";
   readonly initialModels = [];
-  readonly authentication;
+  readonly authentication: DriverAuthentication;
   pluginError: DriverFailure | undefined;
 
   constructor() {
-    this.authentication = {
-      label: this.label,
-      probe: (signal, onUsage) => probeAgyAuthentication(this.detectExecutable(), signal, onUsage),
-      login: (interaction, onUsage) => loginAgyAuthentication(interaction, this.detectExecutable(), onUsage),
-    } satisfies DriverAuthentication;
+    this.authentication = createAuthenticationBackend(
+      () => this.detectExecutable(),
+      () => prepareDriverCwd(this.id),
+      () => this.installPlugin(DEFAULT_AGY_PLUGIN_DIR),
+    );
   }
 
   detectExecutable(): string | undefined {
@@ -40,12 +40,29 @@ export class Driver implements BridgeDriver {
     input.options?.signal?.throwIfAborted();
 
     const dependencies = {
-      store: input.store, sync: input.sync, sessionVersion: this.sessionVersion, executable: this.detectExecutable(),
+      store: input.store,
+      sync: input.sync,
+      sessionVersion: this.sessionVersion,
+      executable: this.detectExecutable(),
       installPlugin: (pluginDir: string) => this.installPlugin(pluginDir),
     };
+
     const selection = resolveModelAndEffort(input.model.id, input.options, input.model.thinkingLevelMap);
     const cwd = prepareDriverCwd(this.id);
-    return prepareRuntime(input.model, input.context, input.tools, input.options, cwd, dependencies, input.session, selection, input.preparationId, input.mode === SessionMode.Standalone);
+
+    return prepareRuntime(
+      input.model,
+      input.context,
+      input.messages,
+      input.tools,
+      input.options,
+      cwd,
+      dependencies,
+      input.session,
+      selection,
+      input.preparationId,
+      input.mode === SessionMode.Standalone,
+    );
   }
 
   discoverModels(signal: AbortSignal) {

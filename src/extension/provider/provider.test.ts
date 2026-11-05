@@ -7,10 +7,8 @@ import type { Provider, Model } from "@earendil-works/pi-ai";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import { AgyRuntime } from "../runtime/process.ts";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
-import { Driver as CliAcpDriver } from "../drivers/cli-acp/driver.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
 import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
 import { AgyAuthentication, createAgyBridgeCredential, getAgyBridgeAuthEnvironment } from "./auth.ts";
@@ -33,17 +31,17 @@ describe("streamProvider selection validation", () => {
     {
       name: "rejects fixed claude-sonnet-4-6 reasoningEffort=low before runtime preparation",
       modelId: "claude-sonnet-4-6", options: { reasoningEffort: "low" },
-      error: "Unsupported Antigravity CLI reasoning effort for claude-sonnet-4-6: low.",
+      error: "Unsupported Antigravity reasoning effort for claude-sonnet-4-6: low.",
     },
     {
       name: "rejects fixed claude-opus-4-6-thinking reasoning=medium before runtime preparation",
       modelId: "claude-opus-4-6-thinking", options: { reasoning: "medium" },
-      error: "Unsupported Antigravity CLI reasoning effort for claude-opus-4-6-thinking: medium.",
+      error: "Unsupported Antigravity reasoning effort for claude-opus-4-6-thinking: medium.",
     },
     {
       name: "rejects fixed claude-sonnet-4-6 thinkingLevel=high before runtime preparation",
       modelId: "claude-sonnet-4-6", options: { thinkingLevel: "high" },
-      error: "Unsupported Antigravity CLI reasoning effort for claude-sonnet-4-6: high.",
+      error: "Unsupported Antigravity reasoning effort for claude-sonnet-4-6: high.",
     },
   ] as const;
 
@@ -71,7 +69,6 @@ describe("Bridge.start registration", () => {
   test("registers the Antigravity CLI provider and session lifecycle without starting runtime work", async (t) => {
     const spawn = t.mock.method(cp, "spawn", () => { throw new Error("Registration must not start a process"); });
     const execFile = t.mock.method(cp, "execFile", () => { throw new Error("Registration must not execute a command"); });
-    const runtimeStart = t.mock.method(AgyRuntime.prototype, "start", async () => { throw new Error("Registration must not start the runtime"); });
     syncBuiltinESMExports();
     const handlers = new Map<string, unknown>();
     const commands = new Map<string, unknown>();
@@ -121,7 +118,6 @@ describe("Bridge.start registration", () => {
 
     assert.equal(spawn.mock.callCount(), 0);
     assert.equal(execFile.mock.callCount(), 0);
-    assert.equal(runtimeStart.mock.callCount(), 0);
   });
 });
 
@@ -129,13 +125,11 @@ describe("driver command", () => {
   for (const row of [
     { name: "explicit CLI", current: "acp", args: "cli", selected: undefined, target: "cli" },
     { name: "explicit ACP", current: "cli", args: "acp", selected: undefined, target: "acp" },
-    { name: "explicit CLI ACP normalizes input", current: "acp", args: " CLI-ACP ", selected: undefined, target: "cli-acp" },
     { name: "UI CLI", current: "acp", args: "", selected: "CLI", target: "cli" },
     { name: "UI ACP", current: "cli", args: "", selected: "ACP", target: "acp" },
-    { name: "UI CLI ACP", current: "acp", args: "", selected: "CLI-ACP", target: "cli-acp" },
     { name: "UI cancellation", current: "acp", args: "", selected: undefined, target: undefined },
-    { name: "UI current CLI ACP", current: "cli-acp", args: "", selected: "CLI-ACP (current)", target: undefined },
-    { name: "explicit current CLI ACP", current: "cli-acp", args: "cli-acp", selected: undefined, target: undefined },
+    { name: "UI current CLI", current: "cli", args: "", selected: "CLI (current)", target: undefined },
+    { name: "explicit current CLI", current: "cli", args: "cli", selected: undefined, target: undefined },
     { name: "unknown driver", current: "acp", args: "unknown", selected: undefined, target: undefined },
   ] as const) {
     test(row.name, async (t) => {
@@ -159,10 +153,10 @@ describe("driver command", () => {
       await command.handler(row.args, ctx);
 
       assert.ok(command.description);
-      assert.match(command.description, /\[cli\|acp\|cli-acp\]/);
+      assert.match(command.description, /\[cli\|acp\]/);
       if (!row.args) {
         assert.deepEqual(select.mock.calls[0]?.arguments, ["Select Antigravity driver",
-          ["acp", "cli", "cli-acp"].map((id) => `${id.toUpperCase()}${id === row.current ? " (current)" : ""}`)]);
+          ["acp", "cli"].map((id) => `${id.toUpperCase()}${id === row.current ? " (current)" : ""}`)]);
       } else assert.equal(select.mock.callCount(), 0);
       assert.equal(switchDriver.mock.callCount(), row.target ? 1 : 0);
       if (row.target) {
@@ -172,20 +166,19 @@ describe("driver command", () => {
         ]);
         assert.equal(notify.mock.callCount(), 0);
       } else if (row.args === "unknown") {
-        assert.deepEqual(notify.mock.calls[0]?.arguments, ['Unknown driver "unknown". Available: cli, acp, cli-acp.', "warning"]);
-      } else if (row.current === "cli-acp") {
-        assert.deepEqual(notify.mock.calls[0]?.arguments, ["Already using driver: **Antigravity CLI ACP** (cli-acp).", "info"]);
+        assert.deepEqual(notify.mock.calls[0]?.arguments, ['Unknown driver "unknown". Available: cli, acp.', "warning"]);
+      } else if (row.current === "cli") {
+        assert.deepEqual(notify.mock.calls[0]?.arguments, ["Already using driver: **Antigravity CLI** (cli).", "info"]);
       } else assert.equal(notify.mock.callCount(), 0);
     });
   }
 
   for (const executable of [undefined, "/mock/agy"] as const) {
-    test(`non-UI status includes CLI ACP ${executable ? "installed" : "missing"}`, async (t) => {
+    test(`non-UI status includes CLI ${executable ? "installed" : "missing"}`, async (t) => {
       const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
       let shutdown: (() => Promise<void>) | undefined;
       t.mock.method(AcpDriver.prototype, "detectExecutable", () => "/mock/acp");
-      t.mock.method(CliDriver.prototype, "detectExecutable", () => "/mock/cli");
-      const detect = t.mock.method(CliAcpDriver.prototype, "detectExecutable", () => executable);
+      const detect = t.mock.method(CliDriver.prototype, "detectExecutable", () => executable);
       const output = t.mock.method(console, "error", () => {});
       const bridge = new Bridge({
         on: (event: string, handler: () => Promise<void>) => { if (event === "session_shutdown") shutdown = handler; },
@@ -201,9 +194,9 @@ describe("driver command", () => {
       assert.equal(detect.mock.callCount(), 1);
       const status = output.mock.calls[0]?.arguments[0];
       assert.equal(typeof status, "string");
-      assert.ok(status.includes(`- **cli-acp**: ${executable ? `✓ Found (${executable})` : "✗ Not found"}`));
+      assert.ok(status.includes(`- **cli**: ${executable ? `✓ Found (${executable})` : "✗ Not found"}`));
       assert.match(status, /Default: ACP\./);
-      assert.match(status, /`\/agy-bridge:driver cli-acp`/);
+      assert.match(status, /`\/agy-bridge:driver cli` or `\/agy-bridge:driver acp`/);
     });
   }
 });
@@ -346,7 +339,8 @@ describe("background checks", () => {
         await writeFile(authPath, JSON.stringify(authenticated ? { agy: { ...createAgyBridgeCredential(), driver: id } } : {}));
         let fixtureAuthenticated = authenticated;
         const executable = path.join(home, "agy");
-        const writeCli = () => writeFile(executable, '#!/bin/sh\ncase "$1" in\n--version) echo 1.2.14;;\nmodels) printf "cached-model-high  Cached Model (High)\\n";;\n*) ' + (fixtureAuthenticated
+        const fixturePath = fileURLToPath(new URL("../drivers/acp/discovery-fixture.ts", import.meta.url));
+        const writeCli = () => writeFile(executable, '#!/bin/sh\ncase "$1" in\n--version) echo 1.2.14;;\nmodels) printf "cached-model-high  Cached Model (High)\\n";;\nacp) exec "' + process.execPath + '" --experimental-strip-types "' + fixturePath + '" "' + (fixtureAuthenticated ? "catalog" : "browser") + '";;\n*) ' + (fixtureAuthenticated
           ? 'printf "Claude  Five hour  50%%\\n"'
           : 'printf "Authentication required. Please visit the URL to log in:\\n" >&2; while :; do sleep 1; done') + ';;\nesac\n', { mode: 0o700 });
         await writeCli();
@@ -355,6 +349,7 @@ describe("background checks", () => {
           args: ["--experimental-strip-types", fileURLToPath(new URL("../drivers/acp/discovery-fixture.ts", import.meta.url)), fixtureAuthenticated ? "catalog" : "browser"],
         }));
         t.mock.method(driver, "detectExecutable", () => id === "cli" ? executable : undefined);
+        if (driver instanceof CliDriver) t.mock.method(driver, "installPlugin", async () => {});
         const handlers = new Map<string, (...args: any[]) => any>();
         const commands = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void>>();
         const messages: string[] = [];
@@ -653,6 +648,7 @@ describe("standalone compaction", () => {
 
       if (action === "shutdown") await shutdown();
       else if (action === "switch") {
+        t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
         t.mock.method(CliDriver.prototype, "detectExecutable", () => "/mock/cli");
         t.mock.method(CliDriver.prototype, "discoverModels", async () => [compactionSummaryModel]);
         await bridge.switchDriver("cli");

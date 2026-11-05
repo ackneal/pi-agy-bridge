@@ -12,10 +12,7 @@ import { Connection as AcpConnection } from "../drivers/acp/connection.ts";
 import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
 import { useExecutable } from "../drivers/acp/executable-fixture.ts";
 import { RuntimeSession as AcpRuntimeSession } from "../drivers/acp/runtime.ts";
-import { Driver as CliDriver } from "../drivers/cli/driver.ts";
-import { RuntimeSession as CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { SessionMode, type BridgeMessage, type ContentPart, type PrepareDriverInput } from "../drivers/types.ts";
-import { AgyRuntime } from "../runtime/process.ts";
 import { LiveSession } from "../session/session.ts";
 import { Bridge, streamProvider } from "./provider.ts";
 
@@ -29,7 +26,7 @@ const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwA
 const nativeImage = { type: "image" as const, data: "bmF0aXZl", mimeType: "image/png" };
 const modes = [SessionMode.Conversation, SessionMode.Standalone];
 
-async function preparationFixture(t: TestContext, id: "cli" | "acp", onPrompt?: () => Promise<void>) {
+async function preparationFixture(t: TestContext, onPrompt?: () => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), "agy-driver-preparation-"));
   const previousHome = process.env.GEMINI_HOME;
   process.env.GEMINI_HOME = directory;
@@ -40,14 +37,7 @@ async function preparationFixture(t: TestContext, id: "cli" | "acp", onPrompt?: 
   });
   useExecutable(t, process.execPath);
 
-  // Reuse the version-only executable pattern from runtime-start.test.ts.
-  const executable = path.join(directory, "agy");
-  await writeFile(executable, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.14\nelse\n  exit 1\nfi\n', { mode: 0o755 });
-  const driver = id === "cli" ? new CliDriver() : new AcpDriver();
-  if (driver instanceof CliDriver) {
-    t.mock.method(driver, "detectExecutable", () => executable);
-    t.mock.method(driver, "installPlugin", async () => {});
-  }
+  const driver = new AcpDriver();
   const bridge = new Bridge({ getActiveTools: () => ["read"], getAllTools: () => tools } as unknown as ExtensionAPI, driver);
   t.after(() => bridge.liveSessions.disposeAll());
   const starts = t.mock.method(BridgeIPC.prototype, "start", async () => {});
@@ -59,28 +49,6 @@ async function preparationFixture(t: TestContext, id: "cli" | "acp", onPrompt?: 
   const payloads: (string | acp.ContentBlock[])[] = [];
   const metadata: (acp.NewSessionRequest | acp.LoadSessionRequest)[] = [];
   const order: string[] = [];
-  const cliOptions: AgyRuntime["options"][] = [];
-  let listener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
-  t.mock.method(AgyRuntime.prototype, "onEvent", (handler: Parameters<AgyRuntime["onEvent"]>[0]) => {
-    listener = handler;
-    return () => { listener = undefined; };
-  });
-  t.mock.getter(AgyRuntime.prototype, "isRunning", () => true);
-  t.mock.method(AgyRuntime.prototype, "start", async function (this: AgyRuntime) {
-    cliOptions.push(this.options);
-    order.push("new");
-    return { event: "init" as const, conversation_id: "native-session" };
-  });
-  const aborts = t.mock.method(AgyRuntime.prototype, "abort", async () => {});
-  t.mock.method(AgyRuntime.prototype, "send", async (input: Parameters<AgyRuntime["send"]>[0]) => {
-    assert.equal(input.event, "user");
-    assert.ok("message" in input);
-    payloads.push(input.message.content);
-    order.push("prompt");
-    if (onPrompt) await onPrompt();
-    assert.ok(listener);
-    listener({ event: "result", status: "success", conversation_id: "native-session" }, "agy");
-  });
 
   const settings: Record<string, string> = { mode: "default", model: model.id };
   const configuration = (): acp.SessionConfigOption[] => Object.entries(settings).map(([key, value]) => ({
@@ -116,80 +84,66 @@ async function preparationFixture(t: TestContext, id: "cli" | "acp", onPrompt?: 
     return response as acp.AgentRequestResponsesByMethod[M];
   });
 
-  return { directory, bridge, driver, starts, closes, get, set, invalidate, payloads, metadata, order, cliOptions, aborts, disposals };
+  return { directory, bridge, driver, starts, closes, get, set, invalidate, payloads, metadata, order, disposals };
 }
 
-for (const id of ["cli", "acp"] as const) {
-  for (const mode of modes) {
-    test(`Provider -> actual ${id}.prepareSession: ${mode}`, { timeout: 5000 }, async (t) => {
-      const fixture = await preparationFixture(t, id);
-      const { directory, bridge, payloads, metadata, order } = fixture;
-      const standalone = mode === SessionMode.Standalone;
-      const sessionId = standalone ? "summary-routing-id" : bridge.piContextAdapter.bind(SessionManager.inMemory(directory));
-      const imagePath = path.join(directory, "image.png");
-      await writeFile(imagePath, Buffer.from(png, "base64"));
-      const context: Context = { tools, messages: [
-        { role: "system", content: "RESOLVED_RULE", timestamp: 0 },
-        { role: "user", content: [{ type: "text", text: "before native" }, nativeImage,
-          { type: "text", text: `between ${imagePath} after path` }], timestamp: 1 },
-      ] };
+for (const mode of modes) {
+  test(`Provider -> actual acp.prepareSession: ${mode}`, { timeout: 5000 }, async (t) => {
+    const fixture = await preparationFixture(t);
+    const { directory, bridge, payloads, metadata, order } = fixture;
+    const standalone = mode === SessionMode.Standalone;
+    const sessionId = standalone ? "summary-routing-id" : bridge.piContextAdapter.bind(SessionManager.inMemory(directory));
+    const imagePath = path.join(directory, "image.png");
+    await writeFile(imagePath, Buffer.from(png, "base64"));
+    const context: Context = { tools, messages: [
+      { role: "system", content: "RESOLVED_RULE", timestamp: 0 },
+      { role: "user", content: [{ type: "text", text: "before native" }, nativeImage,
+        { type: "text", text: `between ${imagePath} after path` }], timestamp: 1 },
+    ] };
 
-      const result = await streamProvider(model, context, {
-        sessionId, ...(standalone ? { cacheRetention: "none" } : {}),
-      }, bridge).result();
-      // Provider emits completion before standalone disposal finishes.
-      await new Promise<void>((resolve) => setImmediate(resolve));
+    const result = await streamProvider(model, context, {
+      sessionId, ...(standalone ? { cacheRetention: "none" } : {}),
+    }, bridge).result();
+    // Provider emits completion before standalone disposal finishes.
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
-      assert.equal(result.stopReason, "stop", result.errorMessage ?? "native completion");
-      assert.deepEqual(order, ["new", "prompt"], "session metadata must precede the only native prompt");
-      assert.equal(payloads.length, 1);
-      assert.equal(fixture.starts.mock.callCount(), standalone ? 0 : 1);
-      if (id === "cli") {
-        const options = fixture.cliOptions[0]!;
-        assert.equal(options.agentName, standalone ? "pi-standalone" : "pi-bridge");
-        if (standalone) assert.deepEqual(options.environment, {});
-        else assert.equal(options.environment?.PI_AGY_BRIDGE_MCP_ENDPOINT, "unix:///synthetic.sock");
-        const agent = await readFile(new URL(`../../../plugin/agents/${options.agentName}.md`, import.meta.url), "utf8");
-        assert.match(agent, /excludeDefaultComponents: true/);
-        // CLI conversation mode retains only the guarded native artifact reader.
-        assert.match(agent, standalone ? /inheritMcp: false\ntools: \[\]/ : /inheritMcp: true\ntools: \[view_file\]/);
-        assert.equal(payloads[0], `[System]: RESOLVED_RULE\n\nbefore native\n\nbetween ${imagePath} after path`);
-      } else {
-        assert.equal(metadata.length, 1);
-        const meta = metadata[0]!._meta?.antigravity as { enabledTools: unknown; systemPrompt: { append: string } };
-        assert.deepEqual(meta.enabledTools, [], "native tools are disabled in both modes");
-        assert.equal(metadata[0]!.mcpServers.length, standalone ? 0 : 1);
-        if (!standalone) assert.equal(metadata[0]!.mcpServers[0]!.name, "pi-agy-bridge_pi");
-        assert.ok(meta.systemPrompt.append.endsWith("RESOLVED_RULE"));
-        if (standalone) assert.equal(meta.systemPrompt.append, "RESOLVED_RULE");
-        else assert.ok(meta.systemPrompt.append.startsWith("# Bridge Integration Instructions"));
-        assert.deepEqual(payloads[0], [
-          { type: "text", text: "before native" }, nativeImage,
-          { type: "text", text: `between ${imagePath}` },
-          { type: "image", data: png, mimeType: "image/png" },
-          { type: "text", text: " after path" },
-        ]);
-      }
-      if (standalone) {
-        assert.equal(fixture.get.mock.callCount(), 0);
-        assert.equal(fixture.set.mock.callCount(), 0);
-        assert.equal(fixture.invalidate.mock.callCount(), 0);
-        assert.equal(fixture.closes.mock.callCount(), 1);
-        assert.ok((id === "cli" ? fixture.aborts : fixture.disposals).mock.callCount() > 0);
-      } else {
-        const active = bridge.liveSessions.getOrCreate(sessionId).activeProcess;
-        assert.ok(id === "cli" ? active instanceof CliRuntimeSession : active instanceof AcpRuntimeSession);
-        assert.equal(fixture.get.mock.callCount(), 1);
-        assert.equal(fixture.set.mock.callCount(), 1);
-      }
-    });
-  }
+    assert.equal(result.stopReason, "stop", result.errorMessage ?? "native completion");
+    assert.deepEqual(order, ["new", "prompt"], "session metadata must precede the only native prompt");
+    assert.equal(payloads.length, 1);
+    assert.equal(fixture.starts.mock.callCount(), standalone ? 0 : 1);
+    assert.equal(metadata.length, 1);
+    const meta = metadata[0]!._meta?.antigravity as { enabledTools: unknown; systemPrompt: { append: string } };
+    assert.deepEqual(meta.enabledTools, [], "native tools are disabled in both modes");
+    assert.equal(metadata[0]!.mcpServers.length, standalone ? 0 : 1);
+    if (!standalone) assert.equal(metadata[0]!.mcpServers[0]!.name, "pi-agy-bridge_pi");
+    assert.ok(meta.systemPrompt.append.endsWith("RESOLVED_RULE"));
+    if (standalone) assert.equal(meta.systemPrompt.append, "RESOLVED_RULE");
+    else assert.ok(meta.systemPrompt.append.startsWith("# Bridge Integration Instructions"));
+    assert.deepEqual(payloads[0], [
+      { type: "text", text: "before native" }, nativeImage,
+      { type: "text", text: `between ${imagePath}` },
+      { type: "image", data: png, mimeType: "image/png" },
+      { type: "text", text: " after path" },
+    ]);
+    if (standalone) {
+      assert.equal(fixture.get.mock.callCount(), 0);
+      assert.equal(fixture.set.mock.callCount(), 0);
+      assert.equal(fixture.invalidate.mock.callCount(), 0);
+      assert.equal(fixture.closes.mock.callCount(), 1);
+      assert.ok(fixture.disposals.mock.callCount() > 0);
+    } else {
+      const active = bridge.liveSessions.getOrCreate(sessionId).activeProcess;
+      assert.ok(active instanceof AcpRuntimeSession);
+      assert.equal(fixture.get.mock.callCount(), 1);
+      assert.equal(fixture.set.mock.callCount(), 1);
+    }
+  });
 }
 
 for (const mode of modes) {
   for (const operation of ["new", "load"] as const) {
     test(`actual AcpDriver.prepareSession: ${mode} ${operation === "load" ? "with compatible checkpoint" : "new"} metadata uses contract system, not raw Context`, async (t) => {
-      const { bridge, driver, metadata, payloads, directory, order, get } = await preparationFixture(t, "acp");
+      const { bridge, driver, metadata, payloads, directory, order, get } = await preparationFixture(t);
       const sessionId = bridge.piContextAdapter.bind(SessionManager.inMemory(directory));
       const session = new LiveSession(sessionId);
       t.after(() => session.dispose());
@@ -233,13 +187,13 @@ for (const mode of modes) {
   }
 }
 
-for (const id of ["cli", "acp"] as const) {
+for (const id of ["acp"] as const) {
   test(`Provider -> actual ${id}.prepareSession: MCP continuation reuses the pending native prompt`, { timeout: 5000 }, async (t) => {
     // Reuse the in-memory MCP transport arrangement from acp-instructions.test.ts.
     const gateway = new CapabilityGateway(tools);
     t.after(() => gateway.cancelPendingCalls("cleanup"));
     let toolResult: unknown;
-    const { bridge, directory, payloads, order, metadata, cliOptions, starts } = await preparationFixture(t, id, async () => {
+    const { bridge, directory, payloads, order, metadata, starts } = await preparationFixture(t, async () => {
       toolResult = await gateway.call("read", { path: "synthetic.txt" });
     });
     t.mock.getter(BridgeIPC.prototype, "hasPendingCalls", () => gateway.hasPendingCalls);
@@ -267,16 +221,16 @@ for (const id of ["cli", "acp"] as const) {
     assert.deepEqual(order, ["new", "prompt"]);
     assert.equal(payloads.length, 1, "MCP results must not start a second native prompt");
     assert.equal(starts.mock.callCount(), 1);
-    assert.equal(id === "acp" ? metadata.length : cliOptions.length, 1);
+    assert.equal(metadata.length, 1);
     assert.equal(gateway.hasPendingCalls, false);
     assert.match(JSON.stringify(toolResult), /FILE_CONTENT/);
     assert.match(JSON.stringify(toolResult), /Apply this correction before continuing/);
   });
 }
 
-for (const id of ["cli", "acp"] as const) {
+for (const id of ["acp"] as const) {
   test(`actual ${id}.prepareSession: Standalone bypasses checkpoints and conversation synchronization`, async (t) => {
-    const { bridge, driver, directory, starts, get } = await preparationFixture(t, id);
+    const { bridge, driver, directory, starts, get } = await preparationFixture(t);
     const session = new LiveSession("standalone-summary");
     t.after(() => session.dispose());
     const decide = t.mock.method(bridge.runtimeSessionSync, "decide", () => {
@@ -292,8 +246,8 @@ for (const id of ["cli", "acp"] as const) {
     assert.equal(get.mock.callCount(), 0);
     assert.equal(decide.mock.callCount(), 0);
     assert.equal(starts.mock.callCount(), 0);
-    assert.ok(runtime.proc instanceof (id === "cli" ? CliRuntimeSession : AcpRuntimeSession));
-    assert.equal(runtime.proc.options.cwd, path.join(directory, id === "cli" ? "antigravity-cli" : "antigravity-acp"));
+    assert.ok(runtime.proc instanceof AcpRuntimeSession);
+    assert.equal(runtime.proc.options.cwd, path.join(directory, "antigravity-acp"));
   });
 }
 
@@ -309,7 +263,7 @@ for (const mode of modes) {
     ] },
   ] satisfies { name: string; content: string | ContentPart[]; expected: acp.ContentBlock[] }[]) {
     test(`Provider -> actual ACP preparation: ${mode} preserves ${row.name}`, async (t) => {
-      const { bridge, directory, payloads } = await preparationFixture(t, "acp");
+      const { bridge, directory, payloads } = await preparationFixture(t);
       const standalone = mode === SessionMode.Standalone;
       const sessionId = standalone ? "whitespace-summary" : bridge.piContextAdapter.bind(SessionManager.inMemory(directory));
       const result = await streamProvider(model, {

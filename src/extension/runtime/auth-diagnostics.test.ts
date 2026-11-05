@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { probeAgyAuthentication } from "./auth.ts";
+import { fetchAgyUsage } from "./usage.ts";
 import { summarizeAuthOutput } from "./auth-diagnostics.ts";
 
 for (const output of ["Quota:", "usage", "usage-report", "model usage"]) {
@@ -47,7 +47,7 @@ for (const enabled of [false, true]) {
     });
     syncBuiltinESMExports();
 
-    assert.equal(await probeAgyAuthentication("/fake/agy"), true);
+    assert.ok(await fetchAgyUsage("/fake/agy"));
     const files = await readdir(directory);
     assert.equal(files.length, enabled ? 1 : 0);
     if (!enabled) return;

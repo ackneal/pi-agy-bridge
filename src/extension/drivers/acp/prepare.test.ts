@@ -33,7 +33,8 @@ describe("prepareRuntime lifecycle and cancellation", () => {
     });
     const live = new LiveSession("test");
     t.after(() => live.dispose());
-    const previous = new CliRuntimeSession({ agentName: "pi-bridge", model: "raw" }, new Set(), {});
+    const dummyConnection = { start: async () => ({} as any), isRunning: true, notify: async () => {}, dispose: async () => {}, request: async () => ({} as any), onSessionUpdate: () => () => {} };
+    const previous = new CliRuntimeSession(dummyConnection, { cwd: process.cwd(), model: "raw" }, new Set());
     live.setSession(previous, "previous-sync");
     const abort = t.mock.method(previous, "abort", async () => {});
     const driver = new Driver();
@@ -96,8 +97,9 @@ describe("prepareRuntime installation reuse and recovery", () => {
     const context = { messages: [] };
     const messages = prepareSystemMessages(context);
     const systemPrompt = composeSystemPrompt(messages);
+    const dummyConnection = { start: async () => ({} as any), isRunning: true, notify: async () => {}, dispose: async () => {}, request: async () => ({} as any), onSessionUpdate: () => () => {} };
     const runtime = backend === "cli"
-      ? new CliRuntimeSession({ agentName: "pi-bridge", model: model.id }, new Set(), {})
+      ? new CliRuntimeSession(dummyConnection, { cwd: prepareDriverCwd("cli"), model: model.id }, new Set())
       : new RuntimeSession({
         executable: process.execPath, cwd: prepareDriverCwd("acp"), model: model.id, systemPrompt,
         mcp: createMcpLaunchDescriptor("unix:///unused"),

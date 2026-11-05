@@ -549,6 +549,7 @@ test("doctor starts a fresh query after login while the cancelled query is still
   function createChild(pid: number) {
     return Object.assign(new EventEmitter(), {
       pid,
+      stdin: new PassThrough(),
       stdout: new PassThrough(), stderr: new PassThrough(), closed: false,
     });
   }
@@ -576,6 +577,7 @@ test("doctor starts a fresh query after login while the cancelled query is still
     if (children.length === 2) loginQueryStarted();
     return child;
   });
+  syncBuiltinESMExports();
   const killed: number[] = [];
   t.mock.method(process, "kill", (pid: number) => {
     killed.push(pid);
@@ -596,6 +598,9 @@ test("doctor starts a fresh query after login while the cancelled query is still
   } as unknown as ExtensionAPI, new CliDriver());
   t.mock.method(CliDriver.prototype, "usage", (signal: AbortSignal) => fetchAgyUsage("/fake/agy", signal));
   t.mock.method(CliDriver.prototype, "detectExecutable", () => "/fake/agy");
+  t.mock.method(bridge.driver.authentication, "login", async (_interaction: any, _onUsage: any) => {
+    await fetchAgyUsage("/fake/agy", controller.signal);
+  });
   bridge.start();
 
   const oldDoctor = doctor();

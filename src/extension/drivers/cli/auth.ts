@@ -72,14 +72,20 @@ async function promptForAuthentication(
 export function createAuthenticationBackend(
   detectExecutable: () => string | undefined,
   resolveCwd: () => string,
+  ensurePluginInstalled: () => Promise<void>,
   fetchUsage: typeof fetchAgyUsage = fetchAgyUsage,
 ): DriverAuthentication {
   return {
-    label: "Antigravity CLI ACP",
+    label: "Antigravity CLI",
 
     async probe(signal, onUsage) {
+      signal.throwIfAborted();
       const executable = detectExecutable();
+      signal.throwIfAborted();
       if (!executable) return false;
+
+      await ensurePluginInstalled();
+      signal.throwIfAborted();
 
       try {
         const cwd = resolveCwd();
@@ -117,8 +123,13 @@ export function createAuthenticationBackend(
     },
 
     async login(interaction, onUsage) {
+      interaction.signal.throwIfAborted();
       const executable = detectExecutable();
+      interaction.signal.throwIfAborted();
       if (!executable) throw new Error("Antigravity CLI executable not found");
+
+      await ensurePluginInstalled();
+      interaction.signal.throwIfAborted();
 
       const cwd = resolveCwd();
       await withAcpConnection(

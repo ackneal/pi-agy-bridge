@@ -43,7 +43,7 @@ describe("AgyAcp isAuthRequiredError", () => {
 
 describe("AgyAcp Auth Backend probe", () => {
   test("returns false when executable is not detected", async () => {
-    const backend = createAuthenticationBackend(() => undefined, () => "/tmp");
+    const backend = createAuthenticationBackend(() => undefined, () => "/tmp", async () => {});
     const onUsage = () => {};
     assert.equal(await backend.probe(new AbortController().signal, onUsage), false);
   });
@@ -89,7 +89,7 @@ describe("AgyAcp Auth Backend probe", () => {
       let usageCalled = false;
       const backend = createAuthenticationBackend(
         () => "/bin/agy",
-        () => "/tmp",
+        () => "/tmp", async () => {},
         async () => {
           usageCalled = true;
           return mockUsage;
@@ -114,7 +114,7 @@ describe("AgyAcp Auth Backend probe", () => {
     });
     t.mock.method(Connection.prototype, "dispose", async () => {});
 
-    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp");
+    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp", async () => {});
     await assert.rejects(backend.probe(new AbortController().signal, () => {}), /Synthetic database explosion/);
   });
 
@@ -131,7 +131,7 @@ describe("AgyAcp Auth Backend probe", () => {
     });
     t.mock.method(Connection.prototype, "dispose", async () => {});
 
-    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp");
+    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp", async () => {});
     await assert.rejects(backend.probe(controller.signal, () => {}), (err) => err === cancelled);
   });
 });
@@ -158,7 +158,7 @@ for (const stage of ["select", "secret", "confirmation", "probe usage", "login u
       return {};
     });
     const disposal = t.mock.method(Connection.prototype, "dispose", async () => {});
-    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp", async () => {
+    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp", async () => {}, async () => {
       controller.abort(reason);
       throw new Error("usage interrupted");
     });
@@ -217,7 +217,7 @@ for (const choice of ["unadvertised", "rejected prompt"] as const) {
     }));
     const request = t.mock.method(Connection.prototype, "request", async () => {});
     const dispose = t.mock.method(Connection.prototype, "dispose", async () => {});
-    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp");
+    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp", async () => {});
     const failure = new Error("prompt failed");
 
     await assert.rejects(backend.login({
@@ -235,7 +235,7 @@ for (const choice of ["unadvertised", "rejected prompt"] as const) {
 
 describe("AgyAcp Auth Backend login", () => {
   test("throws if executable is not detected", async () => {
-    const backend = createAuthenticationBackend(() => undefined, () => "/tmp");
+    const backend = createAuthenticationBackend(() => undefined, () => "/tmp", async () => {});
     await assert.rejects(
       backend.login({ signal: new AbortController().signal, notify: () => {}, prompt: async () => "" }, () => {}),
       /Antigravity CLI executable not found/
@@ -270,7 +270,7 @@ describe("AgyAcp Auth Backend login", () => {
     const onUsage = t.mock.fn();
     const backend = createAuthenticationBackend(
       () => "/bin/agy",
-      () => "/tmp",
+      () => "/tmp", async () => {},
       async () => mockUsage
     );
 
@@ -315,7 +315,7 @@ describe("AgyAcp Auth Backend login", () => {
     });
     t.mock.method(Connection.prototype, "dispose", async () => {});
 
-    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp", async () => mockUsage);
+    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp", async () => {}, async () => mockUsage);
 
     await backend.login(
       {
@@ -349,7 +349,7 @@ describe("AgyAcp Auth Backend login", () => {
     });
     t.mock.method(Connection.prototype, "dispose", async () => {});
 
-    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp");
+    const backend = createAuthenticationBackend(() => "/bin/agy", () => "/tmp", async () => {});
 
     await assert.rejects(
       backend.login(
@@ -364,3 +364,63 @@ describe("AgyAcp Auth Backend login", () => {
     );
   });
 });
+
+for (const operation of ["probe", "login"] as const) {
+  for (const stage of ["success", "missing executable", "installation failure", "already cancelled", "installation cancellation", "detection cancellation", "cwd cancellation"] as const) {
+    test(`${operation} precondition: ${stage}`, async (t) => {
+      const controller = new AbortController();
+      const failure = acp.RequestError.authRequired();
+      const reason = new Error("cancelled precondition");
+      const events: string[] = [];
+      if (stage === "already cancelled") controller.abort(reason);
+      t.mock.method(Connection.prototype, "start", async () => {
+        events.push("start");
+        return { protocolVersion: acp.PROTOCOL_VERSION };
+      });
+      t.mock.method(Connection.prototype, "request", async () => ({ sessionId: "session" }));
+      t.mock.method(Connection.prototype, "dispose", async () => {});
+      const backend = createAuthenticationBackend(
+        () => {
+          events.push("detect");
+          if (stage === "detection cancellation") controller.abort(reason);
+          return stage === "missing executable" ? undefined : "/bin/agy";
+        },
+        () => {
+          events.push("cwd");
+          if (stage === "cwd cancellation") controller.abort(reason);
+          return "/tmp";
+        },
+        async () => {
+          events.push("install");
+          await Promise.resolve();
+          if (stage === "installation failure") throw failure;
+          if (stage === "installation cancellation") controller.abort(reason);
+        },
+        async () => mockUsage,
+      );
+
+      const result = operation === "probe"
+        ? backend.probe(controller.signal, () => {})
+        : backend.login({ signal: controller.signal, notify: () => {}, prompt: async () => "" }, () => {});
+
+      if (stage === "success") {
+        assert.equal(await result, operation === "probe" ? true : undefined);
+      } else if (stage === "missing executable") {
+        if (operation === "probe") assert.equal(await result, false);
+        else await assert.rejects(result, /Antigravity CLI executable not found/);
+      } else {
+        await assert.rejects(result, (error) => error === (stage === "installation failure" ? failure : reason));
+      }
+      const expected = {
+        success: ["detect", "install", "cwd", "start"],
+        "missing executable": ["detect"],
+        "installation failure": ["detect", "install"],
+        "already cancelled": [],
+        "installation cancellation": ["detect", "install"],
+        "detection cancellation": ["detect"],
+        "cwd cancellation": ["detect", "install", "cwd"],
+      };
+      assert.deepEqual(events, expected[stage]);
+    });
+  }
+}
