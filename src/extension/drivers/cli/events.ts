@@ -1,6 +1,9 @@
+import os from "node:os";
+import path from "node:path";
 import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { PromptResponse, Usage } from "@agentclientprotocol/sdk/unstable";
 import type { RuntimeEvent } from "../types.ts";
+import { expandHome } from "../../shared/paths.ts";
 import { isRegisteredPiMcpTool, PI_MCP_SERVER } from "../mcp-identity.ts";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -37,12 +40,29 @@ function mapUsage(raw: Usage | null | undefined): Extract<RuntimeEvent, { type: 
   };
 }
 
-function isAllowedNativeTool(call: ToolCallUpdate): boolean {
+function isAllowedNativeTool(call: ToolCallUpdate, sessionId: string): boolean {
   const name = call.title ?? call.name ?? call.kind;
   if (typeof name !== "string") return false;
 
   const normalized = name.trim().toLowerCase();
-  return normalized === "view_file" || normalized === "running view_file";
+  if (normalized === "view_file" || normalized === "running view_file") return true;
+
+  // CLI replaces view_file's tool title with the artifact's display path.
+  if (!/^[A-Za-z0-9_-]+$/.test(sessionId) || call._meta?.mcp !== undefined ||
+    call.name != null && call.name !== "view_file" || call.kind != null && call.kind !== "read" ||
+    !record(call.rawInput) || typeof call.rawInput.AbsolutePath !== "string" ||
+    "ServerName" in call.rawInput || "ToolName" in call.rawInput) return false;
+
+  const target = call.rawInput.AbsolutePath;
+  if (!path.isAbsolute(target) || target.includes("\0") || path.resolve(target) !== target) return false;
+
+  const home = expandHome(process.env.GEMINI_HOME || path.join(os.homedir(), ".gemini"));
+  const root = path.resolve(home, "antigravity-cli");
+  const steps = path.join(root, "brain", sessionId, ".system_generated", "steps");
+  const relative = path.relative(steps, target);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+
+  return call.title === `File ${path.relative(root, target)}`;
 }
 
 function getMcpCall(call: ToolCallUpdate): { server: string; tool: string; args: unknown; displayTool: string | undefined } | undefined {
@@ -158,7 +178,7 @@ export class EventProcessor {
     }
 
     if (isRegisteredPiMcpTool(mcp, this.allowedToolNames)) return;
-    if (isAllowedNativeTool(call)) return;
+    if (isAllowedNativeTool(call, this.sessionId)) return;
     if (final && (call.title !== undefined || call.kind !== undefined || call.rawInput !== undefined || call._meta !== undefined || call.name !== undefined)) {
       this.warn(call, emit);
     }

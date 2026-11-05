@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { describe, test } from "node:test";
 import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import { EventProcessor } from "./events.ts";
+import { expandHome } from "../../shared/paths.ts";
 import type { RuntimeEvent } from "../types.ts";
 
 describe("EventProcessor", () => {
@@ -100,6 +103,99 @@ describe("EventProcessor", () => {
       }, "live", (event) => events.push(event));
 
       assert.deepEqual(events, row.warning === undefined ? [] : [{ type: "tool-warning", name: row.warning, args: rawInput }]);
+    });
+  }
+
+  const artifactSession = "550e8400-e29b-41d4-a716-446655440000";
+  const geminiHome = expandHome(process.env.GEMINI_HOME || path.join(os.homedir(), ".gemini"));
+  const stepsRoot = path.resolve(geminiHome, "antigravity-cli", "brain", artifactSession, ".system_generated", "steps");
+  const artifactTitle = `File brain/${artifactSession}/.system_generated/steps/1/output.txt`;
+  const artifactInput = { AbsolutePath: path.join(stepsRoot, "1", "output.txt") };
+  const artifactCall = {
+    toolCallId: "artifact", title: artifactTitle, rawInput: artifactInput, status: "completed",
+  } satisfies ToolCallUpdate;
+  const artifactCases: {
+    name: string; calls: ToolCallUpdate[]; warned: boolean; sessionId?: string; warningName?: string;
+  }[] = [
+    { name: "session UUID artifact", calls: [artifactCall], warned: false },
+    { name: "read kind", calls: [{ ...artifactCall, kind: "read" }], warned: false },
+    { name: "null kind", calls: [{ ...artifactCall, kind: null }], warned: false },
+    { name: "explicit native name", calls: [{ ...artifactCall, name: "view_file" }], warned: false },
+    { name: "split title then input", calls: [
+      { toolCallId: "artifact", title: artifactTitle },
+      { toolCallId: "artifact", rawInput: artifactInput },
+      { toolCallId: "artifact", status: "completed" },
+    ], warned: false },
+    { name: "split input then title", calls: [
+      { toolCallId: "artifact", rawInput: artifactInput },
+      { toolCallId: "artifact", title: artifactTitle, status: "completed" },
+    ], warned: false },
+    { name: "unrelated absolute file", calls: [{ ...artifactCall, rawInput: { AbsolutePath: "/tmp/output.txt" } }], warned: true },
+    { name: "other session path", calls: [{ ...artifactCall, rawInput: {
+      AbsolutePath: artifactInput.AbsolutePath.replace(artifactSession, "other-session"),
+    } }], warned: true },
+    { name: "other session title and path", calls: [{ ...artifactCall,
+      title: artifactTitle.replace(artifactSession, "other-session"),
+      rawInput: { AbsolutePath: artifactInput.AbsolutePath.replace(artifactSession, "other-session") },
+    }], warned: true },
+    { name: "unsafe session ID", sessionId: "../escape", calls: [{ ...artifactCall,
+      title: "File brain/../escape/.system_generated/steps/output.txt",
+      rawInput: { AbsolutePath: path.resolve(stepsRoot, "../../../..", "escape/.system_generated/steps/output.txt") },
+    }], warned: true },
+    { name: "noncanonical traversal inside root", calls: [{ ...artifactCall,
+      rawInput: { AbsolutePath: `${stepsRoot}/1/../1/output.txt` },
+    }], warned: true },
+    { name: "traversal outside root", calls: [{ ...artifactCall,
+      title: `File brain/${artifactSession}/.system_generated/steps/../output.txt`,
+      rawInput: { AbsolutePath: `${stepsRoot}/../output.txt` },
+    }], warned: true },
+    { name: "sibling prefix", calls: [{ ...artifactCall,
+      rawInput: { AbsolutePath: `${stepsRoot}-other/1/output.txt` },
+    }], warned: true },
+    { name: "relative path", calls: [{ ...artifactCall,
+      rawInput: { AbsolutePath: `brain/${artifactSession}/.system_generated/steps/1/output.txt` },
+    }], warned: true },
+    { name: "root is not a file", calls: [{ ...artifactCall,
+      title: `File brain/${artifactSession}/.system_generated/steps/`, rawInput: { AbsolutePath: stepsRoot },
+    }], warned: true },
+    ...["File unrelated.txt", `${artifactTitle} extra`, ` ${artifactTitle}`, artifactTitle.toLowerCase(), "Running " + artifactTitle].map((title) => ({
+      name: `exact title required: ${title}`, calls: [{ ...artifactCall, title }], warned: true,
+    })),
+    { name: "name cannot override mismatched title", calls: [{ ...artifactCall, title: "File unrelated.txt", name: "view_file" }], warned: true },
+    { name: "bad explicit name", calls: [{ ...artifactCall, name: "edit_file" }], warned: true },
+    ...(["edit", "execute"] as const).map((kind) => ({
+      name: `reject ${kind} kind`, calls: [{ ...artifactCall, kind }], warned: true,
+    })),
+    { name: "missing input", calls: [{ ...artifactCall, rawInput: undefined }], warned: true },
+    { name: "missing AbsolutePath", calls: [{ ...artifactCall, rawInput: {} }], warned: true },
+    { name: "non-string AbsolutePath", calls: [{ ...artifactCall, rawInput: { AbsolutePath: 42 } }], warned: true },
+    { name: "empty MCP metadata", calls: [{ ...artifactCall, _meta: { mcp: {} } }], warned: true },
+    { name: "foreign MCP metadata", calls: [{ ...artifactCall,
+      _meta: { mcp: { server: "foreign", tool: "read" } },
+    }], warned: true, warningName: "read" },
+    { name: "foreign wrapped claim", calls: [{ ...artifactCall, name: "call_mcp_tool",
+      rawInput: { ...artifactInput, ServerName: "foreign", ToolName: "read", Arguments: {} },
+    }], warned: true, warningName: "read" },
+  ];
+
+  for (const row of artifactCases) {
+    test(`CLI native artifact: ${row.name}`, () => {
+      const sessionId = row.sessionId ?? artifactSession;
+      const processor = new EventProcessor(sessionId, new Set(["read", "bash"]));
+      const events: RuntimeEvent[] = [];
+      const emit = (event: RuntimeEvent) => events.push(event);
+
+      for (const call of row.calls) processor.process({ sessionId, update: {
+        ...call, sessionUpdate: "tool_call_update",
+      } }, "live", emit);
+      processor.complete({ stopReason: "end_turn" }, emit);
+
+      const warnings = events.filter((event) => event.type === "tool-warning");
+      assert.equal(warnings.length, row.warned ? 1 : 0);
+      if (row.warned) assert.equal(warnings[0]?.name, row.warningName ?? row.calls.at(-1)?.title?.replace(/^Running /, ""));
+      assert.deepEqual(events.filter((event) => event.type === "complete"), [
+        { type: "complete", reason: "stop", resumable: true },
+      ]);
     });
   }
 
