@@ -47,7 +47,7 @@ The bridge connects Antigravity models to Pi. Pi manages the conversation and ex
 - **Session Continuity** — Reuse compatible sessions. Restore context from Pi history when needed.
 - **Image Support** — Read images through Pi tools. The ACP interface also supports automatic image loading and uses an observer for offloaded images.
 - **Automatic ACP Setup** — Download and verify the pinned ACP server.
-- **Diagnostics** — Check your setup with `/agy-bridge:doctor`. The CLI interface also exposes `agy doctor` usage information.
+- **Diagnostics** — Check your setup with `/agy-bridge:doctor`. The CLI interface also reports account quotas.
 
 ---
 
@@ -132,15 +132,17 @@ Both interfaces use **ACP transport** and route supported tool requests back thr
 | Pi tools | Through the Pi MCP bridge | Through the Pi MCP bridge |
 | Image reads | Pi tool reads, including observer-assisted offloaded images | Pi tool reads, including current-session artifacts |
 | Automatic image loading | Supported for images referenced in user messages | Not provided by this interface |
-| Usage information | ACP-reported prompt usage | CLI-reported step usage and `agy doctor` usage information |
+| Usage information | Model token usage | Model token usage and CLI quota information |
 
-**Choose ACP** for automatic setup and automatic image loading. **Choose CLI** if you use the installed `agy` CLI, need its third-party model catalog, or want its doctor usage information.
+**Choose ACP** for automatic setup and automatic image loading. **Choose CLI** if you use the installed `agy` CLI or need its third-party model catalog.
 
 Use `/agy-bridge:driver` to switch interfaces and `/model` to see available models. On startup, the bridge uses the interface recorded in its saved authentication. If no saved authentication or valid driver is present, it defaults to ACP.
 
 **Images:** Both interfaces support image reads through Pi tools. The ACP interface can also automatically load images referenced in user messages. Offloaded image content requires an additional image observer; observer-assisted reads may add latency and model usage. Tool-based reads remain available for images in history and other locations.
 
-**Usage:** Model execution usage and `agy doctor` usage information are different measurements. ACP and CLI may report model usage at different levels. Do not compare these values as billing totals. The bridge does not calculate monetary costs.
+**Usage:** Model token usage and account quotas are different measurements. The CLI interface retrieves quota information through `agy --output-format json --print /usage` and displays it in `/agy-bridge:doctor`.
+
+Reported token usage is not a billing total. The bridge does not calculate monetary costs.
 
 ### Sessions
 
