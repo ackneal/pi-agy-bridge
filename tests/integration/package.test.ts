@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +52,8 @@ describe("Antigravity CLI MCP package", () => {
 
       for (const required of [
         "package.json",
+        "src/version.js",
+        "src/version.d.ts",
         "src/extension/index.ts",
         "src/extension/discovery/model.json",
         "src/extension/drivers/acp/registry.json",
@@ -68,6 +70,15 @@ describe("Antigravity CLI MCP package", () => {
       ]) {
         assert.ok(files.includes(required), `missing packed file: ${required}`);
       }
+
+      const staged = path.join(cache, "package");
+      await mkdir(path.join(staged, "src"), { recursive: true });
+      for (const file of ["package.json", "src/version.js"]) {
+        await copyFile(path.join(projectDir, file), path.join(staged, file));
+      }
+      const manifest = JSON.parse(await readFile(path.join(staged, "package.json"), "utf8"));
+      const { version } = await import(pathToFileURL(path.join(staged, "src/version.js")).href);
+      assert.equal(version, manifest.version, "runtime version must resolve from the shipped package manifest");
 
       const moduleDirs = ["shared", "runtime", "bridge", "session", "discovery", "provider", "drivers"];
       for (const dir of moduleDirs) {

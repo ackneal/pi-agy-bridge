@@ -1,6 +1,6 @@
 {
   "name": "@ackneal/pi-agy-bridge",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Use Antigravity models in Pi via Google's official ACP server, with native Pi tool and extension support.",
   "keywords": [
     "pi-package",
@@ -30,6 +30,8 @@
     "pi-agy-bridge-mcp": "./src/mcp/index.js"
   },
   "files": [
+    "src/version.js",
+    "src/version.d.ts",
     "src/extension",
     "src/mcp",
     "plugin",

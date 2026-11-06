@@ -3,6 +3,7 @@ import { writeSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { debugLog } from "../../shared/debug.ts";
+import { version } from "../../../version.js";
 
 export interface ConnectionOptions {
   executable: string;
@@ -112,7 +113,7 @@ export class Connection {
       return await this.request(acp.methods.agent.initialize, {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientCapabilities: {},
-        clientInfo: { name: "pi-agy-bridge", version: "0.5.1" },
+        clientInfo: { name: "pi-agy-bridge", version },
       });
     } catch (error) {
       try {

@@ -9,19 +9,19 @@ import { buildCliProcessEnvironment } from "../../src/extension/discovery/plugin
 import { mkdtemp, symlink, writeFile, rm, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { version } from "../../src/version.js";
 
 const projectDir = fileURLToPath(new URL("../../", import.meta.url));
 const pluginDir = fileURLToPath(new URL("../../plugin/", import.meta.url));
 
 describe("static Antigravity CLI bridge plugin", () => {
-  it("keeps package, plugin, and MCP versions aligned", async () => {
+  it("keeps package, plugin, and shared runtime versions aligned", async () => {
     const packageManifest = JSON.parse(await readFile(`${projectDir}/package.json`, "utf-8"));
     const pluginManifest = JSON.parse(await readFile(`${pluginDir}/plugin.json`, "utf-8"));
-    const mcpEntrypoint = await readFile(`${projectDir}/src/mcp/index.js`, "utf-8");
 
     assert.match(packageManifest.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
     assert.equal(pluginManifest.version, packageManifest.version);
-    assert.match(mcpEntrypoint, new RegExp(`SERVER_INFO = \\{ name: "pi-agy-bridge", version: "${packageManifest.version.replaceAll(".", "\\.")}" \\}`));
+    assert.equal(version, packageManifest.version);
   });
 
   it("contains a static manifest and bridge agent", async () => {
