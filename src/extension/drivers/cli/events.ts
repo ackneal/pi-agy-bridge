@@ -45,15 +45,15 @@ function isAllowedNativeTool(call: ToolCallUpdate, sessionId: string): boolean {
   if (typeof name !== "string") return false;
 
   const normalized = name.trim().toLowerCase();
-  if (normalized === "view_file" || normalized === "running view_file") return true;
+  const nativeTitle = normalized === "read_file" || normalized === "running read_file";
 
-  // CLI replaces view_file's tool title with the artifact's display path.
+  // CLI replaces read_file's tool title with the artifact's display path.
   if (!/^[A-Za-z0-9_-]+$/.test(sessionId) || call._meta?.mcp !== undefined ||
-    call.name != null && call.name !== "view_file" || call.kind != null && call.kind !== "read" ||
-    !record(call.rawInput) || typeof call.rawInput.AbsolutePath !== "string" ||
+    call.name != null && call.name !== "read_file" || call.kind != null && call.kind !== "read" ||
+    !record(call.rawInput) || typeof call.rawInput.Path !== "string" ||
     "ServerName" in call.rawInput || "ToolName" in call.rawInput) return false;
 
-  const target = call.rawInput.AbsolutePath;
+  const target = call.rawInput.Path;
   if (!path.isAbsolute(target) || target.includes("\0") || path.resolve(target) !== target) return false;
 
   const home = expandHome(process.env.GEMINI_HOME || path.join(os.homedir(), ".gemini"));
@@ -62,7 +62,7 @@ function isAllowedNativeTool(call: ToolCallUpdate, sessionId: string): boolean {
   const relative = path.relative(steps, target);
   if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
 
-  return call.title === `File ${path.relative(root, target)}`;
+  return nativeTitle || call.title === `File ${path.relative(root, target)}`;
 }
 
 function getMcpCall(call: ToolCallUpdate): { server: string; tool: string; args: unknown; displayTool: string | undefined } | undefined {

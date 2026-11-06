@@ -43,9 +43,9 @@ Workspace Instructions, when present, contain Pi's current system instructions a
 
 ## Read referenced content
 - Use Pi MCP tools for ordinary file operations. Pi MCP \`read\` can read text and images.
-- Large tool outputs may be stored in temporary files. Use native \`view_file\` directly to read needed content supplied as a file reference.
-- Use native \`view_file\` only for artifacts under the current conversation's \`.system_generated/steps/\`, not ordinary workspace files.
-- Set \`AbsolutePath\` to the referenced local path. Convert \`file://\` URIs to local paths if needed.
+- Large tool outputs may be stored in temporary files. Use native \`read_file\` directly to read needed content supplied as a file reference.
+- Use native \`read_file\` only for artifacts under the current conversation's \`.system_generated/steps/\`, not ordinary workspace files.
+- Set \`Path\` to the referenced local path. Convert \`file://\` URIs to local paths if needed.
 
 ## Respond to the user
 - Do not repeat or summarize the transcript unless needed to answer the user.

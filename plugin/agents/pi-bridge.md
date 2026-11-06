@@ -6,5 +6,5 @@ subagent: false
 commandExecutionPolicy: sandbox
 excludeDefaultComponents: true
 inheritMcp: true
-tools: [view_file]
+tools: [read_file]
 ---

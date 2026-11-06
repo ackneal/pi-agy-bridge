@@ -123,7 +123,7 @@ describe("AcpSessionClient lifecycle", () => {
         assert.equal(client.id, "mock-session-id");
         assert.equal(connection.requests.filter((r) => r.method === (restored ? "session/load" : "session/new")).length, 1);
         assert.deepEqual(connection.requests[0]?.params, {
-          cwd: options.cwd, mcpServers: [], _meta: { antigravity: { enabledTools: standalone ? [] : ["view_file"], systemPrompt: { append: "instructions" } } },
+          cwd: options.cwd, mcpServers: [], _meta: { antigravity: { enabledTools: standalone ? [] : ["read_file"], systemPrompt: { append: "instructions" } } },
           ...(restored ? { sessionId: "mock-session-id" } : {}),
         });
         assert.deepEqual(updates, []);

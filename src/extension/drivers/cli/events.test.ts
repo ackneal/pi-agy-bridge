@@ -78,27 +78,33 @@ describe("EventProcessor", () => {
     }
   });
 
+  const artifactSession = "550e8400-e29b-41d4-a716-446655440000";
+  const geminiHome = expandHome(process.env.GEMINI_HOME || path.join(os.homedir(), ".gemini"));
+  const stepsRoot = path.resolve(geminiHome, "antigravity-cli", "brain", artifactSession, ".system_generated", "steps");
+  const artifactTitle = `File brain/${artifactSession}/.system_generated/steps/1/output.txt`;
+  const artifactInput = { Path: path.join(stepsRoot, "1", "output.txt") };
+
   const toolCases: { name: string; call: Omit<ToolCallUpdate, "toolCallId">; warning?: string }[] = [
-    ...["view_file", "Running view_file", " \tRUNNING VIEW_FILE\n"].map((title) => ({ name: title, call: { title } })),
-    ...["not_view_file", "view_file_extra", "Running view_file_extra", "Other Running view_file", "Running  view_file", "client_view_file"].map((title) => ({
+    ...["read_file", "Running read_file", " \tRUNNING READ_FILE\n"].map((title) => ({ name: title, call: { title } })),
+    ...["view_file", "Running view_file", "not_read_file", "read_file_extra", "Running read_file_extra", "Other Running read_file", "Running  read_file", "client_view_file"].map((title) => ({
       name: title, call: { title }, warning: title.replace(/^Running /, ""),
     })),
-    { name: "name fallback", call: { name: "view_file" } },
-    { name: "title takes precedence", call: { title: "edit_file", name: "view_file" }, warning: "edit_file" },
+    { name: "name fallback", call: { name: "read_file" } },
+    { name: "title takes precedence", call: { title: "edit_file", name: "read_file" }, warning: "edit_file" },
     { name: "kind alone does not identify a native tool", call: { kind: "read" }, warning: "read" },
     { name: "registered MCP tool", call: { title: "read", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } } },
-    { name: "unregistered MCP tool", call: { title: "view_file", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "unknown" } } }, warning: "unknown" },
-    { name: "foreign MCP tool", call: { title: "Running view_file", _meta: { mcp: { server: "other", tool: "read" } } }, warning: "read" },
+    { name: "unregistered MCP tool", call: { title: "read_file", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "unknown" } } }, warning: "unknown" },
+    { name: "foreign MCP tool", call: { title: "Running read_file", _meta: { mcp: { server: "other", tool: "read" } } }, warning: "read" },
   ];
 
   for (const row of toolCases) {
     test(`tool warning identity: ${row.name}`, () => {
-      const processor = new EventProcessor("session-123", new Set(["read", "bash"]));
+      const processor = new EventProcessor(artifactSession, new Set(["read", "bash"]));
       const events: RuntimeEvent[] = [];
-      const rawInput = { file: "foo.txt" };
+      const rawInput = artifactInput;
 
       processor.process({
-        sessionId: "session-123",
+        sessionId: artifactSession,
         update: { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed", rawInput, ...row.call },
       }, "live", (event) => events.push(event));
 
@@ -106,11 +112,6 @@ describe("EventProcessor", () => {
     });
   }
 
-  const artifactSession = "550e8400-e29b-41d4-a716-446655440000";
-  const geminiHome = expandHome(process.env.GEMINI_HOME || path.join(os.homedir(), ".gemini"));
-  const stepsRoot = path.resolve(geminiHome, "antigravity-cli", "brain", artifactSession, ".system_generated", "steps");
-  const artifactTitle = `File brain/${artifactSession}/.system_generated/steps/1/output.txt`;
-  const artifactInput = { AbsolutePath: path.join(stepsRoot, "1", "output.txt") };
   const artifactCall = {
     toolCallId: "artifact", title: artifactTitle, rawInput: artifactInput, status: "completed",
   } satisfies ToolCallUpdate;
@@ -119,8 +120,16 @@ describe("EventProcessor", () => {
   }[] = [
     { name: "session UUID artifact", calls: [artifactCall], warned: false },
     { name: "read kind", calls: [{ ...artifactCall, kind: "read" }], warned: false },
+    { name: "native title still checks path", calls: [{ ...artifactCall, title: "read_file", rawInput: { Path: "/tmp/outside-artifact.txt" } }], warned: true },
+    { name: "native title still checks name", calls: [{ ...artifactCall, title: "read_file", name: "edit_file" }], warned: true },
+    { name: "native title still checks kind", calls: [{ ...artifactCall, title: "read_file", kind: "edit" }], warned: true },
+    { name: "native title requires input", calls: [{ ...artifactCall, title: "read_file", rawInput: undefined }], warned: true },
+    { name: "name-only still checks path", calls: [{ ...artifactCall, title: null, name: "read_file", rawInput: { Path: "/tmp/outside-artifact.txt" } }], warned: true, warningName: "read_file" },
     { name: "null kind", calls: [{ ...artifactCall, kind: null }], warned: false },
-    { name: "explicit native name", calls: [{ ...artifactCall, name: "view_file" }], warned: false },
+    { name: "explicit native name", calls: [{ ...artifactCall, name: "read_file" }], warned: false },
+    { name: "line range", calls: [{ ...artifactCall, name: "read_file", rawInput: { ...artifactInput, StartLine: 1, EndLine: 20 } }], warned: false },
+    { name: "legacy native name", calls: [{ ...artifactCall, name: "view_file" }], warned: true },
+    { name: "legacy path field", calls: [{ ...artifactCall, rawInput: { AbsolutePath: artifactInput.Path } }], warned: true },
     { name: "split title then input", calls: [
       { toolCallId: "artifact", title: artifactTitle },
       { toolCallId: "artifact", rawInput: artifactInput },
@@ -130,45 +139,45 @@ describe("EventProcessor", () => {
       { toolCallId: "artifact", rawInput: artifactInput },
       { toolCallId: "artifact", title: artifactTitle, status: "completed" },
     ], warned: false },
-    { name: "unrelated absolute file", calls: [{ ...artifactCall, rawInput: { AbsolutePath: "/tmp/output.txt" } }], warned: true },
+    { name: "unrelated absolute file", calls: [{ ...artifactCall, rawInput: { Path: "/tmp/output.txt" } }], warned: true },
     { name: "other session path", calls: [{ ...artifactCall, rawInput: {
-      AbsolutePath: artifactInput.AbsolutePath.replace(artifactSession, "other-session"),
+      Path: artifactInput.Path.replace(artifactSession, "other-session"),
     } }], warned: true },
     { name: "other session title and path", calls: [{ ...artifactCall,
       title: artifactTitle.replace(artifactSession, "other-session"),
-      rawInput: { AbsolutePath: artifactInput.AbsolutePath.replace(artifactSession, "other-session") },
+      rawInput: { Path: artifactInput.Path.replace(artifactSession, "other-session") },
     }], warned: true },
     { name: "unsafe session ID", sessionId: "../escape", calls: [{ ...artifactCall,
       title: "File brain/../escape/.system_generated/steps/output.txt",
-      rawInput: { AbsolutePath: path.resolve(stepsRoot, "../../../..", "escape/.system_generated/steps/output.txt") },
+      rawInput: { Path: path.resolve(stepsRoot, "../../../..", "escape/.system_generated/steps/output.txt") },
     }], warned: true },
     { name: "noncanonical traversal inside root", calls: [{ ...artifactCall,
-      rawInput: { AbsolutePath: `${stepsRoot}/1/../1/output.txt` },
+      rawInput: { Path: `${stepsRoot}/1/../1/output.txt` },
     }], warned: true },
     { name: "traversal outside root", calls: [{ ...artifactCall,
       title: `File brain/${artifactSession}/.system_generated/steps/../output.txt`,
-      rawInput: { AbsolutePath: `${stepsRoot}/../output.txt` },
+      rawInput: { Path: `${stepsRoot}/../output.txt` },
     }], warned: true },
     { name: "sibling prefix", calls: [{ ...artifactCall,
-      rawInput: { AbsolutePath: `${stepsRoot}-other/1/output.txt` },
+      rawInput: { Path: `${stepsRoot}-other/1/output.txt` },
     }], warned: true },
     { name: "relative path", calls: [{ ...artifactCall,
-      rawInput: { AbsolutePath: `brain/${artifactSession}/.system_generated/steps/1/output.txt` },
+      rawInput: { Path: `brain/${artifactSession}/.system_generated/steps/1/output.txt` },
     }], warned: true },
     { name: "root is not a file", calls: [{ ...artifactCall,
-      title: `File brain/${artifactSession}/.system_generated/steps/`, rawInput: { AbsolutePath: stepsRoot },
+      title: `File brain/${artifactSession}/.system_generated/steps/`, rawInput: { Path: stepsRoot },
     }], warned: true },
     ...["File unrelated.txt", `${artifactTitle} extra`, ` ${artifactTitle}`, artifactTitle.toLowerCase(), "Running " + artifactTitle].map((title) => ({
       name: `exact title required: ${title}`, calls: [{ ...artifactCall, title }], warned: true,
     })),
-    { name: "name cannot override mismatched title", calls: [{ ...artifactCall, title: "File unrelated.txt", name: "view_file" }], warned: true },
+    { name: "name cannot override mismatched title", calls: [{ ...artifactCall, title: "File unrelated.txt", name: "read_file" }], warned: true },
     { name: "bad explicit name", calls: [{ ...artifactCall, name: "edit_file" }], warned: true },
     ...(["edit", "execute"] as const).map((kind) => ({
       name: `reject ${kind} kind`, calls: [{ ...artifactCall, kind }], warned: true,
     })),
     { name: "missing input", calls: [{ ...artifactCall, rawInput: undefined }], warned: true },
-    { name: "missing AbsolutePath", calls: [{ ...artifactCall, rawInput: {} }], warned: true },
-    { name: "non-string AbsolutePath", calls: [{ ...artifactCall, rawInput: { AbsolutePath: 42 } }], warned: true },
+    { name: "missing Path", calls: [{ ...artifactCall, rawInput: {} }], warned: true },
+    { name: "non-string Path", calls: [{ ...artifactCall, rawInput: { Path: 42 } }], warned: true },
     { name: "empty MCP metadata", calls: [{ ...artifactCall, _meta: { mcp: {} } }], warned: true },
     { name: "foreign MCP metadata", calls: [{ ...artifactCall,
       _meta: { mcp: { server: "foreign", tool: "read" } },
@@ -321,32 +330,32 @@ describe("EventProcessor", () => {
   }
 
   test("overflow warns once per turn without dropping updates to tracked calls", () => {
-    const processor = new EventProcessor("session-123");
+    const processor = new EventProcessor(artifactSession);
     const events: RuntimeEvent[] = [];
     const emit = (event: RuntimeEvent) => events.push(event);
 
     for (let turn = 0; turn < 2; turn++) {
       events.length = 0;
       for (let i = 0; i < 1024; i++) {
-        processor.process({ sessionId: "session-123", update: {
-          sessionUpdate: "tool_call", toolCallId: String(i), title: "view_file",
+        processor.process({ sessionId: artifactSession, update: {
+          sessionUpdate: "tool_call", toolCallId: String(i), title: "read_file", rawInput: artifactInput,
         } }, "live", emit);
       }
       assert.equal(events.length, 0);
 
       for (const id of ["overflow", "overflow", "another-overflow"]) {
-        processor.process({ sessionId: "session-123", update: {
+        processor.process({ sessionId: artifactSession, update: {
           sessionUpdate: "tool_call", toolCallId: id, title: "edit_file", status: "completed",
         } }, "live", emit);
       }
-      processor.process({ sessionId: "session-123", update: {
+      processor.process({ sessionId: artifactSession, update: {
         sessionUpdate: "tool_call_update", toolCallId: "0", title: "edit_file", status: "completed",
       } }, "live", emit);
       processor.complete({ stopReason: "end_turn" }, emit);
 
       assert.deepEqual(events.filter((event) => event.type === "tool-warning"), [
         { type: "tool-warning", name: "ACP tool notification limit exceeded", args: undefined },
-        { type: "tool-warning", name: "edit_file", args: undefined },
+        { type: "tool-warning", name: "edit_file", args: artifactInput },
       ]);
     }
   });

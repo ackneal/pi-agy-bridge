@@ -36,6 +36,15 @@ for (const row of cases) {
   });
 }
 
+test("CLI integration instructions restrict native read_file to referenced artifacts", () => {
+  assert.ok(integrationInstructions.includes("Use native `read_file` directly"));
+  assert.ok(integrationInstructions.includes("Use native `read_file` only for artifacts under the current conversation's `.system_generated/steps/`, not ordinary workspace files."));
+  assert.ok(integrationInstructions.includes("Set `Path` to the referenced local path. Convert `file://` URIs to local paths if needed."));
+  assert.ok(integrationInstructions.includes("Use Pi MCP tools for ordinary file operations."));
+  assert.ok(!integrationInstructions.includes("view_file"));
+  assert.ok(!integrationInstructions.includes("AbsolutePath"));
+});
+
 test("AgyAcp integration instructions contain expected sections", () => {
   for (const heading of [
     "## Read the conversation",

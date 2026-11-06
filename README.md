@@ -58,7 +58,7 @@ The bridge connects Antigravity models to Pi. Pi manages the conversation and ex
 | **Operating System** | macOS or Linux. Native Windows is not supported. |
 | **Pi Coding Agent** | `@earendil-works/pi-coding-agent`. |
 | **ACP Backend (Default)** | The bridge installs the ACP server automatically. |
-| **CLI Backend (Optional)** | Install `agy` at `~/.local/bin/agy` or add it to your `PATH`. |
+| **CLI Backend (Optional)** | Install `agy` at `~/.local/bin/agy` or add it to your `PATH`. Tested with `agy 1.5.2`. |
 
 ---
 

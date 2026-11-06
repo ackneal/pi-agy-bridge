@@ -39,7 +39,7 @@ subagent: false
 commandExecutionPolicy: sandbox
 excludeDefaultComponents: true
 inheritMcp: true
-tools: [view_file]
+tools: [read_file]
 ---
 `);
     assert.match(markdown, /\nmainAgent: true\n/);
@@ -47,7 +47,7 @@ tools: [view_file]
     assert.match(markdown, /\ncommandExecutionPolicy: sandbox\n/);
     assert.match(markdown, /\nexcludeDefaultComponents: true\n/);
     assert.match(markdown, /\ninheritMcp: true\n/);
-    assert.match(markdown, /\ntools: \[view_file\]\n/);
+    assert.match(markdown, /\ntools: \[read_file\]\n/);
   });
 
   it("keeps standalone frontmatter-only and selectable as a CLI main agent without tools", async () => {
@@ -170,10 +170,10 @@ tools: []
             /Use Pi MCP tools for ordinary file operations/,
             /Pi MCP `read` can read text and images/,
             /Large tool outputs may be stored in temporary files/,
-            /Use native `view_file` directly to read needed content supplied as a file reference/,
-            /Set `AbsolutePath` to the referenced local path/,
+            /Use native `read_file` directly to read needed content supplied as a file reference/,
+            /Set `Path` to the referenced local path/,
             /Convert `file:\/\/` URIs to local paths if needed/,
-            /Use native `view_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files/,
+            /Use native `read_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files/,
           ],
         },
         {
@@ -305,12 +305,12 @@ tools: []
       });
     }
 
-    it("CLI: scopes native view_file before its path parameters", async () => {
+    it("CLI: scopes native read_file before its path parameters", async () => {
       const markdown = composeCliSystemPrompt([]);
       const references = markdown.split("## Read referenced content\n")[1]?.split("\n## ")[0];
       assert.ok(references, "References section must exist");
 
-      assert.match(references, /Use native `view_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files\.\n- Set `AbsolutePath`/);
+      assert.match(references, /Use native `read_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files\.\n- Set `Path`/);
       assert.doesNotMatch(references, /Use it only/);
     });
 

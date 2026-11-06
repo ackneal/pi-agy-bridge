@@ -93,7 +93,7 @@ export class AcpSessionClient {
     signal?.throwIfAborted();
 
     const antigravityMeta: Record<string, unknown> = {
-      enabledTools: this.options.standalone ? [] : ["view_file"],
+      enabledTools: this.options.standalone ? [] : ["read_file"],
       ...(this.options.systemPrompt !== undefined ? { systemPrompt: { append: this.options.systemPrompt } } : {}),
     };
 
