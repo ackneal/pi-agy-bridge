@@ -6,7 +6,7 @@
 
 **Use Antigravity models in Pi without changing how Pi works.**
 
-Use Antigravity models with [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) through Google's official ACP server. Keep your Pi tools, extensions, skills, and session history. An optional CLI driver is also available.
+Use Antigravity models with [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) through either the managed **ACP interface** or your installed **`agy` CLI interface**. Both use **ACP transport** while Pi retains control of tools, extensions, skills, and session history.
 
 ---
 
@@ -18,7 +18,11 @@ Use Antigravity models with [Pi Coding Agent](https://github.com/earendil-works/
 Pi Coding Agent
   |  Prompts and session context
   v
-pi-agy-bridge (ACP or CLI)
+pi-agy-bridge
+  |  ACP transport
+  +-- ACP interface: managed ACP server
+  | 
+  +-- CLI interface: installed `agy` CLI
   |
   v
 Antigravity models
@@ -31,7 +35,7 @@ Local MCP bridge
 Pi tools -> Results return to the model
 ```
 
-The bridge connects Antigravity models to Pi. Pi manages the conversation and executes registered tools. The selected driver controls how the bridge communicates with Antigravity.
+The bridge connects Antigravity models to Pi. Pi manages the conversation and executes registered tools. **ACP and CLI are two interfaces, not two transport protocols:** both communicate over ACP. The selected interface determines which backend and model catalog the bridge uses.
 
 ---
 
@@ -39,11 +43,11 @@ The bridge connects Antigravity models to Pi. Pi manages the conversation and ex
 
 - **Native Pi Experience** — Keep Pi tools, extensions, skills, and session history.
 - **Pi Tool Integration** — Run registered tool requests through Pi with its applicable permissions.
-- **Two Drivers** — Use the managed ACP server or your installed `agy` CLI.
+- **Two Interfaces, One Transport** — Choose the managed ACP server or your installed `agy` CLI. Both use ACP transport.
 - **Session Continuity** — Reuse compatible sessions. Restore context from Pi history when needed.
-- **Image Support** — Read images through Pi tools, with automatic image injection for ACP.
+- **Image Support** — Read images through Pi tools. The ACP interface also supports automatic image loading and uses an observer for offloaded images.
 - **Automatic ACP Setup** — Download and verify the pinned ACP server.
-- **Diagnostics** — Check your setup with `/agy-bridge:doctor`.
+- **Diagnostics** — Check your setup with `/agy-bridge:doctor`. The CLI interface also exposes `agy doctor` usage information.
 
 ---
 
@@ -115,24 +119,28 @@ Driver and doctor results are user-only notifications, not model conversation me
 
 Antigravity models request tools through the bridge. Pi runs registered tool requests and returns the results. The bridge limits native tool capabilities through the selected driver.
 
-### Choose a Driver
+### Choose an Interface
+
+Both interfaces use **ACP transport** and route supported tool requests back through Pi. The difference is the Antigravity backend and the capabilities it exposes.
 
 | | ACP (default) | CLI (optional) |
 | :--- | :--- | :--- |
-| Setup | Installed automatically | Requires `agy` |
-| Models | ACP model catalog | CLI model catalog |
-| Tool integration | Pi tools through MCP | Pi tools through the CLI integration |
-| Image reads | Tool reads with image observer | Tool reads |
-| Image injection | Automatically injects images referenced in user messages | — |
-| Usage | Prompt-level reporting | Step-level reporting |
+| Backend | Managed Antigravity ACP server | User-installed `agy` CLI (`agy acp --stdio`) |
+| Transport | ACP | ACP |
+| Setup | Installed and managed automatically | Install and maintain `agy` yourself |
+| Models | Managed ACP model catalog | `agy` model catalog, including supported third-party models |
+| Pi tools | Through the Pi MCP bridge | Through the Pi MCP bridge |
+| Image reads | Pi tool reads, including observer-assisted offloaded images | Pi tool reads, including current-session artifacts |
+| Automatic image loading | Supported for images referenced in user messages | Not provided by this interface |
+| Usage information | ACP-reported prompt usage | CLI-reported step usage and `agy doctor` usage information |
 
-Use `/agy-bridge:driver` to change the driver. Use `/model` to see its available models. On startup, the bridge uses the driver recorded in its saved authentication. If no saved authentication or valid driver is present, it defaults to ACP.
+**Choose ACP** for automatic setup and automatic image loading. **Choose CLI** if you use the installed `agy` CLI, need its third-party model catalog, or want its doctor usage information.
 
-**Images:** Both drivers support tool-based image reads. ACP also uses an image observer for eligible offloaded images. The observer returns text and may add latency and model usage.
+Use `/agy-bridge:driver` to switch interfaces and `/model` to see available models. On startup, the bridge uses the interface recorded in its saved authentication. If no saved authentication or valid driver is present, it defaults to ACP.
 
-For images referenced in user messages, ACP can automatically inject image blocks into the model prompt. Tool-based reads remain available for images in history and other locations.
+**Images:** Both interfaces support image reads through Pi tools. The ACP interface can also automatically load images referenced in user messages. Offloaded image content requires an additional image observer; observer-assisted reads may add latency and model usage. Tool-based reads remain available for images in history and other locations.
 
-**Usage:** ACP and CLI report usage at different levels. Do not compare their values as billing totals. The bridge does not calculate monetary costs.
+**Usage:** Model execution usage and `agy doctor` usage information are different measurements. ACP and CLI may report model usage at different levels. Do not compare these values as billing totals. The bridge does not calculate monetary costs.
 
 ### Sessions
 
@@ -174,6 +182,7 @@ Run `/agy-bridge:doctor` to check the installation, connection, and sign-in stat
 - **ACP download or extraction fails:** Check your network, disk space, and permissions under `~/.pi/agent/`. Downloads are about 93–307 MiB. Linux extraction can require about 1 GiB.
 - **Signed out:** Run `/login` and select **Antigravity [pi-agy-bridge]**.
 - **No models appear:** Sign in and run `/agy-bridge:doctor`. When offline, the bridge can use a cached model catalog.
+- **CLI interface unavailable:** Install `agy` at `~/.local/bin/agy` or add it to your `PATH`, then run `/agy-bridge:doctor`.
 - **Custom ACP server fails:** Check that `AGY_ACP_DIR` is an absolute directory path containing executable `agy_acp_server.par` and `localharness_external` files. Unset `AGY_ACP_DIR` to use the managed server.
 - **Enable debug logs:**
   ```bash
