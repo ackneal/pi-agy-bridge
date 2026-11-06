@@ -8,6 +8,3 @@ excludeDefaultComponents: true
 inheritMcp: false
 tools: []
 ---
-
-Follow the supplied instructions directly.
-Provide only the requested output.
