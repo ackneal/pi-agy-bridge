@@ -50,7 +50,7 @@ tools: [view_file]
     assert.match(markdown, /\ntools: \[view_file\]\n/);
   });
 
-  it("keeps standalone selectable as a CLI main agent with no tools and output-only instructions", async () => {
+  it("keeps standalone frontmatter-only and selectable as a CLI main agent without tools", async () => {
     const markdown = await readFile(`${pluginDir}/agents/pi-standalone.md`, "utf-8");
 
     assert.equal(markdown, `---
@@ -63,9 +63,6 @@ excludeDefaultComponents: true
 inheritMcp: false
 tools: []
 ---
-
-Follow the supplied instructions directly.
-Provide only the requested output.
 `);
   });
 
