@@ -64,7 +64,7 @@ Both drivers communicate over the ACP protocol. The selected driver determines w
 | :--- | :--- |
 | **Operating System** | macOS or Linux. Native Windows is not supported. |
 | **Pi Coding Agent** | `@earendil-works/pi-coding-agent`. |
-| **Antigravity ACP Driver (Default)** | The bridge installs the ACP server automatically. |
+| **Antigravity ACP Driver (Default)** | The bridge automatically installs the ACP server (pinned to `1.4.5`). |
 | **Antigravity CLI Driver (Optional)** | Install `agy` at `~/.local/bin/agy` or add it to your `PATH`. Tested with `agy 1.5.2`. |
 
 ---
