@@ -30,14 +30,19 @@ function createAssistantError(errorMessage: string): AssistantMessage {
 describe("extractFailureMessage", () => {
   const cases: { name: string; error: unknown; expected: string }[] = [
     {
-      name: "extracts RequestError data.details",
+      name: "extracts RequestError data.details and strips generic Internal error wrapper",
       error: new acp.RequestError(-32603, "Internal error", { details: "Authentication required" }),
-      expected: "Internal error: Authentication required",
+      expected: "Authentication required",
     },
     {
-      name: "extracts nested RequestError data.error.message",
+      name: "extracts nested RequestError data.error.message and strips generic Internal error wrapper",
       error: new acp.RequestError(-32603, "Internal error", { error: { message: "Quota exceeded for project" } }),
-      expected: "Internal error: Quota exceeded for project",
+      expected: "Quota exceeded for project",
+    },
+    {
+      name: "preserves non-generic RequestError message prefix when appending details",
+      error: new acp.RequestError(-32001, "Session rejected", { details: "invalid workspace" }),
+      expected: "Session rejected: invalid workspace",
     },
     {
       name: "avoids duplicating details already in RequestError message",
@@ -139,12 +144,12 @@ describe("classifyFailure and formatFailureMessage", () => {
       expectedPattern: /ACP transport closed/,
     },
     {
-      name: "timeout during active prompt is unknown and sanitized against Pi retry",
+      name: "timeout during active prompt is unknown and uses safe non-retryable message",
       error: new Error("ACP request timeout: session/prompt"),
       context: { phase: "active-prompt" },
       expectedOutcome: "unknown",
       expectedRetryableByPi: false,
-      expectedPattern: /ACP request deadline exceeded: session\/prompt/,
+      expectedPattern: /ACP turn failed with unknown execution outcome; automatic replay disabled/,
     },
     {
       name: "authentication failure via RequestError -32000 is non-retryable",
@@ -160,7 +165,7 @@ describe("classifyFailure and formatFailureMessage", () => {
       context: { phase: "active-prompt" },
       expectedOutcome: "non-retryable",
       expectedRetryableByPi: false,
-      expectedPattern: /agent failure: Authentication required: invalid credentials/,
+      expectedPattern: /^Authentication required: invalid credentials$/,
     },
     {
       name: "'sign in' authentication failure wrapped in -32603 Internal error is non-retryable",
@@ -168,7 +173,7 @@ describe("classifyFailure and formatFailureMessage", () => {
       context: { phase: "active-prompt" },
       expectedOutcome: "non-retryable",
       expectedRetryableByPi: false,
-      expectedPattern: /agent failure: Please sign in to continue/,
+      expectedPattern: /^Please sign in to continue$/,
     },
     {
       name: "'log in' authentication failure wrapped in -32603 Internal error is non-retryable",
@@ -176,7 +181,7 @@ describe("classifyFailure and formatFailureMessage", () => {
       context: { phase: "pre-dispatch" },
       expectedOutcome: "non-retryable",
       expectedRetryableByPi: false,
-      expectedPattern: /agent failure: Please log in to continue/,
+      expectedPattern: /^Please log in to continue$/,
     },
     {
       name: "quota failure wrapped in -32603 Internal error is non-retryable",

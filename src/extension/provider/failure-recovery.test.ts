@@ -245,7 +245,7 @@ describe("ACP and CLI fault injection and Pi native retry integration", () => {
         });
       },
       expectedStopReason: "error",
-      expectedErrorPattern: /agent failure: Authentication required: invalid credentials/,
+      expectedErrorPattern: /Authentication required: invalid credentials/,
     },
     {
       name: "quota exceeded wrapped in -32603 Internal error data.details is non-retryable",
@@ -270,7 +270,7 @@ describe("ACP and CLI fault injection and Pi native retry integration", () => {
       expectedErrorPattern: /ACP process closed \(1\)/,
     },
     {
-      name: "timeout during active prompt is classified as unknown and sanitized against Pi retry",
+      name: "timeout during active prompt is classified as unknown and uses safe non-retryable message",
       injectFailure: (t, driverId) => {
         const Target = driverId === "cli" ? AcpSessionClient : AcpSession;
         t.mock.method(Target.prototype, "prompt", async () => {
@@ -278,7 +278,7 @@ describe("ACP and CLI fault injection and Pi native retry integration", () => {
         });
       },
       expectedStopReason: "error",
-      expectedErrorPattern: /ACP request deadline exceeded: session\/prompt/,
+      expectedErrorPattern: /ACP turn failed with unknown execution outcome; automatic replay disabled/,
     },
   ];
 
