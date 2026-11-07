@@ -8,12 +8,22 @@ export interface AcpAuthConnectionOptions {
   executable: string;
   cwd: string;
   requestTimeoutMs?: number;
+  allowInteractiveAuthentication?: boolean;
 }
 
 export function isAuthRequiredError(error: unknown): boolean {
-  if (error instanceof acp.RequestError) return error.code === -32000;
-  if (error instanceof Error && /\b(authentication required|not authenticated|unauthenticated|login required|log in|sign in)\b/i.test(error.message)) return true;
-  return false;
+  if (error instanceof acp.RequestError) {
+    if (error.code === -32000) return true;
+    if (error.code === -32603 && error.data && typeof error.data === "object") {
+      const details = (error.data as Record<string, unknown>).details;
+      if (typeof details === "string") {
+        return /\b(?:authentication required|not authenticated|unauthenticated|login required|log in|sign in)\b/i.test(details);
+      }
+    }
+    return false;
+  }
+  if (!(error instanceof Error)) return false;
+  return /\b(?:authentication required|not authenticated|unauthenticated|login required|log in|sign in)\b/i.test(error.message);
 }
 
 export async function withAcpConnection<T>(
@@ -27,6 +37,7 @@ export async function withAcpConnection<T>(
     args: ["acp", "--stdio", "--agent", "pi-standalone"],
     cwd: options.cwd,
     requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
+    ...(options.allowInteractiveAuthentication !== undefined ? { allowInteractiveAuthentication: options.allowInteractiveAuthentication } : {}),
   });
 
   const abort = () => { void connection.dispose().catch(() => {}); };
@@ -133,7 +144,7 @@ export function createAuthenticationBackend(
 
       const cwd = resolveCwd();
       await withAcpConnection(
-        { executable, cwd, requestTimeoutMs: 180_000 },
+        { executable, cwd, requestTimeoutMs: 180_000, allowInteractiveAuthentication: true },
         interaction.signal,
         async (connection, initialized) => {
           const methods = initialized.authMethods ?? [];

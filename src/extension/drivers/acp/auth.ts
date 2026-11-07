@@ -1,5 +1,6 @@
 import * as acp from "@agentclientprotocol/sdk";
 import type { ProviderAuthInteraction } from "@earendil-works/pi-ai";
+import { isAuthRequiredError } from "../cli/auth.ts";
 import { newDiscoverySession, withDiscovery, type DiscoveryOptions } from "./discovery.ts";
 
 export interface AuthenticationBackend {
@@ -17,7 +18,7 @@ export function createAuthenticationBackend(options: DiscoveryOptions): Authenti
         return true;
       } catch (error) {
         signal.throwIfAborted();
-        if (error instanceof acp.RequestError && error.code === -32000) return false;
+        if (isAuthRequiredError(error)) return false;
         throw error;
       }
     },

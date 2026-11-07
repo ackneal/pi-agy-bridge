@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { writeSync } from "node:fs";
+import { accessSync, constants, writeSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { debugLog } from "../../shared/debug.ts";
@@ -11,6 +12,7 @@ export interface ConnectionOptions {
   args?: string[];
   environment?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
+  allowInteractiveAuthentication?: boolean;
   onUpdate?: (notification: acp.SessionNotification) => void | Promise<void>;
   onClose?: (error: unknown) => void;
 }
@@ -25,6 +27,7 @@ export class Connection {
   private termination: Promise<void> = Promise.resolve();
   private hostExitHandler: (() => void) | undefined;
   private readonly updateHandlers = new Set<(notification: acp.SessionNotification) => void | Promise<void>>();
+  private readonly closeHandlers = new Set<(error: unknown) => void>();
   private readonly shutdown = new AbortController();
   private readonly options: ConnectionOptions;
 
@@ -46,6 +49,13 @@ export class Connection {
     return () => { this.updateHandlers.delete(handler); };
   }
 
+  onClose(handler: (error: unknown) => void): () => void {
+    if (this.stopped) return () => {};
+
+    this.closeHandlers.add(handler);
+    return () => { this.closeHandlers.delete(handler); };
+  }
+
   start(signal?: AbortSignal): Promise<acp.InitializeResponse> {
     if (this.stopped) return Promise.reject(this.shutdown.signal.reason);
     if (this.startup) return this.startup;
@@ -58,7 +68,12 @@ export class Connection {
     signal?.throwIfAborted();
     if (process.platform === "win32") throw new Error("ACP owned process groups require POSIX");
 
-    const env = { ...process.env, ...this.options.environment };
+    let env: NodeJS.ProcessEnv = { ...process.env, ...this.options.environment };
+    if (!this.options.allowInteractiveAuthentication) {
+      const blocker = fileURLToPath(new URL("../acp/noninteractive-browser.js", import.meta.url));
+      accessSync(blocker, constants.R_OK);
+      env = { ...env, BROWSER: `${JSON.stringify(process.execPath)} ${JSON.stringify(blocker)} %s` };
+    }
     const child = spawn(this.options.executable, this.options.args ?? [], {
       cwd: this.options.cwd,
       stdio: "pipe",
@@ -86,8 +101,16 @@ export class Connection {
     child.on("error", (error) => this.stop(error));
     child.stdin.on("error", (error) => this.stop(error));
     child.stdout.on("error", (error) => this.stop(error));
-    child.stderr.on("data", (chunk: Buffer) => {
-      debugLog("acp", `[agy acp stderr] ${chunk.toString("utf8").trim()}`);
+    const marker = "Open the following link to authenticate the ACP server:";
+    let tail = "";
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      debugLog("acp", `[agy acp stderr] ${chunk.trim()}`);
+      if (this.options.allowInteractiveAuthentication) return;
+      const output = tail + chunk;
+      if (output.includes(marker)) {
+        this.stop(new acp.RequestError(-32000, "Authentication required. Run /login to authenticate."));
+      }
+      tail = output.slice(-marker.length);
     });
 
     this.sdk = acp.client({ name: "pi-agy-bridge" })
@@ -103,7 +126,14 @@ export class Connection {
       })
       .connect(acp.ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>));
 
-    void this.sdk.closed.then(() => this.stop(new Error("ACP transport closed")));
+    const sdk = this.sdk;
+    void sdk.closed.then(() => {
+      queueMicrotask(() => {
+        const reason = sdk.signal.reason;
+        const details = reason instanceof Error && reason.message !== "ACP connection closed" ? `: ${reason.message}` : "";
+        this.stop(new Error(`ACP transport closed${details}`));
+      });
+    });
 
     const abort = () => this.stop(signal?.reason ?? new Error("ACP startup cancelled"));
     signal?.addEventListener("abort", abort, { once: true });
@@ -162,6 +192,8 @@ export class Connection {
   private stop(error: unknown): void {
     if (this.stopped) return;
     this.stopped = true;
+    const closeHandlers = [...this.closeHandlers];
+    this.closeHandlers.clear();
     this.updateHandlers.clear();
     this.shutdown.abort(error);
 
@@ -188,6 +220,7 @@ export class Connection {
     this.child?.stdout?.destroy();
     this.child?.stderr?.destroy();
     this.options.onClose?.(error);
+    for (const handler of closeHandlers) handler(error);
   }
 
   private signalGroup(signal: NodeJS.Signals): void {

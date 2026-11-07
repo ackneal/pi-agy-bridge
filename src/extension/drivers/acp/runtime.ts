@@ -6,6 +6,7 @@ import type { BridgeMessage, DriverSession, DriverSubmission, RuntimeEvent } fro
 import { Session, type SessionOptions } from "./session.ts";
 import { EventProcessor } from "./events.ts";
 import { McpPermissions } from "./permissions.ts";
+import { formatFailureMessage } from "../failure.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { fingerprintSystemPrompt } from "./instructions.ts";
 import { extractImagesFromText, serializeContextUpdate } from "../../provider/context-prompt.ts";
@@ -99,6 +100,7 @@ export class RuntimeSession implements DriverSession {
   private fail(error: unknown): Promise<void> {
     // Claim failure ownership before cleanup can synchronously trigger onClose.
     this.failure ??= Promise.resolve().then(async () => {
+      let failureMessage = formatFailureMessage(error, { phase: "active-prompt" }).message;
       try {
         await this.reader.endPrompt();
       } catch (cleanupError) {
@@ -110,10 +112,10 @@ export class RuntimeSession implements DriverSession {
         await this.session.dispose();
       } catch (cleanupError) {
         debugLog("session", "ACP runtime cleanup failed:", cleanupError);
-        error = new Error(`${String(error)}; cleanup failed: ${String(cleanupError)}`);
+        failureMessage = `${failureMessage}; cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
       }
       this.completion = undefined;
-      this.emit({ type: "complete", reason: "error", error: String(error), resumable: false });
+      this.emit({ type: "complete", reason: "error", error: failureMessage, cause: error, resumable: false });
     });
     return this.failure;
   }

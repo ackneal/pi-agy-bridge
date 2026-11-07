@@ -3,6 +3,7 @@ import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { PiToolCallBatch } from "../bridge/capabilities.ts";
 import type { PiRuntimeOutput } from "./output.ts";
 import type { DriverSession, DriverSubmission, RuntimeEvent, ToolWarningReason, ToolWarningStatus } from "../drivers/types.ts";
+import { formatFailureMessage } from "../drivers/failure.ts";
 import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
@@ -24,6 +25,7 @@ export class Turn {
   private runtime: { proc: DriverSession; mcpServer: BridgeIPC } | undefined;
   private completed = false;
   private inputStarted = false;
+  private hasToolActivity = false;
   private readonly options: TurnOptions;
 
   constructor(options: TurnOptions) {
@@ -58,6 +60,7 @@ export class Turn {
   public async recordAcceptedContext(): Promise<void> {
     if (!this.ownsRuntime()) return;
 
+    this.hasToolActivity = true;
     const { session, context, sync } = this.options;
     sync.record(session, context.messages);
     await this.persist(context.messages);
@@ -79,17 +82,35 @@ export class Turn {
 
   public fail(error: unknown): void {
     const { adapter, signal, session, preparationId } = this.options;
-    const message = error instanceof Error ? error.message : String(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
     const cancelled = signal?.aborted && !this.inputStarted;
-    debugLog("register", "Turn execution failed:", message);
+    debugLog("register", "Turn execution failed:", rawMessage);
 
     if (cancelled) {
-      this.cancel(message);
+      this.cancel(rawMessage);
     } else {
+      const mcpServer = this.runtime?.mcpServer ?? session.activeMcpServer;
+      const hasPendingToolCalls = Boolean(mcpServer?.hasPendingCalls);
+      const phase = hasPendingToolCalls
+        ? "tool-handoff"
+        : this.inputStarted
+          ? "active-prompt"
+          : "pre-dispatch";
+      const message = formatFailureMessage(error, {
+        phase,
+        hasPendingToolCalls,
+        hasCompletedToolCalls: this.hasToolActivity,
+      }).message;
       adapter.handleTermination("error", message);
       if (this.ownsRuntime()) {
         // A later turn may own the output while reusing this runtime.
-        session.notifyRuntimeFailure(message);
+        session.notifyRuntimeFailure(this.hasToolActivity
+          ? formatFailureMessage(error, {
+            phase: "active-prompt",
+            hasPendingToolCalls: true,
+            hasCompletedToolCalls: true,
+          }).message
+          : message);
         this.close("invalidate");
       }
     }
@@ -141,8 +162,18 @@ export class Turn {
     }
 
     try {
-      adapter.handleRuntimeEvent(event);
-      this.complete(event.type === "complete" && event.resumable && !mcpServer.hasPendingCalls);
+      const formattedEvent = event.type === "complete" && event.reason === "error" && (this.hasToolActivity || mcpServer.hasPendingCalls)
+        ? {
+          ...event,
+          error: formatFailureMessage(event.cause ?? new Error(event.error ?? "Runtime failed"), {
+            phase: mcpServer.hasPendingCalls ? "tool-handoff" : "active-prompt",
+            hasPendingToolCalls: mcpServer.hasPendingCalls,
+            hasCompletedToolCalls: this.hasToolActivity,
+          }).message,
+        }
+        : event;
+      adapter.handleRuntimeEvent(formattedEvent);
+      this.complete(formattedEvent.type === "complete" && formattedEvent.resumable && !mcpServer.hasPendingCalls);
     } catch (error) {
       this.fail(error);
     }
@@ -152,6 +183,7 @@ export class Turn {
     try {
       if (!this.ownsRuntime()) return;
 
+      this.hasToolActivity = true;
       this.options.adapter.handleBridgeToolCalls(batch.calls);
       this.complete();
     } catch (error) {
@@ -205,7 +237,12 @@ export class Turn {
   private failRuntime(error: Error): void {
     if (!this.ownsRuntime()) return;
 
-    this.options.adapter.handleTermination("error", error.message);
+    const message = formatFailureMessage(error, {
+      phase: "tool-handoff",
+      hasPendingToolCalls: true,
+      hasCompletedToolCalls: this.hasToolActivity,
+    }).message;
+    this.options.adapter.handleTermination("error", message);
     this.close("invalidate");
   }
 
