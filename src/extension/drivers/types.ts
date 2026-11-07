@@ -12,6 +12,7 @@ export enum SessionMode {
 
 export type ContentPart = TextContent | ImageContent;
 export type ToolWarningStatus = NonNullable<ToolCallUpdate["status"]> | "unknown";
+export type ToolWarningReason = "notification-limit";
 
 export type BridgeMessage =
   | { role: "system"; content: string }
@@ -104,4 +105,4 @@ export type RuntimeEvent =
   | { type: "accounting"; usage: AssistantMessage["usage"] }
   | { type: "complete"; reason: "stop" | "toolUse" | "error" | "aborted"; error?: string | undefined; resumable: boolean }
   | { type: "blocked-native-tool"; name: string }
-  | { type: "tool-warning"; name: string; args: unknown; status: ToolWarningStatus };
+  | { type: "tool-warning"; name: string; args: unknown; status: ToolWarningStatus; reason?: ToolWarningReason };

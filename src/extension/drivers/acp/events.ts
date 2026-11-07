@@ -93,7 +93,7 @@ export class EventProcessor {
       if (!this.calls.has(id) && this.calls.size >= 1024) {
         if (!this.overflowWarned) {
           this.overflowWarned = true;
-          this.warn({ toolCallId: id, title: "ACP tool notification limit exceeded" }, emit);
+          emit({ type: "tool-warning", name: "unknown tool", args: undefined, status: "unknown", reason: "notification-limit" });
         }
         return;
       }
@@ -161,7 +161,7 @@ export class EventProcessor {
     const mcp = call._meta?.mcp;
     const lazy = getLazyMcpCall(call);
     const name = record(mcp) && typeof mcp.tool === "string"
-      ? mcp.tool : lazy?.tool ?? (call.title ?? call.name ?? call.kind ?? "unverified ACP tool").replace(/^Running /, "");
+      ? mcp.tool : lazy?.tool ?? (call.name?.trim() || "unknown tool");
     const args = record(mcp) && record(call.rawInput) && record(call.rawInput.arguments)
       ? call.rawInput.arguments : lazy ? lazy.args : call.rawInput;
 

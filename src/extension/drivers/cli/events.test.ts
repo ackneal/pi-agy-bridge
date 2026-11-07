@@ -87,11 +87,11 @@ describe("EventProcessor", () => {
   const toolCases: { name: string; call: Omit<ToolCallUpdate, "toolCallId">; warning?: string }[] = [
     ...["read_file", "Running read_file", " \tRUNNING READ_FILE\n"].map((title) => ({ name: title, call: { title } })),
     ...["view_file", "Running view_file", "not_read_file", "read_file_extra", "Running read_file_extra", "Other Running read_file", "Running  read_file", "client_view_file"].map((title) => ({
-      name: title, call: { title }, warning: title.replace(/^Running /, ""),
+      name: title, call: { title }, warning: "unknown tool",
     })),
     { name: "name fallback", call: { name: "read_file" } },
-    { name: "title takes precedence", call: { title: "edit_file", name: "read_file" }, warning: "edit_file" },
-    { name: "kind alone does not identify a native tool", call: { kind: "read" }, warning: "read" },
+    { name: "name identifies tool despite conflicting title", call: { title: "edit_file", name: "read_file" }, warning: "read_file" },
+    { name: "kind alone does not identify a native tool", call: { kind: "read" }, warning: "unknown tool" },
     { name: "registered MCP tool", call: { title: "read", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } } },
     { name: "unregistered MCP tool", call: { title: "read_file", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "unknown" } } }, warning: "unknown" },
     { name: "foreign MCP tool", call: { title: "Running read_file", _meta: { mcp: { server: "other", tool: "read" } } }, warning: "read" },
@@ -201,7 +201,7 @@ describe("EventProcessor", () => {
 
       const warnings = events.filter((event) => event.type === "tool-warning");
       assert.equal(warnings.length, row.warned ? 1 : 0);
-      if (row.warned) assert.equal(warnings[0]?.name, row.warningName ?? row.calls.at(-1)?.title?.replace(/^Running /, ""));
+      if (row.warned) assert.equal(warnings[0]?.name, row.warningName ?? row.calls.at(-1)?.name ?? "unknown tool");
       assert.deepEqual(events.filter((event) => event.type === "complete"), [
         { type: "complete", reason: "stop", resumable: true },
       ]);
@@ -296,12 +296,12 @@ describe("EventProcessor", () => {
         { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
         { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
       ],
-      warning: "edit_file", status: "completed",
+      warning: "unknown tool", status: "completed",
     },
     {
       name: "completion checks unfinished calls",
       updates: [{ sessionUpdate: "tool_call", toolCallId: "call", title: "edit_file", status: "in_progress" }],
-      warning: "edit_file", status: "in_progress",
+      warning: "unknown tool", status: "in_progress",
     },
     {
       name: "conflicting MCP identity warns once",
@@ -314,7 +314,7 @@ describe("EventProcessor", () => {
     },
     { name: "failed tool preserves status", updates: [
       { sessionUpdate: "tool_call_update", toolCallId: "call", title: "edit_file", status: "failed" },
-    ], warning: "edit_file", status: "failed" },
+    ], warning: "unknown tool", status: "failed" },
     ...([null, undefined] as const).map((status) => ({
       name: `identity conflict retains prior status when ${status}`,
       updates: [
@@ -364,8 +364,8 @@ describe("EventProcessor", () => {
       processor.complete({ stopReason: "end_turn" }, emit);
 
       assert.deepEqual(events.filter((event) => event.type === "tool-warning"), [
-        { type: "tool-warning", name: "ACP tool notification limit exceeded", args: undefined, status: "unknown" },
-        { type: "tool-warning", name: "edit_file", args: artifactInput, status: "completed" },
+        { type: "tool-warning", name: "unknown tool", args: undefined, status: "unknown", reason: "notification-limit" },
+        { type: "tool-warning", name: "unknown tool", args: artifactInput, status: "completed" },
       ]);
     }
   });

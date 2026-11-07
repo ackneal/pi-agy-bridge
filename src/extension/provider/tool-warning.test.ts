@@ -12,6 +12,7 @@ for (const row of [
   { name: "active output", handoff: false, throws: false },
   { name: "between Pi tool turns", handoff: true, throws: false },
   { name: "failed warning display", handoff: false, throws: true },
+  { name: "tracking overflow", handoff: false, throws: false },
 ]) {
   test(`ACP warning does not invalidate runtime: ${row.name}`, async (t) => {
     const session = new LiveSession("warning-session");
@@ -40,10 +41,11 @@ for (const row of [
     if (row.handoff) adapter.handleBridgeToolCalls([{ type: "toolCall", id: "read", name: "read", arguments: {} }]);
 
     const args = { absolute_path: "/synthetic/output.txt" };
-    dispatch({ type: "tool-warning", name: "view_file", args, status: "failed" });
+    const reason = row.name === "tracking overflow" ? "notification-limit" as const : undefined;
+    dispatch({ type: "tool-warning", name: "view_file", args, status: "failed", ...(reason ? { reason } : {}) });
 
     assert.equal(onWarning.mock.callCount(), 1);
-    assert.deepEqual(onWarning.mock.calls[0]!.arguments, ["view_file", args, "failed"]);
+    assert.deepEqual(onWarning.mock.calls[0]!.arguments, ["view_file", args, "failed", reason]);
     assert.equal(session.activeProcess, proc);
     assert.equal(session.activeMcpServer, mcpServer);
     assert.equal(abort.mock.callCount(), 0);
@@ -59,48 +61,36 @@ for (const row of [
 describe("formatToolWarning", () => {
   const circular: Record<string, unknown> = {};
   circular.self = circular;
-  const unchanged = { nested: { secret: "keep original", path: "file" } };
-  const throwing = { toJSON() { throw new Error("cannot serialize"); } };
-
-  const cases: { title: string; name: string; args: unknown; expected: string; status?: ToolWarningStatus; verify?: () => void }[] = [
-    { title: "exact view_file example", name: "view_file", args: { path: "/tmp/example.ts" }, status: "completed",
-      expected: 'view_file {"path":"/tmp/example.ts"}' },
-    { title: "MCP arguments object", name: "mcp__server__search", args: { query: "hello", limit: 2 }, status: "in_progress",
-      expected: 'mcp__server__search {"query":"hello","limit":2}' },
-    { title: "nested sensitive keys", name: "mcp", args: { token: "a", nested: [{ password: "b", secret: "c", authorization: "d", cookie: "e", api_key: "f", APIKey: "g", accessToken: "h", path: "ok" }] },
-      expected: 'mcp {"token":"[REDACTED]","nested":[{"password":"[REDACTED]","secret":"[REDACTED]","authorization":"[REDACTED]","cookie":"[REDACTED]","api_key":"[REDACTED]","APIKey":"[REDACTED]","accessToken":"[REDACTED]","path":"ok"}]}' },
-    { title: "string escapes and terminal controls", name: "\u001b[31mview\u001b[0m\nfile\tname\r!", args: 'quote"\n\t\u001b[31m',
-      expected: 'view file name ! "quote\\"\\n\\t\\u001b[31m"' },
-    { title: "bounded name and body", name: "n".repeat(121), args: "a".repeat(1100),
-      expected: `${"n".repeat(119)}… "${"a".repeat(998)}…` },
-    { title: "circular input never throws", name: "tool", args: circular, expected: "tool [unserializable arguments]" },
-    { title: "handles throwing serialization", name: "tool", args: throwing, expected: "tool [unserializable arguments]" },
-    { title: "handles bigint serialization", name: "tool", args: 1n, expected: "tool [unserializable arguments]" },
-    { title: "unsupported primitive", name: "tool", args: Symbol("x"), expected: "tool [unserializable arguments]" },
-    { title: "redacts without mutating original data", name: "tool", args: unchanged,
-      expected: 'tool {"nested":{"secret":"[REDACTED]","path":"file"}}',
-      verify: () => assert.deepEqual(unchanged, { nested: { secret: "keep original", path: "file" } }) },
-    { title: "undefined becomes empty args", name: "tool", args: undefined, status: "unknown", expected: "tool {}" },
-    { title: "empty object", name: "tool", args: {}, status: "pending", expected: "tool {}" },
-    { title: "null primitive", name: "tool", args: null, expected: "tool null" },
-    { title: "number primitive", name: "tool", args: 42, expected: "tool 42" },
-    { title: "boolean primitive", name: "tool", args: false, expected: "tool false" },
-    { title: "unicode line separators", name: "tool", args: "a\u2028b\u2029c", expected: 'tool "a\\u2028b\\u2029c"' },
+  const throwing = { toJSON() { throw new Error("must not serialize input"); } };
+  const cases: { title: string; name: string; args: unknown; expected: string; status?: ToolWarningStatus }[] = [
+    { title: "completed activity", name: "view_file", args: { path: "/tmp/private" }, expected: "view_file", status: "completed" },
+    { title: "in-progress activity", name: "search", args: {}, expected: "search", status: "in_progress" },
+    { title: "pending activity", name: "search", args: undefined, expected: "search", status: "pending" },
+    { title: "unknown status", name: "search", args: null, expected: "search", status: "unknown" },
+    { title: "sensitive input omitted", name: "tool", args: { secret: "private" }, expected: "tool" },
+    { title: "circular input ignored", name: "tool", args: circular, expected: "tool" },
+    { title: "serialization not invoked", name: "tool", args: throwing, expected: "tool" },
+    { title: "terminal controls removed", name: "\u001b[31mview\u001b[0m\nfile\tname\r!", args: {}, expected: "view file name !" },
+    { title: "bounded name", name: "n".repeat(121), args: {}, expected: `${"n".repeat(119)}…` },
+    { title: "empty name", name: "", args: {}, expected: "unknown tool" },
+    { title: "blank name", name: " \t\n", args: {}, expected: "unknown tool" },
+    { title: "control-only name", name: "\u001b[31m\u0000\u2028\u2029", args: {}, expected: "unknown tool" },
   ];
 
-  for (const { driver, label } of [
-    { driver: "acp", label: "ACP" },
-    { driver: "cli", label: "CLI" },
-  ] satisfies { driver: DriverId; label: string }[]) {
+  for (const driver of ["acp", "cli"] satisfies DriverId[]) {
+    test(`${driver}: tracking overflow has a distinct diagnostic`, () => {
+      const result = formatToolWarning(driver, "unknown tool", undefined, "unknown", "notification-limit");
+
+      assert.equal(result, `Antigravity ${driver.toUpperCase()}: Tool activity tracking limit reached; additional tool calls cannot be verified.`);
+    });
+
     for (const row of cases) {
       test(`${driver}: ${row.title}`, () => {
         const status = row.status ?? "failed";
-        const prefix = `Antigravity ${label}: unverified tool activity [${status}] — `;
         const result = formatToolWarning(driver, row.name, row.args, status);
 
-        assert.equal(result, prefix + row.expected);
-        assert.ok(result.length <= prefix.length + 120 + 1 + 1000);
-        row.verify?.();
+        assert.equal(result, `Antigravity ${driver.toUpperCase()}: Unverified tool activity — ${row.expected} (status: ${status}).`);
+        assert.ok(!/[\r\n\u2028\u2029]/.test(result));
       });
     }
   }
