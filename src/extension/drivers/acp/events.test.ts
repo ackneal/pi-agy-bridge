@@ -21,7 +21,7 @@ describe("EventProcessor notifications and completion", () => {
           }, scope === "replay" ? "replay" : "live", (fact) => facts.push(fact));
           assert.equal(facts.length, 0, "partial announcements must have a chance to supply identity");
           if (scope === "live") processor.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
-          assert.deepEqual(facts, scope === "live" ? [{ type: "tool-warning", name: "display only", args: undefined, status: "pending" }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }] : []);
+          assert.deepEqual(facts, scope === "live" ? [{ type: "tool-warning", name: "unknown tool", args: undefined, status: "pending" }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }] : []);
         });
       }
     }
@@ -47,14 +47,14 @@ describe("EventProcessor notifications and completion", () => {
     }
   }
 
-  test("native update without title uses kind for display", () => {
+  test("native update without name does not use kind as tool identity", () => {
     const facts: RuntimeEvent[] = [];
     const processor = new EventProcessor("session");
     processor.process({
       sessionId: "session", update: { sessionUpdate: "tool_call_update", toolCallId: "call", kind: "execute" },
     }, "live", (fact) => facts.push(fact));
     processor.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
-    assert.deepEqual(facts, [{ type: "tool-warning", name: "execute", args: undefined, status: "unknown" }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }]);
+    assert.deepEqual(facts, [{ type: "tool-warning", name: "unknown tool", args: undefined, status: "unknown" }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }]);
   });
 
   for (const row of [
@@ -526,8 +526,8 @@ describe("EventProcessor tool allowlist validation and warnings", () => {
   }
 
   for (const row of [
-    { name: "native canonical name and raw args", call: { toolCallId: "same", title: "Running view_file", rawInput: { absolute_path: path }, status: "completed" }, expectedName: "view_file", args: { absolute_path: path } },
-    { name: "failed native tool", call: { toolCallId: "same", title: "Running view_file", rawInput: { absolute_path: path }, status: "failed" }, expectedName: "view_file", args: { absolute_path: path } },
+    { name: "native canonical name overrides display title", call: { toolCallId: "same", name: "view_file", title: "File output.txt", rawInput: { absolute_path: path }, status: "completed" }, expectedName: "view_file", args: { absolute_path: path } },
+    { name: "failed title-only activity has unknown identity", call: { toolCallId: "same", title: "Running view_file", rawInput: { absolute_path: path }, status: "failed" }, expectedName: "unknown tool", args: { absolute_path: path } },
     { name: "MCP tool and unwrapped args", call: { toolCallId: "same", _meta: { mcp: { server: "other", tool: "read" } }, rawInput: { arguments: { path } } }, expectedName: "read", args: { path } },
     { name: "lazy MCP tool and unwrapped args", call: { toolCallId: "same", title: "Running call_mcp_tool", rawInput: { ServerName: "other", ToolName: "read", Arguments: { path } }, status: "completed" }, expectedName: "read", args: { path } },
   ] satisfies { name: string; call: ToolCallUpdate; expectedName: string; args: unknown }[]) {
@@ -574,7 +574,7 @@ describe("EventProcessor tool allowlist validation and warnings", () => {
       processor.process({ sessionId: "session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "continued" } } }, "live", emit);
       processor.complete({ stopReason: "end_turn" }, emit);
     }
-    assert.deepEqual(events.filter((event) => event.type === "tool-warning"), Array.from({ length: 2 }, () => ({ type: "tool-warning", name: "ACP tool notification limit exceeded", args: undefined, status: "unknown" })));
+    assert.deepEqual(events.filter((event) => event.type === "tool-warning"), Array.from({ length: 2 }, () => ({ type: "tool-warning", name: "unknown tool", args: undefined, status: "unknown", reason: "notification-limit" })));
     assert.equal(events.filter((event) => event.type === "text-delta").length, 2);
     assert.equal(events.filter((event) => event.type === "complete").length, 2);
   });
