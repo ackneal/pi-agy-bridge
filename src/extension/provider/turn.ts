@@ -2,7 +2,7 @@ import type { Context, Usage } from "@earendil-works/pi-ai";
 import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { PiToolCallBatch } from "../bridge/capabilities.ts";
 import type { PiRuntimeOutput } from "./output.ts";
-import type { DriverSession, DriverSubmission, RuntimeEvent } from "../drivers/types.ts";
+import type { DriverSession, DriverSubmission, RuntimeEvent, ToolWarningStatus } from "../drivers/types.ts";
 import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
@@ -16,7 +16,7 @@ interface TurnOptions {
   preparationId: symbol;
   signal: AbortSignal | undefined;
   sessionVersion: string;
-  onWarning?: (name: string, args: unknown) => void;
+  onWarning?: (name: string, args: unknown, status: ToolWarningStatus) => void;
   onAccounting?: (usage: Usage) => void;
 }
 
@@ -110,7 +110,7 @@ export class Turn {
     if (!this.ownsRuntime()) return;
     if (event.type === "tool-warning") {
       try {
-        this.options.onWarning?.(event.name, event.args);
+        this.options.onWarning?.(event.name, event.args, event.status);
       } catch (error) {
         debugLog("warning", "Could not display ACP tool warning:", error);
       }

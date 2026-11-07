@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import { BridgeIPC } from "../bridge/ipc.ts";
-import type { DriverId, DriverSession, RuntimeEvent } from "../drivers/types.ts";
+import type { DriverId, DriverSession, RuntimeEvent, ToolWarningStatus } from "../drivers/types.ts";
 import { LiveSession, PiContextAdapter } from "../session/session.ts";
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { PiRuntimeOutput } from "./output.ts";
@@ -28,7 +28,7 @@ for (const row of [
     const preparationId = session.beginPreparation();
     assert.equal(session.setSession(proc, "sync", mcpServer, "native-session", preparationId), true);
     const adapter = new PiRuntimeOutput({ model: "synthetic", provider: "agy" });
-    const onWarning = t.mock.fn((_name: string, _args: unknown) => {
+    const onWarning = t.mock.fn((_name: string, _args: unknown, _status: ToolWarningStatus) => {
       if (row.throws) throw new Error("synthetic UI failure");
     });
     const turn = new Turn({
@@ -40,10 +40,10 @@ for (const row of [
     if (row.handoff) adapter.handleBridgeToolCalls([{ type: "toolCall", id: "read", name: "read", arguments: {} }]);
 
     const args = { absolute_path: "/synthetic/output.txt" };
-    dispatch({ type: "tool-warning", name: "view_file", args });
+    dispatch({ type: "tool-warning", name: "view_file", args, status: "failed" });
 
     assert.equal(onWarning.mock.callCount(), 1);
-    assert.deepEqual(onWarning.mock.calls[0]!.arguments, ["view_file", args]);
+    assert.deepEqual(onWarning.mock.calls[0]!.arguments, ["view_file", args, "failed"]);
     assert.equal(session.activeProcess, proc);
     assert.equal(session.activeMcpServer, mcpServer);
     assert.equal(abort.mock.callCount(), 0);
@@ -62,10 +62,10 @@ describe("formatToolWarning", () => {
   const unchanged = { nested: { secret: "keep original", path: "file" } };
   const throwing = { toJSON() { throw new Error("cannot serialize"); } };
 
-  const cases: { title: string; name: string; args: unknown; expected: string; verify?: () => void }[] = [
-    { title: "exact view_file example", name: "view_file", args: { path: "/tmp/example.ts" },
+  const cases: { title: string; name: string; args: unknown; expected: string; status?: ToolWarningStatus; verify?: () => void }[] = [
+    { title: "exact view_file example", name: "view_file", args: { path: "/tmp/example.ts" }, status: "completed",
       expected: 'view_file {"path":"/tmp/example.ts"}' },
-    { title: "MCP arguments object", name: "mcp__server__search", args: { query: "hello", limit: 2 },
+    { title: "MCP arguments object", name: "mcp__server__search", args: { query: "hello", limit: 2 }, status: "in_progress",
       expected: 'mcp__server__search {"query":"hello","limit":2}' },
     { title: "nested sensitive keys", name: "mcp", args: { token: "a", nested: [{ password: "b", secret: "c", authorization: "d", cookie: "e", api_key: "f", APIKey: "g", accessToken: "h", path: "ok" }] },
       expected: 'mcp {"token":"[REDACTED]","nested":[{"password":"[REDACTED]","secret":"[REDACTED]","authorization":"[REDACTED]","cookie":"[REDACTED]","api_key":"[REDACTED]","APIKey":"[REDACTED]","accessToken":"[REDACTED]","path":"ok"}]}' },
@@ -80,8 +80,8 @@ describe("formatToolWarning", () => {
     { title: "redacts without mutating original data", name: "tool", args: unchanged,
       expected: 'tool {"nested":{"secret":"[REDACTED]","path":"file"}}',
       verify: () => assert.deepEqual(unchanged, { nested: { secret: "keep original", path: "file" } }) },
-    { title: "undefined becomes empty args", name: "tool", args: undefined, expected: "tool {}" },
-    { title: "empty object", name: "tool", args: {}, expected: "tool {}" },
+    { title: "undefined becomes empty args", name: "tool", args: undefined, status: "unknown", expected: "tool {}" },
+    { title: "empty object", name: "tool", args: {}, status: "pending", expected: "tool {}" },
     { title: "null primitive", name: "tool", args: null, expected: "tool null" },
     { title: "number primitive", name: "tool", args: 42, expected: "tool 42" },
     { title: "boolean primitive", name: "tool", args: false, expected: "tool false" },
@@ -94,8 +94,9 @@ describe("formatToolWarning", () => {
   ] satisfies { driver: DriverId; label: string }[]) {
     for (const row of cases) {
       test(`${driver}: ${row.title}`, () => {
-        const prefix = `Antigravity ${label}: unverified tool activity — `;
-        const result = formatToolWarning(driver, row.name, row.args);
+        const status = row.status ?? "failed";
+        const prefix = `Antigravity ${label}: unverified tool activity [${status}] — `;
+        const result = formatToolWarning(driver, row.name, row.args, status);
 
         assert.equal(result, prefix + row.expected);
         assert.ok(result.length <= prefix.length + 120 + 1 + 1000);

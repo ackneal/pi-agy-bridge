@@ -108,7 +108,7 @@ describe("EventProcessor", () => {
         update: { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed", rawInput, ...row.call },
       }, "live", (event) => events.push(event));
 
-      assert.deepEqual(events, row.warning === undefined ? [] : [{ type: "tool-warning", name: row.warning, args: rawInput }]);
+      assert.deepEqual(events, row.warning === undefined ? [] : [{ type: "tool-warning", name: row.warning, args: rawInput, status: "completed" }]);
     });
   }
 
@@ -288,7 +288,7 @@ describe("EventProcessor", () => {
     });
   }
 
-  const warningCases: { name: string; updates: SessionNotification["update"][]; warning: string }[] = [
+  const warningCases: { name: string; updates: SessionNotification["update"][]; warning: string; status: string }[] = [
     {
       name: "terminal updates and completion warn once",
       updates: [
@@ -296,12 +296,12 @@ describe("EventProcessor", () => {
         { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
         { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
       ],
-      warning: "edit_file",
+      warning: "edit_file", status: "completed",
     },
     {
       name: "completion checks unfinished calls",
       updates: [{ sessionUpdate: "tool_call", toolCallId: "call", title: "edit_file", status: "in_progress" }],
-      warning: "edit_file",
+      warning: "edit_file", status: "in_progress",
     },
     {
       name: "conflicting MCP identity warns once",
@@ -310,8 +310,18 @@ describe("EventProcessor", () => {
         { sessionUpdate: "tool_call_update", toolCallId: "call", _meta: { mcp: { server: "other" } } },
         { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
       ],
-      warning: "read",
+      warning: "read", status: "unknown",
     },
+    { name: "failed tool preserves status", updates: [
+      { sessionUpdate: "tool_call_update", toolCallId: "call", title: "edit_file", status: "failed" },
+    ], warning: "edit_file", status: "failed" },
+    ...([null, undefined] as const).map((status) => ({
+      name: `identity conflict retains prior status when ${status}`,
+      updates: [
+        { sessionUpdate: "tool_call" as const, toolCallId: "call", title: "read", status: "pending" as const, _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } },
+        { sessionUpdate: "tool_call_update" as const, toolCallId: "call", ...(status === undefined ? {} : { status }), _meta: { mcp: { server: "other" } } },
+      ], warning: "read", status: "pending",
+    })),
   ];
 
   for (const row of warningCases) {
@@ -324,7 +334,7 @@ describe("EventProcessor", () => {
       processor.complete({ stopReason: "end_turn" }, emit);
 
       assert.deepEqual(events.filter((event) => event.type === "tool-warning"), [
-        { type: "tool-warning", name: row.warning, args: undefined },
+        { type: "tool-warning", name: row.warning, args: undefined, status: row.status },
       ]);
     });
   }
@@ -354,8 +364,8 @@ describe("EventProcessor", () => {
       processor.complete({ stopReason: "end_turn" }, emit);
 
       assert.deepEqual(events.filter((event) => event.type === "tool-warning"), [
-        { type: "tool-warning", name: "ACP tool notification limit exceeded", args: undefined },
-        { type: "tool-warning", name: "edit_file", args: artifactInput },
+        { type: "tool-warning", name: "ACP tool notification limit exceeded", args: undefined, status: "unknown" },
+        { type: "tool-warning", name: "edit_file", args: artifactInput, status: "completed" },
       ]);
     }
   });

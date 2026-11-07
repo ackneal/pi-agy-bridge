@@ -21,7 +21,7 @@ describe("EventProcessor notifications and completion", () => {
           }, scope === "replay" ? "replay" : "live", (fact) => facts.push(fact));
           assert.equal(facts.length, 0, "partial announcements must have a chance to supply identity");
           if (scope === "live") processor.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
-          assert.deepEqual(facts, scope === "live" ? [{ type: "tool-warning", name: "display only", args: undefined }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }] : []);
+          assert.deepEqual(facts, scope === "live" ? [{ type: "tool-warning", name: "display only", args: undefined, status: "pending" }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }] : []);
         });
       }
     }
@@ -54,7 +54,7 @@ describe("EventProcessor notifications and completion", () => {
       sessionId: "session", update: { sessionUpdate: "tool_call_update", toolCallId: "call", kind: "execute" },
     }, "live", (fact) => facts.push(fact));
     processor.complete({ stopReason: "end_turn" }, (fact) => facts.push(fact));
-    assert.deepEqual(facts, [{ type: "tool-warning", name: "execute", args: undefined }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }]);
+    assert.deepEqual(facts, [{ type: "tool-warning", name: "execute", args: undefined, status: "unknown" }, { type: "session-reference", reference: "session" }, { type: "complete", reason: "stop", resumable: true }]);
   });
 
   for (const row of [
@@ -527,6 +527,7 @@ describe("EventProcessor tool allowlist validation and warnings", () => {
 
   for (const row of [
     { name: "native canonical name and raw args", call: { toolCallId: "same", title: "Running view_file", rawInput: { absolute_path: path }, status: "completed" }, expectedName: "view_file", args: { absolute_path: path } },
+    { name: "failed native tool", call: { toolCallId: "same", title: "Running view_file", rawInput: { absolute_path: path }, status: "failed" }, expectedName: "view_file", args: { absolute_path: path } },
     { name: "MCP tool and unwrapped args", call: { toolCallId: "same", _meta: { mcp: { server: "other", tool: "read" } }, rawInput: { arguments: { path } } }, expectedName: "read", args: { path } },
     { name: "lazy MCP tool and unwrapped args", call: { toolCallId: "same", title: "Running call_mcp_tool", rawInput: { ServerName: "other", ToolName: "read", Arguments: { path } }, status: "completed" }, expectedName: "read", args: { path } },
   ] satisfies { name: string; call: ToolCallUpdate; expectedName: string; args: unknown }[]) {
@@ -541,8 +542,24 @@ describe("EventProcessor tool allowlist validation and warnings", () => {
         }
         processor.complete({ stopReason: "end_turn" }, emit);
       }
-      assert.deepEqual(events.filter((event) => event.type === "tool-warning"), Array.from({ length: 2 }, () => ({ type: "tool-warning", name: row.expectedName, args: row.args })));
+      assert.deepEqual(events.filter((event) => event.type === "tool-warning"), Array.from({ length: 2 }, () => ({ type: "tool-warning", name: row.expectedName, args: row.args, status: row.call.status ?? "unknown" })));
       assert.equal(events.filter((event) => event.type === "complete").length, 2);
+    });
+  }
+
+  for (const status of [null, undefined] as const) {
+    test(`identity conflict retains prior status when ${status}`, () => {
+      const processor = new EventProcessor("session", new Set(["read"]));
+      const events: RuntimeEvent[] = [];
+      for (const call of [
+        { toolCallId: "same", status: "in_progress" as const, _meta: mcp },
+        { toolCallId: "same", ...(status === undefined ? {} : { status }), _meta: { mcp: { server: "other", tool: "read" } } },
+      ]) processor.process({ sessionId: "session", update: { ...call, sessionUpdate: "tool_call_update" } }, "live", (event) => events.push(event));
+      processor.complete({ stopReason: "end_turn" }, (event) => events.push(event));
+
+      assert.deepEqual(events.filter((event) => event.type === "tool-warning"), [{
+        type: "tool-warning", name: "read", args: undefined, status: "in_progress",
+      }]);
     });
   }
 
@@ -557,7 +574,7 @@ describe("EventProcessor tool allowlist validation and warnings", () => {
       processor.process({ sessionId: "session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "continued" } } }, "live", emit);
       processor.complete({ stopReason: "end_turn" }, emit);
     }
-    assert.deepEqual(events.filter((event) => event.type === "tool-warning"), Array.from({ length: 2 }, () => ({ type: "tool-warning", name: "ACP tool notification limit exceeded", args: undefined })));
+    assert.deepEqual(events.filter((event) => event.type === "tool-warning"), Array.from({ length: 2 }, () => ({ type: "tool-warning", name: "ACP tool notification limit exceeded", args: undefined, status: "unknown" })));
     assert.equal(events.filter((event) => event.type === "text-delta").length, 2);
     assert.equal(events.filter((event) => event.type === "complete").length, 2);
   });

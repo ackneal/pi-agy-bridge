@@ -130,7 +130,7 @@ export class EventProcessor {
       const after = update._meta?.mcp;
       if (record(before) && record(after) && ["server", "tool"].some((key) =>
         before[key] !== undefined && after[key] !== undefined && before[key] !== after[key])) {
-        this.warn({ ...prior!.call, ...update, _meta: { ...prior!.call._meta, ...update._meta, mcp: { ...before, ...after } } }, emit);
+        this.warn({ ...prior!.call, ...update, status: update.status ?? prior!.call.status ?? null, _meta: { ...prior!.call._meta, ...update._meta, mcp: { ...before, ...after } } }, emit);
         return;
       }
       // ACP null fields preserve prior values; rawInput is a replacement snapshot.
@@ -195,7 +195,7 @@ export class EventProcessor {
       ? mcp.tool : wrapped?.tool ?? (call.title ?? call.name ?? call.kind ?? "unverified tool").replace(/^Running /, "");
     const args = record(mcp) && record(call.rawInput) && record(call.rawInput.arguments)
       ? call.rawInput.arguments : wrapped ? wrapped.args : call.rawInput;
-    emit({ type: "tool-warning", name, args });
+    emit({ type: "tool-warning", name, args, status: call.status ?? "unknown" });
   }
 
   complete(response: PromptResponse, emit: (event: RuntimeEvent) => void): void {

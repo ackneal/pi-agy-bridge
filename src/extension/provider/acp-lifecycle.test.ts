@@ -246,7 +246,7 @@ describe("ACP tool announcements", () => {
       assert.equal(close.mock.callCount(), 0);
       assert.equal(notify.mock.callCount(), 1);
       assert.deepEqual(notify.mock.calls[0]!.arguments, [
-        `Antigravity ACP: unverified tool activity — ${row.tool} ${JSON.stringify(row.args)}`, "warning",
+        `Antigravity ACP: unverified tool activity [in_progress] — ${row.tool} ${JSON.stringify(row.args)}`, "warning",
       ]);
       const checkpoint = await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion);
       assert.equal(checkpoint?.sessionId, session.activeProcess.session.id);
