@@ -44,6 +44,8 @@ export function resolveModelAndEffort(
   return { baseModel, effort };
 }
 
+class PreparationCleanupError extends AggregateError {}
+
 export async function prepareRuntime(
   model: Model<any>,
   context: Context,
@@ -86,6 +88,14 @@ export async function prepareRuntime(
     parameters: tool.parameters,
   }));
   const syncKey = calculateSyncKey(context.systemPrompt ?? "", toolSyncValues, baseModel, effort ?? "", agentName);
+  let versionValidated = false;
+  if (liveSession.driverId !== undefined && liveSession.driverId !== "cli") {
+    await validateAgyVersion(dependencies.executable);
+    versionValidated = true;
+    checkPreparation();
+    await liveSession.dispose({ preparationId });
+    checkPreparation();
+  }
 
   const latestAssistant = [...context.messages].reverse().find((message) => message.role === "assistant");
   const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
@@ -128,6 +138,11 @@ export async function prepareRuntime(
   }
 
   debugLog("register", "Starting a replacement Antigravity ACP process");
+  if (!versionValidated) {
+    await validateAgyVersion(dependencies.executable);
+    checkPreparation();
+  }
+
   await liveSession.dispose({
     preserveConversation: decision.action === "resume",
     preserveResources: decision.action === "resume" && decision.conversationId === liveSession.conversationId,
@@ -135,15 +150,14 @@ export async function prepareRuntime(
   });
   checkPreparation();
 
-  await validateAgyVersion(dependencies.executable);
-  checkPreparation();
-
   const startRuntime = async (conversationId?: string) => {
     const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
     let connection: Connection | null = null;
+    let proc: RuntimeSession | undefined;
 
     const abortStartup = () => {
       void mcpServer.close().catch((err) => debugLog("session", "Error closing cancelled MCP startup:", err));
+      void proc?.abort().catch((err) => debugLog("session", "Error aborting cancelled runtime:", err));
       void connection?.dispose().catch((err) => debugLog("session", "Error aborting cancelled connection:", err));
     };
     options?.signal?.addEventListener("abort", abortStartup, { once: true });
@@ -175,7 +189,7 @@ export async function prepareRuntime(
         environment,
       });
 
-      const proc = new RuntimeSession(
+      proc = new RuntimeSession(
         connection,
         {
           cwd,
@@ -200,9 +214,16 @@ export async function prepareRuntime(
 
       return { proc, mcpServer, modelId: model.id };
     } catch (error) {
-      await mcpServer.close().catch((err) => debugLog("session", "Error closing unowned MCP bridge:", err));
-      if (connection) {
-        await connection.dispose().catch((err) => debugLog("session", "Error aborting unowned connection:", err));
+      const failures: unknown[] = [];
+      try { await mcpServer.close(); } catch (cleanupError) { failures.push(cleanupError); }
+      try {
+        if (proc) await proc.abort();
+        else if (connection) await connection.dispose();
+      } catch (cleanupError) {
+        failures.push(cleanupError);
+      }
+      if (failures.length > 0) {
+        throw new PreparationCleanupError([error, ...failures], "Antigravity ACP preparation and cleanup failed");
       }
       throw error;
     } finally {
@@ -215,6 +236,7 @@ export async function prepareRuntime(
       return { ...await startRuntime(decision.conversationId), reconstructContext: false };
     } catch (error) {
       checkPreparation();
+      if (error instanceof PreparationCleanupError) throw error;
       debugLog("session", "Conversation resume failed before input delivery; rebuilding once", {
         conversationId: decision.conversationId,
         error: error instanceof Error ? error.message : String(error),

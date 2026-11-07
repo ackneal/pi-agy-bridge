@@ -41,6 +41,7 @@ export class Connection {
   }
 
   start(signal?: AbortSignal): Promise<acp.InitializeResponse> {
+    if (this.stopped) return Promise.reject(this.shutdown.signal.reason);
     if (this.startup) return this.startup;
     this.startup = this.initialize(signal);
     return this.startup;
@@ -108,7 +109,14 @@ export class Connection {
           ? this.options.onPermission(params)
           : { outcome: { outcome: "cancelled" } })
       .connect(acp.ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>));
-    void this.sdk.closed.then(() => this.stop(new Error("ACP transport closed")));
+    const sdk = this.sdk;
+    void sdk.closed.then(() => {
+      queueMicrotask(() => {
+        const reason = sdk.signal.reason;
+        const details = reason instanceof Error && reason.message !== "ACP connection closed" ? `: ${reason.message}` : "";
+        this.stop(new Error(`ACP transport closed${details}`));
+      });
+    });
 
     const abort = () => this.stop(signal?.reason ?? new Error("ACP startup cancelled"));
     signal?.addEventListener("abort", abort, { once: true });

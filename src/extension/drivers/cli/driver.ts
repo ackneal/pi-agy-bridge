@@ -34,10 +34,10 @@ export class Driver implements BridgeDriver {
   }
 
   async prepareSession(input: PrepareDriverInput) {
-    if (input.session.driverId !== undefined && input.session.driverId !== this.id) {
-      await input.session.dispose({ preparationId: input.preparationId });
-    }
     input.options?.signal?.throwIfAborted();
+    if (!input.session.ownsPreparation(input.preparationId)) {
+      throw new Error("Antigravity runtime preparation was superseded");
+    }
 
     const dependencies = {
       store: input.store,

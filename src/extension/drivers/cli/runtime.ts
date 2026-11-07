@@ -4,6 +4,7 @@ import type { Message, TextContent } from "@earendil-works/pi-ai";
 import type { BridgeMessage, DriverSession, DriverSubmission, RuntimeEvent } from "../types.ts";
 import type { Connection } from "./connection.ts";
 import { EventProcessor } from "./events.ts";
+import { formatFailureMessage } from "../failure.ts";
 import { debugArtifact, debugLog } from "../../shared/debug.ts";
 import { serializeContextUpdate } from "../../provider/context-prompt.ts";
 
@@ -18,6 +19,7 @@ type SessionRequests = {
 export interface RuntimeConnection extends Pick<Connection, "start" | "isRunning" | "notify" | "dispose"> {
   request<M extends keyof SessionRequests>(method: M, params: SessionRequests[M][0]): Promise<SessionRequests[M][1]>;
   onSessionUpdate(handler: (notification: SessionNotification) => void | Promise<void>): () => void;
+  onClose?: (handler: (error: unknown) => void) => () => void;
 }
 
 export interface AcpSessionClientOptions {
@@ -29,6 +31,7 @@ export interface AcpSessionClientOptions {
   systemPrompt?: string | undefined;
   standalone?: boolean | undefined;
   onUpdate: (notification: SessionNotification) => void | Promise<void>;
+  onClose?: (error: unknown) => void;
 }
 
 export class AcpSessionClient {
@@ -40,6 +43,7 @@ export class AcpSessionClient {
   private preparing = true;
   private preparation: Promise<void> | undefined;
   private readonly unsubscribe: () => void;
+  private readonly unsubscribeClose: (() => void) | undefined;
 
   constructor(options: AcpSessionClientOptions) {
     this.connection = options.connection;
@@ -49,6 +53,9 @@ export class AcpSessionClient {
       if (!this.preparing && notification.sessionId === this.sessionId) {
         return options.onUpdate(notification);
       }
+    });
+    this.unsubscribeClose = this.connection.onClose?.((error) => {
+      options.onClose?.(error);
     });
   }
 
@@ -201,6 +208,7 @@ export class AcpSessionClient {
 
   dispose(): Promise<void> {
     this.unsubscribe();
+    this.unsubscribeClose?.();
     return this.connection.dispose();
   }
 }
@@ -280,6 +288,11 @@ export class RuntimeSession implements DriverSession {
     this.sessionClient = new AcpSessionClient({
       ...options,
       connection,
+      onClose: (error) => {
+        if (!this.completion) {
+          this.completion = this.fail(error);
+        }
+      },
       onUpdate: (update: SessionNotification) => {
         this.eventProcessor?.process(update, "live", this.emit);
       },
@@ -383,13 +396,15 @@ export class RuntimeSession implements DriverSession {
 
   private fail(error: unknown): Promise<void> {
     this.failure ??= Promise.resolve().then(async () => {
+      let failureMessage = formatFailureMessage(error, { phase: "active-prompt" }).message;
       try {
         await this.sessionClient.dispose();
       } catch (cleanupError) {
         debugLog("session", "ACP runtime cleanup failed:", cleanupError);
+        failureMessage = `${failureMessage}; cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
       }
       this.completion = undefined;
-      this.emit({ type: "complete", reason: "error", error: String(error), resumable: false });
+      this.emit({ type: "complete", reason: "error", error: failureMessage, cause: error, resumable: false });
     });
     return this.failure;
   }
