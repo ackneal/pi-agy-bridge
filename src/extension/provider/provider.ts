@@ -21,12 +21,14 @@ import {
 import { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import type { AgyUsage } from "../runtime/usage.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
-import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts";
+import { Driver as CliDriver } from "../drivers/cli/driver.ts";
+import { DEFAULT_AGY_PLUGIN_DIR } from "../discovery/plugin-install.ts";
+import type { BridgeDriver, DriverFailure, DriverId, ToolWarningStatus } from "../drivers/types.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { synchronizeAgyAuthentication } from "./auth-sync.ts";
 import { collectDoctorReport, type DoctorOptions } from "./doctor.ts";
-import { formatAcpToolWarning } from "./tool-warning.ts";
+import { formatToolWarning } from "./tool-warning.ts";
 import { AcpInstallationProgress } from "./installation-progress.ts";
 import { ProgressStatus } from "./progress.ts";
 import { prepareBridgeMessages, prepareSystemMessages } from "./context-prompt.ts";
@@ -90,7 +92,7 @@ export function streamProvider(
     preparationId,
     signal: options?.signal,
     sessionVersion: bridge.driver.sessionVersion,
-    onWarning: (name, args) => bridge.warnTool(name, args),
+    onWarning: (name, args, status) => bridge.warnTool(name, args, status),
     ...(!standalone ? { onAccounting: (usage: Usage) => {
       const manager = bridge.piContextAdapter.getSessionManager(piSessionId);
       if (!manager) throw new Error("Pi session is unavailable for usage accounting");
@@ -190,7 +192,10 @@ export class Bridge {
   constructor(pi: ExtensionAPI, driver?: BridgeDriver) {
     this.pi = pi;
     const credential = driver ? undefined : readStoredCredential("agy", path.join(getAgentDir(), "auth.json"));
-    this.driver = driver ?? createBridgeDriver(credential?.type === "oauth" && credential.driver === "cli" ? "cli" : "acp");
+    const initialDriver = credential?.type === "oauth" && credential.driver === "cli"
+      ? "cli"
+      : "acp";
+    this.driver = driver ?? createBridgeDriver(initialDriver);
     this.driver.onInstallationProgress = (progress) => this.installationProgress.update(progress);
     this.authentication = new AgyAuthentication(this.driver.authentication, async () => {
       this.runtimeLifetime.abort(new Error(`${this.driver.label} login changed the bridge session`));
@@ -240,6 +245,13 @@ export class Bridge {
     driver.onInstallationProgress = (progress) => this.installationProgress.update(progress);
     if (driver.id === "cli" && !driver.detectExecutable()) throw new Error(`${driver.label} executable not found`);
     const lifetime = this.runtimeLifetime.signal;
+    if (driver instanceof CliDriver) {
+      lifetime.throwIfAborted();
+      await driver.installPlugin(DEFAULT_AGY_PLUGIN_DIR);
+      this.lifetime.signal.throwIfAborted();
+      lifetime.throwIfAborted();
+    }
+
     const models = await driver.discoverModels(lifetime) ?? driver.initialModels;
     lifetime.throwIfAborted();
 
@@ -268,14 +280,14 @@ export class Bridge {
     return { signal };
   }
 
-  public warnTool(name: string, args: unknown): void {
-    const message = formatAcpToolWarning(name, args);
+  public warnTool(name: string, args: unknown, status: ToolWarningStatus): void {
+    const message = formatToolWarning(this.driver.id, name, args, status);
     if (this.ui) {
       try {
         this.ui.notify(message, "warning");
         return;
       } catch (error) {
-        debugLog("warning", "Could not display ACP tool warning in Pi:", error);
+        debugLog("warning", "Could not display tool warning in Pi:", error);
       }
     }
     process.stderr.write(`${message}\n`);
@@ -418,7 +430,7 @@ export class Bridge {
           return;
         }
 
-        const label = target === "cli" ? "Antigravity CLI" : "Antigravity ACP";
+        const label = createBridgeDriver(target).label;
         const finishProgress = this.showProgress(ctx, `Switching to ${label}…`);
         let result: Awaited<ReturnType<Bridge["switchDriver"]>>;
         try {

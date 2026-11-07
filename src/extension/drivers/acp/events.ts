@@ -1,7 +1,7 @@
 import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { PromptResponse, Usage } from "@agentclientprotocol/sdk/unstable";
 import type { RuntimeEvent } from "../types.ts";
-import { isRegisteredPiMcpTool, PI_MCP_SERVER } from "./permissions.ts";
+import { isRegisteredPiMcpTool, PI_MCP_SERVER } from "../mcp-identity.ts";
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -103,7 +103,7 @@ export class EventProcessor {
       const after = update._meta?.mcp;
       if (record(before) && record(after) && ["server", "tool"].some((key) =>
         before[key] !== undefined && after[key] !== undefined && before[key] !== after[key])) {
-        this.warn({ ...prior!.call, ...update, _meta: { ...prior!.call._meta, ...update._meta, mcp: { ...before, ...after } } }, emit);
+        this.warn({ ...prior!.call, ...update, status: update.status ?? prior!.call.status ?? null, _meta: { ...prior!.call._meta, ...update._meta, mcp: { ...before, ...after } } }, emit);
         return;
       }
       // ACP v1 null fields leave prior values unchanged; rawInput replaces the whole value.
@@ -165,7 +165,7 @@ export class EventProcessor {
     const args = record(mcp) && record(call.rawInput) && record(call.rawInput.arguments)
       ? call.rawInput.arguments : lazy ? lazy.args : call.rawInput;
 
-    emit({ type: "tool-warning", name, args });
+    emit({ type: "tool-warning", name, args, status: call.status ?? "unknown" });
   }
 
   complete(response: PromptResponse, emit: (event: RuntimeEvent) => void): void {

@@ -3,6 +3,7 @@ import { accessSync, constants, writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { version } from "../../../version.js";
 
 export interface ConnectionOptions {
   executable: string;
@@ -116,7 +117,7 @@ export class Connection {
       return await this.request(acp.methods.agent.initialize, {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientCapabilities: this.options.onRead ? { fs: { readTextFile: true } } : {},
-        clientInfo: { name: "pi-agy-bridge", version: "0.5.2" },
+        clientInfo: { name: "pi-agy-bridge", version },
       });
     } catch (error) {
       try {

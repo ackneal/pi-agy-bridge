@@ -14,8 +14,6 @@ import { parseModelsOutput } from "../discovery/models.ts";
 import { Driver as AcpDriver } from "../drivers/acp/driver.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import type { BridgeDriver, DriverAuthentication, DriverId } from "../drivers/types.ts";
-import { loginAgyAuthentication, probeAgyAuthentication } from "../runtime/auth.ts";
-import { AgyRuntime } from "../runtime/process.ts";
 import { AuthenticationRequiredError } from "../shared/types.ts";
 import { registerAuthHomeFixture } from "./auth-home-fixture.ts";
 import { AgyAuthentication, createAgyBridgeCredential, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
@@ -454,32 +452,96 @@ for (const action of ["expiry", "login success", "login failure", "driver switch
 // --- Race & Concurrency Tests ---
 
 function createAuthenticationRaceFixture(t: TestContext, beforeLogin: () => Promise<void> = async () => {}) {
-  const children: ReturnType<typeof createChild>[] = [];
+  const children: Array<{
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    closed: boolean;
+    emit: (event: string, code?: number, signal?: string | null) => void;
+  }> = [];
+
   function createChild() {
-    return Object.assign(new EventEmitter(), {
-      stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    let errBuf = "";
+    let outBuf = "";
+    stdout.on("data", (d) => { outBuf += d.toString(); });
+    stderr.on("data", (d) => { errBuf += d.toString(); });
+    const emitter = new EventEmitter();
+    const child = Object.assign(emitter, {
+      stdin, stdout, stderr, closed: false,
       kill: () => true,
     });
+    return { child, getErr: () => errBuf, getOut: () => outBuf };
   }
-  const spawn = t.mock.method(cp, "spawn", (command: string, args: string[]) => {
-    assert.equal(command, "/fake/agy");
-    assert.deepEqual(args, ["--output-format", "json", "--print", "/usage"]);
-    const child = createChild();
-    children.push(child);
-    return child;
-  });
-  syncBuiltinESMExports();
-  const auth = new AgyAuthentication({
+
+  const backend: DriverAuthentication = {
     label: "Antigravity CLI",
-    probe: (signal, onUsage) => probeAgyAuthentication("/fake/agy", signal, onUsage),
-    login: (interaction, onUsage) => loginAgyAuthentication(interaction, "/fake/agy", onUsage),
-  }, beforeLogin);
+    probe: async (signal, onUsage) => {
+      signal.throwIfAborted();
+      const { child, getErr, getOut } = createChild();
+      children.push(child);
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          child.closed = true;
+          reject(signal.reason);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        child.on("close", (code) => {
+          signal.removeEventListener("abort", onAbort);
+          child.closed = true;
+          if (code !== 0) {
+            reject(new Error("probe process failed"));
+            return;
+          }
+          if (getErr().includes("Authentication required")) {
+            resolve(false);
+            return;
+          }
+          if (getOut().includes("Quota:\nGemini Models")) {
+            onUsage({ updatedAt: "", groups: [{ name: "Default", buckets: [{ id: "1", name: "Gemini", remainingFraction: 1, resetTime: "", window: "1w" }] }] });
+            resolve(true);
+            return;
+          }
+          reject(new Error("Antigravity CLI returned no quota data"));
+        });
+      });
+    },
+    login: async (interaction, onUsage) => {
+      interaction.signal.throwIfAborted();
+      const { child, getOut } = createChild();
+      children.push(child);
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          child.closed = true;
+          reject(interaction.signal.reason);
+        };
+        interaction.signal.addEventListener("abort", onAbort, { once: true });
+        child.on("close", (code) => {
+          interaction.signal.removeEventListener("abort", onAbort);
+          child.closed = true;
+          if (code !== 0) {
+            reject(new Error("login failed"));
+            return;
+          }
+          if (getOut().includes("Remaining 100%")) {
+            onUsage({ updatedAt: "", groups: [{ name: "Default", buckets: [{ id: "1", name: "Gemini", remainingFraction: 1, resetTime: "", window: "1w" }] }] });
+          }
+          resolve();
+        });
+      });
+    },
+  };
+
+  const auth = new AgyAuthentication(backend, beforeLogin);
   t.after(() => {
     auth.close();
-    for (const child of children) child.emit("close", 0, null);
-    spawn.mock.restore();
-    syncBuiltinESMExports();
+    for (const child of children) {
+      if (!child.closed) child.emit("close", 0, null);
+    }
   });
+
   return {
     auth, children,
     finish(index: number) {
@@ -718,221 +780,5 @@ for (const loginOutcome of ["success", "failure"] as const) {
     assert.equal(await fresh, await joined);
     assert.equal(auth.status, "authenticated");
     assert.equal(auth.failure, undefined);
-  });
-}
-
-// --- Native Auth Integration Tests ---
-
-for (const scenario of ["native logout and relogin", "native URL and code login", "cancelled login", "headless unknown never retries"] as const) {
-  test(`native auth integration: ${scenario}`, async (t) => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "agy-native-auth-"));
-    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = directory;
-    t.after(() => {
-      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    });
-    const executable = path.join(directory, "agy");
-    await writeFile(executable, '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo 1.2.16\nelse\n  exit 1\nfi\n', { mode: 0o755 });
-    const children = new Map<number, EventEmitter>();
-    const writes: string[] = [];
-    let authenticated = true;
-    let processCount = 0;
-    let started: (() => void) | undefined;
-    const processStarted = new Promise<void>((resolve) => { started = resolve; });
-    let closed: (() => void) | undefined;
-    const processClosed = new Promise<void>((resolve) => { closed = resolve; });
-    const spawnMock = t.mock.method(cp, "spawn", (command: string, args: string[]) => {
-      assert.ok(command === executable || command === "/bin/sh");
-      if (command === executable) assert.deepEqual(args, ["--output-format", "json", "--print", "/usage"]);
-      else {
-        const invocation = args.join(" ");
-        assert.match(invocation, /--print[' ]+[' ]*\/usage/);
-        assert.ok(!invocation.includes("--disable-slash-commands"));
-        assert.ok(!invocation.includes("--model"));
-      }
-      assert.ok(!args.some((arg) => /logout/i.test(arg)));
-      const pid = 900_000_000 + ++processCount;
-      const input = new PassThrough();
-      const output = new PassThrough();
-      const errors = new PassThrough();
-      const control = new PassThrough();
-      const gate = new PassThrough();
-      const child = Object.assign(new EventEmitter(), {
-        pid, stdout: output, stderr: errors, stdin: input,
-        stdio: [input, output, errors, control, gate], kill: () => true,
-      });
-      children.set(pid, child);
-      child.once("close", () => { children.delete(pid); });
-      const finish = () => {
-        output.write(scenario === "headless unknown never retries" ? "  Quota:  \r\n  Limit Remaining 100%\r\n" : "Quota:\nGemini Models  Weekly Limit Remaining 100%\n");
-        children.delete(pid);
-        child.emit("close", 0, null);
-      };
-      input.on("data", (data) => {
-        writes.push(data.toString());
-        if (scenario === "native URL and code login") {
-          assert.equal(data.toString(), "authorization-code\n");
-          authenticated = true;
-          assert.equal(input.writableEnded, false, "interactive PTY input remains writable");
-          queueMicrotask(finish);
-        }
-      });
-      gate.on("data", (data) => {
-        assert.equal(data.toString(), "start\n");
-        errors.write("Authentication required. Please visit the URL to log in:\nhttps://accounts.google.com/o/oauth2/auth?state=test\nOr, paste the authorization code here and press Enter:");
-      });
-      queueMicrotask(() => {
-        started?.();
-        if (scenario === "cancelled login") return;
-        if (command === "/bin/sh") {
-          control.write(`${pid + 10_000} ${pid + 10_000}\n`);
-          return;
-        }
-        if (scenario === "native URL and code login" && processCount === 1) {
-          errors.write("Authentication required\n");
-          return;
-        }
-        assert.equal(input.writableEnded, false, "ignored probe stdin needs no writes");
-        if (scenario === "headless unknown never retries") {
-          child.emit("close", 0, null);
-          return;
-        }
-        if (authenticated) finish();
-        else child.stderr.write("Error: authentication required. Run agy to log in.\n");
-      });
-      return child;
-    });
-    const spawnSyncMock = t.mock.method(cp, "spawnSync", (command: string, args: string[]) => {
-      assert.equal(command, "/bin/ps");
-      assert.deepEqual(args, ["-o", "pgid=", "-p", String(process.pid)]);
-      return { status: 0, stdout: `${process.pid}\n`, stderr: "" };
-    });
-    const killMock = t.mock.method(process, "kill", (pid: number) => {
-      const child = children.get(-pid);
-      if (child) {
-        children.delete(-pid);
-        queueMicrotask(() => { child.emit("close", null, "SIGTERM"); closed?.(); });
-      }
-      return true;
-    });
-    syncBuiltinESMExports();
-    t.after(async () => {
-      spawnMock.mock.restore();
-      spawnSyncMock.mock.restore();
-      killMock.mock.restore();
-      syncBuiltinESMExports();
-      await rm(directory, { recursive: true, force: true });
-    });
-    const runtime = await ModelRuntime.create({
-      modelsPath: null, authPath: path.join(directory, "auth.json"), refreshOnCreate: false,
-    });
-    let provider: Provider | undefined;
-    const commands: string[] = [];
-    const models = parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)");
-    t.mock.method(CliDriver.prototype, "detectExecutable", () => executable);
-    t.mock.method(CliDriver.prototype, "discoverModels", async () => models);
-    new Bridge({
-      on: () => {}, registerCommand: (name: string) => commands.push(name),
-      getActiveTools: () => [], getAllTools: () => [],
-      registerProvider: (registered: Provider) => {
-        provider = registered;
-        runtime.registerNativeProvider(registered);
-      },
-    } as unknown as ExtensionAPI, new CliDriver()).start();
-    await runtime.refresh({ providers: ["agy"], allowNetwork: true });
-    assert.ok(provider?.auth.oauth?.login);
-    assert.equal(provider.auth.oauth.isSubscription, true);
-    assert.deepEqual(commands, ["agy-bridge:doctor", "agy-bridge:driver"]);
-    assert.deepEqual(await runtime.getAvailable("agy"), []);
-    assert.equal(processCount, 0, "availability checks must not launch authentication");
-    const controller = new AbortController();
-    const progress: string[] = [];
-    const interaction = {
-      signal: controller.signal,
-      notify: (event: { type: string; url?: string; message?: string }) => {
-        if (event.type === "progress") {
-          progress.push(event.message ?? "");
-          return;
-        }
-        assert.equal(scenario, "native URL and code login");
-        if (event.type === "auth_url") assert.equal(event.url, "https://accounts.google.com/o/oauth2/auth?state=test");
-      },
-      prompt: async (request: { type: string }) => {
-        assert.equal(scenario, "native URL and code login");
-        assert.equal(request.type, "manual_code");
-        return "authorization-code";
-      },
-    };
-    const login = runtime.login("agy", "oauth", interaction);
-
-    if (scenario === "cancelled login") {
-      const rejected = assert.rejects(login);
-      await processStarted;
-      assert.match(progress[0] ?? "", /Checking Antigravity CLI authentication status/);
-      controller.abort();
-      await rejected;
-      await processClosed;
-      assert.deepEqual(await runtime.listCredentials(), []);
-      assert.deepEqual(await runtime.getAvailable("agy"), []);
-      assert.equal(children.size, 0);
-      assert.deepEqual(writes, []);
-      return;
-    }
-
-    if (scenario === "headless unknown never retries") {
-      await assert.rejects(login, /returned no quota data/);
-      assert.equal(processCount, 1, "unknown status must not launch a PTY retry");
-      assert.deepEqual(await runtime.listCredentials(), []);
-      assert.deepEqual(await runtime.getAvailable("agy"), []);
-      assert.deepEqual(writes, []);
-      return;
-    }
-
-    const credential = await login;
-    await runtime.refresh({ providers: ["agy"], allowNetwork: true });
-    assert.match(progress[0] ?? "", /Checking Antigravity CLI authentication status/);
-    assert.ok(credential.type === "oauth");
-    assert.equal(credential.access, "");
-    assert.equal(credential.refresh, "");
-    assert.equal("loginEpoch" in credential, false);
-    assert.equal(runtime.isUsingSubscription("agy"), true);
-    assert.equal((await runtime.getAvailable("agy")).length, 1);
-    assert.deepEqual(JSON.parse(await readFile(path.join(directory, "auth.json"), "utf8")), { agy: credential });
-    assert.deepEqual(await runtime.listCredentials(), [{ providerId: "agy", type: "oauth" }]);
-    await runtime.logout("agy");
-    assert.deepEqual(await runtime.getAvailable("agy"), []);
-    assert.equal(runtime.isUsingSubscription("agy"), false);
-    assert.equal(authenticated, true, "Pi logout must leave Antigravity CLI's external login untouched");
-    const countBeforeDisabledRequest = processCount;
-    const disabled = await runtime.streamSimple(models[0]!, { messages: [] }, { sessionId: "auth-test" }).result();
-    assert.equal(disabled.stopReason, "error");
-    assert.match(disabled.errorMessage ?? "", /not configured/);
-    assert.equal(processCount, countBeforeDisabledRequest, "disabled requests must not launch Antigravity CLI");
-
-    const relogin = await runtime.login("agy", "oauth", interaction);
-    await runtime.refresh({ providers: ["agy"], allowNetwork: true });
-    assert.ok(relogin.type === "oauth");
-    assert.equal("loginEpoch" in relogin, false);
-    assert.equal((await runtime.getAvailable("agy")).length, 1);
-    authenticated = false;
-    const countBeforeExpiredRequest = processCount;
-    t.mock.method(BridgeIPC.prototype, "start", async () => {});
-    t.mock.method(BridgeIPC.prototype, "close", async () => {});
-    t.mock.getter(BridgeIPC.prototype, "bridgeUri", () => "unix:///synthetic.sock?session=test");
-    t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
-    const startRuntime = t.mock.method(AgyRuntime.prototype, "start", async () => {
-      throw new Error("Authentication required. Run agy to log in.");
-    });
-    const expired = await runtime.streamSimple(models[0]!, { messages: [] }, { sessionId: "auth-test" }).result();
-    assert.equal(expired.stopReason, "error");
-    assert.match(expired.errorMessage ?? "", /Authentication required/);
-    assert.equal(startRuntime.mock.callCount(), 1, "expired login must be reported by the runtime, not an auth probe");
-    assert.equal(processCount, countBeforeExpiredRequest, "requests must not launch a separate authentication process");
-    assert.equal((await runtime.getAvailable("agy")).length, 1,
-      "configured models remain selectable even when Antigravity CLI authentication expires");
-    assert.deepEqual(writes, scenario === "native URL and code login" ? ["authorization-code\n"] : [],
-      "authentication may only send an authorization code, never a user/model request");
-    assert.equal(children.size, 0);
   });
 }

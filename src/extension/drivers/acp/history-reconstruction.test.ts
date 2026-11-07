@@ -127,8 +127,11 @@ for (const direction of ["cli-to-acp", "acp-to-cli"] as const) {
       assistant("earlier-model", "agy", [{ type: "text", text: "earlier answer" }]),
       { role: "user", content: "next request", timestamp: 4 },
     ];
-    const cli = new CliRuntimeSession({ agyPath: "unused", agentName: "pi-bridge", cwd: process.cwd(), model: "selected" }, new Set(), {});
-    const sent = t.mock.method(cli, "send", async () => {});
+    const dummyConnection = { start: async () => ({} as any), isRunning: true, notify: async () => {}, dispose: async () => {}, request: async () => ({} as any), onSessionUpdate: () => () => {} };
+    const cli = new CliRuntimeSession(dummyConnection, { cwd: process.cwd(), model: "selected" }, new Set());
+    (cli as any).sessionClient.sessionId = "cli-session";
+    (cli as any).sessionClient.preparing = false;
+    const sent = t.mock.method((cli as any).sessionClient, "prompt", async () => ({ stopReason: "endTurn" }));
     const acp = new RuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
       args: ["--experimental-strip-types", fileURLToPath(new URL("./session-fixture.ts", import.meta.url)), "normal"],
       mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
@@ -146,11 +149,11 @@ for (const direction of ["cli-to-acp", "acp-to-cli"] as const) {
 
     assert.equal(sent.mock.callCount(), 1);
     const cliPayload = sent.mock.calls[0]!.arguments[0];
-    assert.ok(cliPayload && cliPayload.event === "user" && "message" in cliPayload);
+    assert.deepEqual(cliPayload, serializeContent(bridgeMessages));
     assert.equal(prompted.mock.callCount(), 1);
     const acpPayload = prompted.mock.calls[0]!.arguments[0];
     assert.deepEqual(acpPayload, serializeContent(bridgeMessages));
-    assert.equal(acpPayload.map((block: any) => { assert.ok("text" in block); return block.text; }).join("\n\n"), cliPayload.message.content);
+    assert.deepEqual(cliPayload, acpPayload);
     assert.equal(events.includes("tool-call"), false);
     assert.equal(events.includes("blocked-native-tool"), false);
 

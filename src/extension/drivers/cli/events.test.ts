@@ -1,259 +1,408 @@
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { describe, test } from "node:test";
-import { EventTranslator } from "./events.ts";
+import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import { EventProcessor } from "./events.ts";
+import { expandHome } from "../../shared/paths.ts";
 import type { RuntimeEvent } from "../types.ts";
-import type { AgyEvent } from "../../shared/types.ts";
 
-describe("EventTranslator", () => {
-  const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-  const stepUsage = { input: 2, output: 3, cacheRead: 4, cacheWrite: 0, reasoning: 5, totalTokens: 9, cost: zeroCost };
-  const contextUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 9, cost: zeroCost };
+describe("EventProcessor", () => {
+  test("emits text-delta on agent_message_chunk", () => {
+    const processor = new EventProcessor("session-123", new Set(["read"]));
+    const events: RuntimeEvent[] = [];
+    const emit = (e: RuntimeEvent) => events.push(e);
 
-  for (const row of [
-    {
-      name: "no-step result never bills cumulative usage, even when huge",
-      events: [{ event: "result", status: "success", conversation_id: "session", usage: { input_tokens: 1_000_000, output_tokens: 2_000_000, cache_read_tokens: 3_000_000, total_tokens: 9_000_000 } }],
-      types: ["start", "text-close", "session-reference", "complete"],
-      usages: [],
-    },
-    {
-      name: "nested result usage is not a no-step fallback",
-      events: [{ event: "result", result: { status: "success", usage: { input_tokens: 1_000_000 } } }],
-      types: ["start", "text-close", "complete"],
-      usages: [],
-    },
-    {
-      name: "step usage stays normalized and result usage is ignored",
-      events: [{ event: "step_update", usage: { input_tokens: 2, output_tokens: 3, cache_read_tokens: 4, thinking_tokens: 5, total_tokens: 999 } }, { event: "result", status: "success", usage: { input_tokens: 99 } }],
-      types: ["usage", "start", "text-close", "complete"],
-      usages: [stepUsage],
-    },
-    {
-      name: "each step emits its full replacement snapshot, not an aggregate or delta",
-      events: [{ event: "step_update", usage: { input_tokens: 2, output_tokens: 3, cache_read_tokens: 4, thinking_tokens: 5 } }, { event: "step_update", usage: { input_tokens: 1 } }, { event: "result", status: "success", usage: { input_tokens: 99 } }],
-      types: ["usage", "usage", "start", "text-close", "complete"],
-      usages: [stepUsage, { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: zeroCost }],
-    },
-  ] satisfies { name: string; events: AgyEvent[]; types: string[]; usages: Extract<RuntimeEvent, { type: "usage" }>["usage"][] }[]) {
-    test(row.name, () => {
-      const translator = new EventTranslator();
-      const facts: RuntimeEvent[] = [];
-      for (const event of row.events) translator.translate(event, "agy", (fact) => facts.push(fact));
+    processor.process(
+      {
+        sessionId: "session-123",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Hello world" },
+        },
+      },
+      "live",
+      emit
+    );
 
-      assert.deepEqual(facts.map((fact) => fact.type), row.types);
-      assert.deepEqual(facts.filter((fact) => fact.type === "usage").map((fact) => fact.usage), row.usages);
-      assert.deepEqual(facts.at(-1), { type: "complete", reason: "stop", resumable: true });
-    });
-  }
-
-  for (const row of [
-    { name: "context replay emits nothing before the first step snapshot", initialSnapshot: false, before: [], expected: [] },
-    { name: "handoff replays only latest context", before: [], latest: undefined, expected: [contextUsage] },
-    { name: "handoff uses the most recent step snapshot", before: [], latest: { input_tokens: 7 }, expected: [{ ...contextUsage, totalTokens: 7 }] },
-    { name: "handoff replays an existing zero context snapshot", before: [], latest: { input_tokens: 0 }, expected: [{ ...contextUsage, totalTokens: 0 }] },
-    { name: "successful completion clears context", before: [{ event: "result", status: "success" }], expected: [] },
-    { name: "error completion clears context", before: [{ event: "result", status: "error", error: "failed" }], expected: [] },
-    { name: "aborted completion clears context", before: [{ event: "result", status: "aborted" }], expected: [] },
-    { name: "runtime completion clears context", before: [{ event: "result", status: "error", error: "crashed" }], source: "runtime", expected: [] },
-    { name: "new user input clears context", before: [{ event: "step_update", update_type: "user_input" }], expected: [] },
-  ] as {
-    name: string;
-    before: AgyEvent[];
-    initialSnapshot?: boolean;
-    source?: "agy" | "runtime";
-    latest?: { input_tokens: number } | undefined;
-    expected: Extract<RuntimeEvent, { type: "usage" }>["usage"][];
-  }[]) {
-    test(row.name, () => {
-      const translator = new EventTranslator();
-      const facts: RuntimeEvent[] = [];
-      const replayed: RuntimeEvent[] = [];
-      const duringCompletion: RuntimeEvent[] = [];
-      const emit = (fact: RuntimeEvent) => {
-        facts.push(fact);
-        if (fact.type === "complete") translator.replayContext((context) => duringCompletion.push(context));
-      };
-      if (row.initialSnapshot !== false) translator.translate({ event: "step_update", usage: { input_tokens: 2, output_tokens: 3, cache_read_tokens: 4, thinking_tokens: 5 } }, "agy", emit);
-      if (row.latest) translator.translate({ event: "step_update", usage: row.latest }, "agy", emit);
-      for (const event of row.before) translator.translate(event, row.source ?? "agy", emit);
-      const factsBeforeReplay = [...facts];
-
-      translator.replayContext((fact) => replayed.push(fact));
-      translator.replayContext((fact) => replayed.push(fact));
-
-      assert.deepEqual(replayed, [...row.expected, ...row.expected].map((usage) => ({ type: "usage", usage })));
-      assert.deepEqual(facts, factsBeforeReplay);
-      assert.deepEqual(duringCompletion, []);
-
-      translator.translate({ event: "step_update", text_delta: "next" }, "agy", emit);
-      assert.deepEqual(facts.slice(-2), [{ type: "start" }, { type: "text-delta", delta: "next" }]);
-      assert.equal(replayed.length, row.expected.length * 2, "replay must not replace the normal callback");
-    });
-  }
-
-  for (const row of [
-    {
-      name: "historical completion clears the completed-response flag for the next prompt",
-      before: [{ event: "step_update", update_type: "agent_response", state: "DONE" }],
-      boundary: { event: "result", status: "error", error: "old" },
-      after: [],
-      reasons: ["stop", "error"],
-    },
-    {
-      name: "aborted completion clears the completed-response flag",
-      before: [{ event: "step_update", update_type: "agent_response", state: "DONE" }],
-      boundary: { event: "result", status: "aborted" },
-      after: [],
-      reasons: ["aborted", "error"],
-    },
-    {
-      name: "aborted completion clears the current-turn error flag but preserves historical error",
-      before: [{ event: "step_update", update_type: "error_message" }],
-      boundary: { event: "result", status: "aborted" },
-      after: [{ event: "step_update", update_type: "agent_response", state: "DONE" }],
-      reasons: ["aborted", "stop"],
-    },
-    {
-      name: "runtime completion clears the completed-response flag",
-      before: [{ event: "step_update", update_type: "agent_response", state: "DONE" }],
-      boundary: { event: "result", status: "error", error: "runtime failure" },
-      source: "runtime",
-      after: [],
-      reasons: ["error", "error"],
-    },
-    {
-      name: "runtime completion clears the current-turn error flag but preserves historical error",
-      before: [{ event: "step_update", update_type: "error_message" }],
-      boundary: { event: "result", status: "error", error: "runtime failure" },
-      source: "runtime",
-      after: [{ event: "step_update", update_type: "agent_response", state: "DONE" }],
-      reasons: ["error", "stop"],
-    },
-    {
-      name: "user input clears the completed-response flag",
-      before: [{ event: "step_update", update_type: "agent_response", state: "DONE" }],
-      boundary: { event: "step_update", update_type: "user_input" },
-      after: [],
-      reasons: ["error"],
-    },
-    {
-      name: "user input clears the current-turn error flag but preserves historical error",
-      before: [{ event: "step_update", update_type: "error_message" }],
-      boundary: { event: "step_update", update_type: "user_input" },
-      after: [{ event: "step_update", update_type: "agent_response", state: "DONE" }],
-      reasons: ["stop"],
-    },
-    {
-      name: "a current-turn error is never mistaken for a historical error",
-      before: [{ event: "step_update", update_type: "agent_response", state: "DONE" }],
-      boundary: { event: "step_update", update_type: "error_message" },
-      after: [],
-      reasons: ["error"],
-    },
-  ] as {
-    name: string;
-    before: AgyEvent[];
-    boundary: AgyEvent;
-    source?: "agy" | "runtime";
-    after: AgyEvent[];
-    reasons: Extract<RuntimeEvent, { type: "complete" }>["reason"][];
-  }[]) {
-    test(row.name, () => {
-      const state = { conversationId: "session", lastError: "old" as string | undefined };
-      const translator = new EventTranslator({ errorState: state });
-      const facts: RuntimeEvent[] = [];
-      const emit = (fact: RuntimeEvent) => facts.push(fact);
-      translator.translate({ event: "init", conversation_id: "session" }, "agy", emit);
-      for (const event of row.before) translator.translate(event, "agy", emit);
-
-      translator.translate(row.boundary, row.source ?? "agy", emit);
-      assert.equal(state.lastError, "old", "the boundary must preserve historical error state");
-      for (const event of row.after) translator.translate(event, "agy", emit);
-      translator.translate({ event: "result", status: "error", error: "old" }, "agy", emit);
-
-      const completions = facts.filter((fact) => fact.type === "complete");
-      assert.deepEqual(completions.map((fact) => fact.reason), row.reasons);
-      assert.deepEqual(completions.map((fact) => fact.resumable), row.reasons.map((_, index) => !(index === 0 && row.source === "runtime")));
-      assert.equal(state.conversationId, "session");
-      assert.equal(state.lastError, "old");
-    });
-  }
-
-  for (const boundary of [
-    { event: "step_update", update_type: "user_input" },
-    { event: "result", status: "aborted" },
-  ] satisfies AgyEvent[]) {
-    test(`${boundary.event} preserves the response ID across prompt reset`, () => {
-      const state = { conversationId: "session", lastError: "old" as string | undefined };
-      const translator = new EventTranslator({ errorState: state });
-      const facts: RuntimeEvent[] = [];
-      const emit = (fact: RuntimeEvent) => facts.push(fact);
-      translator.translate({ event: "init", conversation_id: "session" }, "agy", emit);
-
-      translator.translate(boundary, "agy", emit);
-      assert.deepEqual(state, { conversationId: "session", lastError: "old" });
-      state.conversationId = "other";
-      translator.translate({ event: "result", status: "success" }, "agy", emit);
-
-      assert.equal(state.conversationId, "session", "the translator must retain its response ID");
-      assert.equal(state.lastError, undefined);
-      assert.deepEqual(facts.at(-1), { type: "complete", reason: "stop", resumable: true });
-    });
-  }
-
-  test("one translator isolates context across prompts without result-usage fallback", () => {
-    const translator = new EventTranslator();
-    const facts: RuntimeEvent[] = [];
-    const replayed: RuntimeEvent[] = [];
-    const emit = (fact: RuntimeEvent) => facts.push(fact);
-    const prompts: AgyEvent[][] = [
-      [{ event: "step_update", usage: { input_tokens: 2, output_tokens: 3, cache_read_tokens: 4, thinking_tokens: 5 } }],
-      [],
-      [{ event: "step_update", usage: { output_tokens: 6 } }],
-    ];
-
-    for (const events of prompts) {
-      translator.translate({ event: "step_update", update_type: "user_input" }, "agy", emit);
-      translator.replayContext((fact) => replayed.push(fact));
-      for (const event of events) translator.translate(event, "agy", emit);
-      translator.replayContext((fact) => replayed.push(fact));
-      translator.translate({ event: "result", status: "success", usage: { input_tokens: 1_000_000 } }, "agy", emit);
-      translator.replayContext((fact) => replayed.push(fact));
-    }
-
-    assert.deepEqual(facts.filter((fact) => fact.type === "usage").map((fact) => fact.usage), [
-      stepUsage,
-      { input: 0, output: 6, cacheRead: 0, cacheWrite: 0, totalTokens: 6, cost: zeroCost },
+    assert.deepEqual(events, [
+      { type: "session-reference", reference: "session-123" },
+      { type: "text-delta", delta: "Hello world" },
     ]);
-    assert.deepEqual(replayed, [
-      { type: "usage", usage: contextUsage },
-      { type: "usage", usage: { ...contextUsage, totalTokens: 6 } },
-    ]);
-    assert.deepEqual(facts.filter((fact) => fact.type === "complete"), prompts.map(() => ({ type: "complete", reason: "stop", resumable: true })));
   });
 
-  {
-    test("native policy never emits executable tool facts", () => {
-      const translator = new EventTranslator({ allowedToolNames: new Set(["read"]) });
-      const facts: RuntimeEvent[] = [];
-      translator.translate({ event: "step_update", tool_call: { id: "call", name: "read", arguments: '{"path":"a"}' } }, "agy", (fact) => facts.push(fact));
-      assert.equal(facts.length, 0);
+  test("ignores notifications from other sessions or replay", () => {
+    const processor = new EventProcessor("session-123");
+    const events: RuntimeEvent[] = [];
+    const emit = (e: RuntimeEvent) => events.push(e);
 
-      facts.length = 0;
-      const blocked = { event: "step_update", tool_call: { name: "write" } };
-      translator.translate(blocked, "agy", (fact) => facts.push(fact));
-      assert.deepEqual(facts, [{ type: "blocked-native-tool", name: "write" }]);
+    processor.process(
+      {
+        sessionId: "other-session",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Ignore" } },
+      },
+      "live",
+      emit
+    );
+
+    processor.process(
+      {
+        sessionId: "session-123",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Ignore" } },
+      },
+      "replay",
+      emit
+    );
+
+    assert.equal(events.length, 0);
+  });
+
+  test("emits usage on usage_update", () => {
+    const processor = new EventProcessor("session-123");
+    const events: RuntimeEvent[] = [];
+    const emit = (e: RuntimeEvent) => events.push(e);
+
+    processor.process(
+      {
+        sessionId: "session-123",
+        update: { sessionUpdate: "usage_update", used: 150, size: 1000 },
+      },
+      "live",
+      emit
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.type, "usage");
+    if (events[0]?.type === "usage") {
+      assert.equal(events[0].usage.totalTokens, 150);
+    }
+  });
+
+  const artifactSession = "550e8400-e29b-41d4-a716-446655440000";
+  const geminiHome = expandHome(process.env.GEMINI_HOME || path.join(os.homedir(), ".gemini"));
+  const stepsRoot = path.resolve(geminiHome, "antigravity-cli", "brain", artifactSession, ".system_generated", "steps");
+  const artifactTitle = `File brain/${artifactSession}/.system_generated/steps/1/output.txt`;
+  const artifactInput = { Path: path.join(stepsRoot, "1", "output.txt") };
+
+  const toolCases: { name: string; call: Omit<ToolCallUpdate, "toolCallId">; warning?: string }[] = [
+    ...["read_file", "Running read_file", " \tRUNNING READ_FILE\n"].map((title) => ({ name: title, call: { title } })),
+    ...["view_file", "Running view_file", "not_read_file", "read_file_extra", "Running read_file_extra", "Other Running read_file", "Running  read_file", "client_view_file"].map((title) => ({
+      name: title, call: { title }, warning: title.replace(/^Running /, ""),
+    })),
+    { name: "name fallback", call: { name: "read_file" } },
+    { name: "title takes precedence", call: { title: "edit_file", name: "read_file" }, warning: "edit_file" },
+    { name: "kind alone does not identify a native tool", call: { kind: "read" }, warning: "read" },
+    { name: "registered MCP tool", call: { title: "read", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } } },
+    { name: "unregistered MCP tool", call: { title: "read_file", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "unknown" } } }, warning: "unknown" },
+    { name: "foreign MCP tool", call: { title: "Running read_file", _meta: { mcp: { server: "other", tool: "read" } } }, warning: "read" },
+  ];
+
+  for (const row of toolCases) {
+    test(`tool warning identity: ${row.name}`, () => {
+      const processor = new EventProcessor(artifactSession, new Set(["read", "bash"]));
+      const events: RuntimeEvent[] = [];
+      const rawInput = artifactInput;
+
+      processor.process({
+        sessionId: artifactSession,
+        update: { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed", rawInput, ...row.call },
+      }, "live", (event) => events.push(event));
+
+      assert.deepEqual(events, row.warning === undefined ? [] : [{ type: "tool-warning", name: row.warning, args: rawInput, status: "completed" }]);
     });
   }
 
-  for (const source of ["agy", "runtime"] as const) {
-    test(`error completion and mutable historical state (${source})`, () => {
-      const state = { conversationId: "session", lastError: "old" as string | undefined };
-      const translator = new EventTranslator({ errorState: state });
-      const facts: RuntimeEvent[] = [];
-      translator.translate({ event: "result", status: "error", conversation_id: "session", error: "new" }, source, (fact) => facts.push(fact));
-      assert.deepEqual(facts.at(-1), { type: "complete", reason: "error", error: "new", resumable: source === "agy" });
-      assert.equal(state.lastError, source === "agy" ? "new" : "old");
+  const artifactCall = {
+    toolCallId: "artifact", title: artifactTitle, rawInput: artifactInput, status: "completed",
+  } satisfies ToolCallUpdate;
+  const artifactCases: {
+    name: string; calls: ToolCallUpdate[]; warned: boolean; sessionId?: string; warningName?: string;
+  }[] = [
+    { name: "session UUID artifact", calls: [artifactCall], warned: false },
+    { name: "read kind", calls: [{ ...artifactCall, kind: "read" }], warned: false },
+    { name: "native title still checks path", calls: [{ ...artifactCall, title: "read_file", rawInput: { Path: "/tmp/outside-artifact.txt" } }], warned: true },
+    { name: "native title still checks name", calls: [{ ...artifactCall, title: "read_file", name: "edit_file" }], warned: true },
+    { name: "native title still checks kind", calls: [{ ...artifactCall, title: "read_file", kind: "edit" }], warned: true },
+    { name: "native title requires input", calls: [{ ...artifactCall, title: "read_file", rawInput: undefined }], warned: true },
+    { name: "name-only still checks path", calls: [{ ...artifactCall, title: null, name: "read_file", rawInput: { Path: "/tmp/outside-artifact.txt" } }], warned: true, warningName: "read_file" },
+    { name: "null kind", calls: [{ ...artifactCall, kind: null }], warned: false },
+    { name: "explicit native name", calls: [{ ...artifactCall, name: "read_file" }], warned: false },
+    { name: "line range", calls: [{ ...artifactCall, name: "read_file", rawInput: { ...artifactInput, StartLine: 1, EndLine: 20 } }], warned: false },
+    { name: "legacy native name", calls: [{ ...artifactCall, name: "view_file" }], warned: true },
+    { name: "legacy path field", calls: [{ ...artifactCall, rawInput: { AbsolutePath: artifactInput.Path } }], warned: true },
+    { name: "split title then input", calls: [
+      { toolCallId: "artifact", title: artifactTitle },
+      { toolCallId: "artifact", rawInput: artifactInput },
+      { toolCallId: "artifact", status: "completed" },
+    ], warned: false },
+    { name: "split input then title", calls: [
+      { toolCallId: "artifact", rawInput: artifactInput },
+      { toolCallId: "artifact", title: artifactTitle, status: "completed" },
+    ], warned: false },
+    { name: "unrelated absolute file", calls: [{ ...artifactCall, rawInput: { Path: "/tmp/output.txt" } }], warned: true },
+    { name: "other session path", calls: [{ ...artifactCall, rawInput: {
+      Path: artifactInput.Path.replace(artifactSession, "other-session"),
+    } }], warned: true },
+    { name: "other session title and path", calls: [{ ...artifactCall,
+      title: artifactTitle.replace(artifactSession, "other-session"),
+      rawInput: { Path: artifactInput.Path.replace(artifactSession, "other-session") },
+    }], warned: true },
+    { name: "unsafe session ID", sessionId: "../escape", calls: [{ ...artifactCall,
+      title: "File brain/../escape/.system_generated/steps/output.txt",
+      rawInput: { Path: path.resolve(stepsRoot, "../../../..", "escape/.system_generated/steps/output.txt") },
+    }], warned: true },
+    { name: "noncanonical traversal inside root", calls: [{ ...artifactCall,
+      rawInput: { Path: `${stepsRoot}/1/../1/output.txt` },
+    }], warned: true },
+    { name: "traversal outside root", calls: [{ ...artifactCall,
+      title: `File brain/${artifactSession}/.system_generated/steps/../output.txt`,
+      rawInput: { Path: `${stepsRoot}/../output.txt` },
+    }], warned: true },
+    { name: "sibling prefix", calls: [{ ...artifactCall,
+      rawInput: { Path: `${stepsRoot}-other/1/output.txt` },
+    }], warned: true },
+    { name: "relative path", calls: [{ ...artifactCall,
+      rawInput: { Path: `brain/${artifactSession}/.system_generated/steps/1/output.txt` },
+    }], warned: true },
+    { name: "root is not a file", calls: [{ ...artifactCall,
+      title: `File brain/${artifactSession}/.system_generated/steps/`, rawInput: { Path: stepsRoot },
+    }], warned: true },
+    ...["File unrelated.txt", `${artifactTitle} extra`, ` ${artifactTitle}`, artifactTitle.toLowerCase(), "Running " + artifactTitle].map((title) => ({
+      name: `exact title required: ${title}`, calls: [{ ...artifactCall, title }], warned: true,
+    })),
+    { name: "name cannot override mismatched title", calls: [{ ...artifactCall, title: "File unrelated.txt", name: "read_file" }], warned: true },
+    { name: "bad explicit name", calls: [{ ...artifactCall, name: "edit_file" }], warned: true },
+    ...(["edit", "execute"] as const).map((kind) => ({
+      name: `reject ${kind} kind`, calls: [{ ...artifactCall, kind }], warned: true,
+    })),
+    { name: "missing input", calls: [{ ...artifactCall, rawInput: undefined }], warned: true },
+    { name: "missing Path", calls: [{ ...artifactCall, rawInput: {} }], warned: true },
+    { name: "non-string Path", calls: [{ ...artifactCall, rawInput: { Path: 42 } }], warned: true },
+    { name: "empty MCP metadata", calls: [{ ...artifactCall, _meta: { mcp: {} } }], warned: true },
+    { name: "foreign MCP metadata", calls: [{ ...artifactCall,
+      _meta: { mcp: { server: "foreign", tool: "read" } },
+    }], warned: true, warningName: "read" },
+    { name: "foreign wrapped claim", calls: [{ ...artifactCall, name: "call_mcp_tool",
+      rawInput: { ...artifactInput, ServerName: "foreign", ToolName: "read", Arguments: {} },
+    }], warned: true, warningName: "read" },
+  ];
+
+  for (const row of artifactCases) {
+    test(`CLI native artifact: ${row.name}`, () => {
+      const sessionId = row.sessionId ?? artifactSession;
+      const processor = new EventProcessor(sessionId, new Set(["read", "bash"]));
+      const events: RuntimeEvent[] = [];
+      const emit = (event: RuntimeEvent) => events.push(event);
+
+      for (const call of row.calls) processor.process({ sessionId, update: {
+        ...call, sessionUpdate: "tool_call_update",
+      } }, "live", emit);
+      processor.complete({ stopReason: "end_turn" }, emit);
+
+      const warnings = events.filter((event) => event.type === "tool-warning");
+      assert.equal(warnings.length, row.warned ? 1 : 0);
+      if (row.warned) assert.equal(warnings[0]?.name, row.warningName ?? row.calls.at(-1)?.title?.replace(/^Running /, ""));
+      assert.deepEqual(events.filter((event) => event.type === "complete"), [
+        { type: "complete", reason: "stop", resumable: true },
+      ]);
     });
   }
+
+  const wrappedRead = {
+    toolCallId: "wrapped", title: "MCP Tool read", status: "in_progress",
+    rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: "read", Arguments: { path: "README.md" } },
+  } satisfies ToolCallUpdate;
+  const wrappedCases: { name: string; calls: ToolCallUpdate[]; warned: boolean; replay?: boolean; sessionId?: string }[] = [
+    { name: "CLI read wrapper", calls: [wrappedRead], warned: false },
+    { name: "CLI bash wrapper", calls: [{ ...wrappedRead, title: "MCP Tool bash", rawInput: {
+      ServerName: "pi-agy-bridge_pi", ToolName: "bash", Arguments: { command: "git status" },
+    } }], warned: false },
+    { name: "running CLI wrapper", calls: [{ ...wrappedRead, title: " Running MCP Tool read " }], warned: false },
+    { name: "canonical lazy title", calls: [{ ...wrappedRead, title: "call_mcp_tool" }], warned: false },
+    { name: "canonical lazy name", calls: [{ ...wrappedRead, name: "call_mcp_tool", title: "Read a file" }], warned: false },
+    { name: "unrelated title cannot claim MCP", calls: [{ ...wrappedRead, title: "read" }], warned: true },
+    { name: "display tool must match raw identity", calls: [{ ...wrappedRead, title: "MCP Tool bash" }], warned: true },
+    { name: "canonical name cannot hide mismatched display", calls: [{ ...wrappedRead, name: "call_mcp_tool", title: "MCP Tool bash" }], warned: true },
+    { name: "metadata cannot hide mismatched foreign wrapper", calls: [{
+      ...wrappedRead, title: "MCP Tool bash", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } },
+      rawInput: { ...wrappedRead.rawInput, ServerName: "other" },
+    }], warned: true },
+    { name: "foreign server", calls: [{ ...wrappedRead, rawInput: { ...wrappedRead.rawInput, ServerName: "other" } }], warned: true },
+    { name: "unknown tool", calls: [{ ...wrappedRead, title: "MCP Tool unknown", rawInput: { ...wrappedRead.rawInput, ToolName: "unknown" } }], warned: true },
+    { name: "missing server", calls: [{ ...wrappedRead, rawInput: { ToolName: "read" } }], warned: true },
+    { name: "missing tool", calls: [{ ...wrappedRead, rawInput: { ServerName: "pi-agy-bridge_pi" } }], warned: true },
+    { name: "non-string identity", calls: [{ ...wrappedRead, rawInput: { ServerName: "pi-agy-bridge_pi", ToolName: 42 } }], warned: true },
+    { name: "incremental title then input", calls: [
+      { toolCallId: "wrapped", title: wrappedRead.title }, wrappedRead, { toolCallId: "wrapped", status: "completed" },
+    ], warned: false },
+    { name: "null completion preserves identity", calls: [wrappedRead, {
+      toolCallId: "wrapped", title: null, name: null, rawInput: null, status: "completed",
+    }], warned: false },
+    { name: "replacement snapshot cannot inherit identity", calls: [wrappedRead, {
+      toolCallId: "wrapped", rawInput: { Arguments: { path: "package.json" } }, status: "completed",
+    }], warned: true },
+    { name: "partial raw snapshots cannot assemble identity", calls: [
+      { ...wrappedRead, rawInput: { ServerName: "pi-agy-bridge_pi" } },
+      { toolCallId: "wrapped", rawInput: { ToolName: "read" }, status: "completed" },
+    ], warned: true },
+    { name: "split title and input identity change warns", calls: [wrappedRead,
+      { toolCallId: "wrapped", title: "MCP Tool bash" },
+      { toolCallId: "wrapped", rawInput: { ...wrappedRead.rawInput, ToolName: "bash" }, status: "completed" },
+    ], warned: true },
+    { name: "incomplete snapshot cannot erase established identity", calls: [wrappedRead,
+      { toolCallId: "wrapped", rawInput: {} },
+      { ...wrappedRead, title: "MCP Tool bash", rawInput: { ...wrappedRead.rawInput, ToolName: "bash" }, status: "completed" },
+    ], warned: true },
+    { name: "metadata route cannot replace established wrapper identity", calls: [wrappedRead, {
+      toolCallId: "wrapped", title: "bash", rawInput: {},
+      _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "bash" } }, status: "completed",
+    }], warned: true },
+    { name: "registered tool identity change warns", calls: [wrappedRead, {
+      ...wrappedRead, title: "MCP Tool bash", rawInput: { ...wrappedRead.rawInput, ToolName: "bash" },
+    }], warned: true },
+    { name: "foreign metadata cannot be bypassed", calls: [{ ...wrappedRead, _meta: { mcp: { server: "other", tool: "read" } } }], warned: true },
+    { name: "registered metadata cannot hide foreign wrapper", calls: [{
+      ...wrappedRead, _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } },
+      rawInput: { ...wrappedRead.rawInput, ServerName: "other" },
+    }], warned: true },
+    { name: "registered metadata must match wrapper tool", calls: [{ ...wrappedRead, _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "bash" } } }], warned: true },
+    { name: "matching metadata", calls: [{ ...wrappedRead, _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } }], warned: false },
+    { name: "replay ignored", calls: [wrappedRead], replay: true, warned: false },
+    { name: "foreign session ignored", calls: [wrappedRead], sessionId: "other", warned: false },
+    { name: "identity cannot cross call IDs", calls: [wrappedRead, { toolCallId: "other", title: "MCP Tool read", status: "completed" }], warned: true },
+  ];
+
+  for (const row of wrappedCases) {
+    test(`CLI MCP wrapper: ${row.name}`, () => {
+      const processor = new EventProcessor("session-123", new Set(["read", "bash"]));
+      const events: RuntimeEvent[] = [];
+      const emit = (event: RuntimeEvent) => events.push(event);
+
+      for (const call of row.calls) processor.process({ sessionId: row.sessionId ?? "session-123", update: {
+        ...call, sessionUpdate: "tool_call_update",
+      } }, row.replay ? "replay" : "live", emit);
+      processor.complete({ stopReason: "end_turn" }, emit);
+
+      assert.equal(events.filter((event) => event.type === "tool-warning").length, row.warned ? 1 : 0);
+      assert.deepEqual(events.filter((event) => event.type === "complete"), [{ type: "complete", reason: "stop", resumable: true }]);
+    });
+  }
+
+  const warningCases: { name: string; updates: SessionNotification["update"][]; warning: string; status: string }[] = [
+    {
+      name: "terminal updates and completion warn once",
+      updates: [
+        { sessionUpdate: "tool_call", toolCallId: "call", title: "edit_file", status: "in_progress" },
+        { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
+        { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
+      ],
+      warning: "edit_file", status: "completed",
+    },
+    {
+      name: "completion checks unfinished calls",
+      updates: [{ sessionUpdate: "tool_call", toolCallId: "call", title: "edit_file", status: "in_progress" }],
+      warning: "edit_file", status: "in_progress",
+    },
+    {
+      name: "conflicting MCP identity warns once",
+      updates: [
+        { sessionUpdate: "tool_call", toolCallId: "call", title: "read", _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } },
+        { sessionUpdate: "tool_call_update", toolCallId: "call", _meta: { mcp: { server: "other" } } },
+        { sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" },
+      ],
+      warning: "read", status: "unknown",
+    },
+    { name: "failed tool preserves status", updates: [
+      { sessionUpdate: "tool_call_update", toolCallId: "call", title: "edit_file", status: "failed" },
+    ], warning: "edit_file", status: "failed" },
+    ...([null, undefined] as const).map((status) => ({
+      name: `identity conflict retains prior status when ${status}`,
+      updates: [
+        { sessionUpdate: "tool_call" as const, toolCallId: "call", title: "read", status: "pending" as const, _meta: { mcp: { server: "pi-agy-bridge_pi", tool: "read" } } },
+        { sessionUpdate: "tool_call_update" as const, toolCallId: "call", ...(status === undefined ? {} : { status }), _meta: { mcp: { server: "other" } } },
+      ], warning: "read", status: "pending",
+    })),
+  ];
+
+  for (const row of warningCases) {
+    test(`warning deduplication: ${row.name}`, () => {
+      const processor = new EventProcessor("session-123", new Set(["read"]));
+      const events: RuntimeEvent[] = [];
+      const emit = (event: RuntimeEvent) => events.push(event);
+
+      for (const update of row.updates) processor.process({ sessionId: "session-123", update }, "live", emit);
+      processor.complete({ stopReason: "end_turn" }, emit);
+
+      assert.deepEqual(events.filter((event) => event.type === "tool-warning"), [
+        { type: "tool-warning", name: row.warning, args: undefined, status: row.status },
+      ]);
+    });
+  }
+
+  test("overflow warns once per turn without dropping updates to tracked calls", () => {
+    const processor = new EventProcessor(artifactSession);
+    const events: RuntimeEvent[] = [];
+    const emit = (event: RuntimeEvent) => events.push(event);
+
+    for (let turn = 0; turn < 2; turn++) {
+      events.length = 0;
+      for (let i = 0; i < 1024; i++) {
+        processor.process({ sessionId: artifactSession, update: {
+          sessionUpdate: "tool_call", toolCallId: String(i), title: "read_file", rawInput: artifactInput,
+        } }, "live", emit);
+      }
+      assert.equal(events.length, 0);
+
+      for (const id of ["overflow", "overflow", "another-overflow"]) {
+        processor.process({ sessionId: artifactSession, update: {
+          sessionUpdate: "tool_call", toolCallId: id, title: "edit_file", status: "completed",
+        } }, "live", emit);
+      }
+      processor.process({ sessionId: artifactSession, update: {
+        sessionUpdate: "tool_call_update", toolCallId: "0", title: "edit_file", status: "completed",
+      } }, "live", emit);
+      processor.complete({ stopReason: "end_turn" }, emit);
+
+      assert.deepEqual(events.filter((event) => event.type === "tool-warning"), [
+        { type: "tool-warning", name: "ACP tool notification limit exceeded", args: undefined, status: "unknown" },
+        { type: "tool-warning", name: "edit_file", args: artifactInput, status: "completed" },
+      ]);
+    }
+  });
+
+  test("complete emits accounting and completion reason", () => {
+    const processor = new EventProcessor("session-123");
+    const events: RuntimeEvent[] = [];
+    const emit = (e: RuntimeEvent) => events.push(e);
+
+    processor.complete(
+      {
+        stopReason: "end_turn",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 50,
+          cachedReadTokens: 20,
+          cachedWriteTokens: 0,
+          thoughtTokens: 10,
+          totalTokens: 160,
+        },
+      },
+      emit
+    );
+
+    const accounting = events.find((e) => e.type === "accounting");
+    assert.ok(accounting);
+    if (accounting?.type === "accounting") {
+      assert.equal(accounting.usage.input, 80);
+      assert.equal(accounting.usage.output, 60);
+      assert.equal(accounting.usage.cacheRead, 20);
+    }
+
+    const complete = events.find((e) => e.type === "complete");
+    assert.ok(complete);
+    if (complete?.type === "complete") {
+      assert.equal(complete.reason, "stop");
+      assert.equal(complete.resumable, true);
+    }
+  });
 });

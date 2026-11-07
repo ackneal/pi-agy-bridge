@@ -1,25 +1,15 @@
 import path from "node:path";
 import type { Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
+import { Connection } from "./connection.ts";
 import { RuntimeSession } from "./runtime.ts";
-import type { ConversationErrorState } from "./events.ts";
+import { composeSystemPrompt, fingerprintSystemPrompt } from "./instructions.ts";
 import { BridgeIPC } from "../../bridge/ipc.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/state.ts";
 import { DEFAULT_AGY_PLUGIN_DIR, buildCliProcessEnvironment } from "../../discovery/plugin-install.ts";
 import { validateAgyVersion } from "../../runtime/version.ts";
 import { debugLog } from "../../shared/debug.ts";
-import { createHash } from "node:crypto";
-
-const errorStates = new WeakMap<LiveSession, ConversationErrorState>();
-
-function errorStateFor(session: LiveSession, conversationId?: string): ConversationErrorState {
-  let state = errorStates.get(session);
-  if (!state || state.conversationId !== conversationId) {
-    state = { conversationId };
-    errorStates.set(session, state);
-  }
-  return state;
-}
+import type { BridgeMessage } from "../types.ts";
 
 export function resolveModelAndEffort(
   modelId: string,
@@ -35,7 +25,7 @@ export function resolveModelAndEffort(
   if (requested === "low" || requested === "medium" || requested === "high") {
     effort = requested;
   } else if (requested !== undefined) {
-    throw new Error(`Unsupported Antigravity CLI reasoning effort: ${String(requested)}. Supported values: low, medium, high.`);
+    throw new Error(`Unsupported Antigravity reasoning effort: ${String(requested)}. Supported values: low, medium, high.`);
   }
 
   let baseModel = modelId;
@@ -48,7 +38,7 @@ export function resolveModelAndEffort(
   }
 
   if (effort && thinkingLevelMap?.[effort] === null) {
-    throw new Error(`Unsupported Antigravity CLI reasoning effort for ${modelId}: ${effort}.`);
+    throw new Error(`Unsupported Antigravity reasoning effort for ${modelId}: ${effort}.`);
   }
 
   return { baseModel, effort };
@@ -57,6 +47,7 @@ export function resolveModelAndEffort(
 export async function prepareRuntime(
   model: Model<any>,
   context: Context,
+  systemMessages: readonly BridgeMessage[],
   tools: readonly Tool[],
   options: Pick<SimpleStreamOptions, "signal" | "env"> | undefined,
   cwd: string,
@@ -75,7 +66,7 @@ export async function prepareRuntime(
   const checkPreparation = () => {
     options?.signal?.throwIfAborted();
     if (!liveSession.ownsPreparation(preparationId)) {
-      throw new Error("Antigravity CLI runtime preparation was superseded");
+      throw new Error("Antigravity runtime preparation was superseded");
     }
   };
   checkPreparation();
@@ -83,26 +74,34 @@ export async function prepareRuntime(
   const { baseModel, effort } = selection;
   const agentName = standalone ? "pi-standalone" : "pi-bridge";
   cwd = path.resolve(cwd);
-  const compatibilityKey = createHash("sha256").update(cwd).digest("hex");
+
+  const systemPrompt = standalone
+    ? systemMessages.filter((message) => message.role === "system").map((message) => message.content.trim()).filter(Boolean).join("\n\n") || undefined
+    : composeSystemPrompt(systemMessages);
+  const compatibilityKey = systemPrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([cwd, systemPrompt]));
+
   const toolSyncValues = tools.map((tool) => JSON.stringify({
     name: tool.name,
     description: tool.description,
     parameters: tool.parameters,
   }));
   const syncKey = calculateSyncKey(context.systemPrompt ?? "", toolSyncValues, baseModel, effort ?? "", agentName);
+
   const latestAssistant = [...context.messages].reverse().find((message) => message.role === "assistant");
   const expectedConversationId = latestAssistant?.role === "assistant" ? latestAssistant.responseId : undefined;
   const pluginDir = DEFAULT_AGY_PLUGIN_DIR;
   const checkpoint = standalone ? undefined : await dependencies.store.get(liveSession.piSessionId, dependencies.sessionVersion);
   checkPreparation();
+
   const decision = standalone ? { action: "rebuild" as const } : dependencies.sync.decide(liveSession, {
-    syncKey, compatibilityKey,
+    syncKey,
+    ...(compatibilityKey !== undefined ? { compatibilityKey } : {}),
     ...(expectedConversationId ? { conversationId: expectedConversationId } : {}),
     messages: context.messages,
     ...(checkpoint ? { checkpoint } : {}),
   });
 
-  debugLog("register", "Antigravity CLI runtime decision", {
+  debugLog("register", "Antigravity ACP runtime decision", {
     action: decision.action,
     messageCount: context.messages.length,
     processRunning: liveSession.activeProcess?.isRunning ?? false,
@@ -112,19 +111,14 @@ export async function prepareRuntime(
   });
 
   if (decision.action === "continue" && liveSession.activeProcess) {
-    debugLog("register", "Reusing existing Antigravity CLI process");
+    debugLog("register", "Reusing existing Antigravity ACP process");
     if (!liveSession.activeMcpServer) {
-      throw new Error("Antigravity CLI process or Pi MCP bridge was not initialized");
+      throw new Error("Antigravity ACP process or Pi MCP bridge was not initialized");
     }
     const proc = liveSession.activeProcess;
-    if (!(proc instanceof RuntimeSession)) throw new Error("CLI cannot reuse another driver's runtime");
+    if (!(proc instanceof RuntimeSession)) throw new Error("AgyAcp cannot reuse another driver's runtime");
+
     const modelMatches = proc.options.model === baseModel && proc.options.effort === effort;
-    if (liveSession.syncKey !== syncKey) {
-      debugLog("session", "Deferring runtime settings change until the pending Antigravity CLI turn finishes", {
-        activeModel: proc.options.model,
-        requestedModel: baseModel,
-      });
-    }
     return {
       proc,
       mcpServer: liveSession.activeMcpServer,
@@ -133,69 +127,82 @@ export async function prepareRuntime(
     };
   }
 
-  debugLog("register", "Starting a replacement Antigravity CLI process");
-  debugLog("session", "Replacing Antigravity CLI runtime", {
-    action: decision.action,
-    conversationId: liveSession.conversationId,
-    hasPendingCalls: liveSession.activeMcpServer?.hasPendingCalls ?? false,
-  });
+  debugLog("register", "Starting a replacement Antigravity ACP process");
   await liveSession.dispose({
     preserveConversation: decision.action === "resume",
     preserveResources: decision.action === "resume" && decision.conversationId === liveSession.conversationId,
     preparationId,
   });
   checkPreparation();
+
   await validateAgyVersion(dependencies.executable);
   checkPreparation();
 
   const startRuntime = async (conversationId?: string) => {
     const mcpServer = new BridgeIPC(tools, liveSession.id, liveSession.resources);
-    let proc: RuntimeSession | null = null;
+    let connection: Connection | null = null;
+
     const abortStartup = () => {
-      void mcpServer.close().catch((error) => debugLog("session", "Error closing cancelled MCP startup:", error));
-      void proc?.abort().catch((error) => debugLog("session", "Error aborting cancelled Antigravity CLI startup:", error));
+      void mcpServer.close().catch((err) => debugLog("session", "Error closing cancelled MCP startup:", err));
+      void connection?.dispose().catch((err) => debugLog("session", "Error aborting cancelled connection:", err));
     };
     options?.signal?.addEventListener("abort", abortStartup, { once: true });
+
     try {
       checkPreparation();
       if (!standalone) {
         await mcpServer.start();
         checkPreparation();
       }
+
       await dependencies.installPlugin(pluginDir);
       checkPreparation();
-      const errorState = errorStateFor(liveSession, conversationId);
-      proc = new RuntimeSession({
-        agyPath: dependencies.executable,
+
+      const executable = dependencies.executable ?? "agy";
+      const args = [
+        "acp",
+        "--stdio",
+        "--process-per-session",
+        "--agent",
         agentName,
+      ];
+      const environment = standalone ? {} : buildCliProcessEnvironment(mcpServer.bridgeUri);
+
+      connection = new Connection({
+        executable,
+        args,
         cwd,
-        model: baseModel,
-        conversationId,
-        effort,
-        environment: standalone ? {} : buildCliProcessEnvironment(mcpServer.bridgeUri),
-      }, new Set(tools.map((tool) => tool.name)), errorState, compatibilityKey);
-      const initEvent = await proc.start();
+        environment,
+      });
+
+      const proc = new RuntimeSession(
+        connection,
+        {
+          cwd,
+          model: baseModel,
+          effort,
+          sessionId: conversationId,
+          systemPrompt,
+          standalone,
+        },
+        new Set(tools.map((tool) => tool.name)),
+        compatibilityKey,
+      );
+
+      await proc.prepare(options?.signal);
       checkPreparation();
-      debugLog("register", "Antigravity CLI init conversation id:", initEvent.conversation_id);
-      if (conversationId && initEvent.conversation_id !== conversationId) {
-        throw new Error("Antigravity CLI did not restore the requested conversation");
+
+      if (!proc.isRunning) throw new Error("Antigravity ACP exited before input delivery");
+
+      if (!liveSession.setSession(proc, syncKey, mcpServer, proc.id, preparationId)) {
+        throw new Error("Antigravity ACP runtime preparation was superseded");
       }
-      if (!proc.isRunning) throw new Error("Antigravity CLI exited before input delivery");
-      if (errorState.conversationId !== initEvent.conversation_id) errorState.lastError = undefined;
-      errorState.conversationId = initEvent.conversation_id;
-      if (!liveSession.setSession(proc, syncKey, mcpServer, initEvent.conversation_id, preparationId)) {
-        throw new Error("Antigravity CLI runtime preparation was superseded");
-      }
+
       return { proc, mcpServer, modelId: model.id };
     } catch (error) {
-      // Ownership transfers to liveSession only after startup succeeds.
-      await mcpServer.close().catch((cleanupError) => {
-        debugLog("session", "Error closing unowned MCP bridge:", cleanupError);
-      });
-      if (proc) {
-        await proc.abort().catch((cleanupError) => {
-          debugLog("session", "Error aborting unowned Antigravity CLI process:", cleanupError);
-        });
+      await mcpServer.close().catch((err) => debugLog("session", "Error closing unowned MCP bridge:", err));
+      if (connection) {
+        await connection.dispose().catch((err) => debugLog("session", "Error aborting unowned connection:", err));
       }
       throw error;
     } finally {
@@ -222,4 +229,3 @@ export async function prepareRuntime(
 
   return { ...await startRuntime(), reconstructContext: true };
 }
-

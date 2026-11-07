@@ -13,7 +13,7 @@ function inside(root, candidate) {
 async function decide(input) {
   const id = input?.conversationId;
   const artifact = input?.artifactDirectoryPath;
-  const target = input?.toolCall?.args?.AbsolutePath;
+  const target = input?.toolCall?.args?.Path;
   if (typeof id !== "string" || id === "" ||
       ![artifact, target].every(value => typeof value === "string" && path.isAbsolute(value) &&
         !value.includes("\0") && !value.split(path.sep).includes(".."))) {

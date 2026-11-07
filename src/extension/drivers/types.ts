@@ -1,3 +1,4 @@
+import type { ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { AnyModel, AssistantMessage, Context, ImageContent, Message, Model, ProviderAuthInteraction, SimpleStreamOptions, TextContent, Tool } from "@earendil-works/pi-ai";
 import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
@@ -10,6 +11,7 @@ export enum SessionMode {
 }
 
 export type ContentPart = TextContent | ImageContent;
+export type ToolWarningStatus = NonNullable<ToolCallUpdate["status"]> | "unknown";
 
 export type BridgeMessage =
   | { role: "system"; content: string }
@@ -102,4 +104,4 @@ export type RuntimeEvent =
   | { type: "accounting"; usage: AssistantMessage["usage"] }
   | { type: "complete"; reason: "stop" | "toolUse" | "error" | "aborted"; error?: string | undefined; resumable: boolean }
   | { type: "blocked-native-tool"; name: string }
-  | { type: "tool-warning"; name: string; args: unknown };
+  | { type: "tool-warning"; name: string; args: unknown; status: ToolWarningStatus };

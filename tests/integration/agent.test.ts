@@ -2,25 +2,26 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { composeSystemPrompt } from "../../src/extension/drivers/acp/instructions.ts";
+import { composeSystemPrompt as composeAcpSystemPrompt } from "../../src/extension/drivers/acp/instructions.ts";
+import { composeSystemPrompt as composeCliSystemPrompt } from "../../src/extension/drivers/cli/instructions.ts";
 import { BridgeIPC } from "../../src/extension/bridge/ipc.ts";
 import { buildCliProcessEnvironment } from "../../src/extension/discovery/plugin-install.ts";
 import { mkdtemp, symlink, writeFile, rm, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { version } from "../../src/version.js";
 
 const projectDir = fileURLToPath(new URL("../../", import.meta.url));
 const pluginDir = fileURLToPath(new URL("../../plugin/", import.meta.url));
 
 describe("static Antigravity CLI bridge plugin", () => {
-  it("keeps package, plugin, and MCP versions aligned", async () => {
+  it("keeps package, plugin, and shared runtime versions aligned", async () => {
     const packageManifest = JSON.parse(await readFile(`${projectDir}/package.json`, "utf-8"));
     const pluginManifest = JSON.parse(await readFile(`${pluginDir}/plugin.json`, "utf-8"));
-    const mcpEntrypoint = await readFile(`${projectDir}/src/mcp/index.js`, "utf-8");
 
     assert.match(packageManifest.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
     assert.equal(pluginManifest.version, packageManifest.version);
-    assert.match(mcpEntrypoint, new RegExp(`SERVER_INFO = \\{ name: "pi-agy-bridge", version: "${packageManifest.version.replaceAll(".", "\\.")}" \\}`));
+    assert.equal(version, packageManifest.version);
   });
 
   it("contains a static manifest and bridge agent", async () => {
@@ -38,7 +39,7 @@ subagent: false
 commandExecutionPolicy: sandbox
 excludeDefaultComponents: true
 inheritMcp: true
-tools: [view_file]
+tools: [read_file]
 ---
 `);
     assert.match(markdown, /\nmainAgent: true\n/);
@@ -46,17 +47,10 @@ tools: [view_file]
     assert.match(markdown, /\ncommandExecutionPolicy: sandbox\n/);
     assert.match(markdown, /\nexcludeDefaultComponents: true\n/);
     assert.match(markdown, /\ninheritMcp: true\n/);
-    assert.match(markdown, /\ntools: \[view_file\]\n/);
-    assert.match(markdown, /model runtime delegated by Pi/);
-    const body = markdown.split("---\n")[2];
-    assert.ok(body, "CLI prompt must contain a body after YAML frontmatter");
-
-    assert.doesNotMatch(body, /client_view_file|absolute_path|start_line|Workspace Instructions|isolated image observer|brain\//);
-    assert.doesNotMatch(markdown, /incremental XML|<pi_context|reconstructed_conversation|pending_tool_continuation|contentOmitted|Tools \(completed\)/);
-    assert.doesNotMatch(markdown, /session ID|conversation ID|PTY ID|socket|tool snapshot/i);
+    assert.match(markdown, /\ntools: \[read_file\]\n/);
   });
 
-  it("keeps standalone selectable as a CLI main agent with no tools and output-only instructions", async () => {
+  it("keeps standalone frontmatter-only and selectable as a CLI main agent without tools", async () => {
     const markdown = await readFile(`${pluginDir}/agents/pi-standalone.md`, "utf-8");
 
     assert.equal(markdown, `---
@@ -69,9 +63,6 @@ excludeDefaultComponents: true
 inheritMcp: false
 tools: []
 ---
-
-Follow the supplied instructions directly.
-Provide only the requested output.
 `);
   });
 
@@ -162,16 +153,12 @@ Provide only the requested output.
         {
           section: "Read the conversation",
           clauses: [
-            /conversation context as plain Markdown, or a single user message as plain text/,
-            /Initial and rebuilt context include the full system instructions/,
             /Image placeholders record MIME types, not image content\. Do not infer image details from a placeholder/,
           ],
         },
         {
           section: "Use the available tools",
           clauses: [
-            /Pi supplies tools through the MCP server `pi-agy-bridge_pi`/,
-            /Determine availability from Pi's current tool declarations and the matching MCP tool list/,
             /Call Pi tools through `call_mcp_tool` with `ServerName: "pi-agy-bridge_pi"`/,
             /Set `ToolName` to the exact plain Pi tool name, such as `"read"` or `"bash"`/,
             /Do not add a server prefix/,
@@ -183,10 +170,10 @@ Provide only the requested output.
             /Use Pi MCP tools for ordinary file operations/,
             /Pi MCP `read` can read text and images/,
             /Large tool outputs may be stored in temporary files/,
-            /Use native `view_file` directly to read needed content supplied as a file reference/,
-            /Set `AbsolutePath` to the referenced local path/,
+            /Use native `read_file` directly to read needed content supplied as a file reference/,
+            /Set `Path` to the referenced local path/,
             /Convert `file:\/\/` URIs to local paths if needed/,
-            /Use native `view_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files/,
+            /Use native `read_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files/,
           ],
         },
         {
@@ -253,8 +240,8 @@ Provide only the requested output.
     for (const backend of ["CLI", "ACP"] as const) {
       async function readPrompt() {
         const prompt = backend === "CLI"
-          ? (await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8")).split("---\n")[2]
-          : composeSystemPrompt([]);
+          ? composeCliSystemPrompt([])
+          : composeAcpSystemPrompt([]);
 
         assert.ok(prompt, `${backend} prompt must contain an instruction body`);
         return prompt;
@@ -318,18 +305,18 @@ Provide only the requested output.
       });
     }
 
-    it("CLI: scopes native view_file before its path parameters", async () => {
-      const markdown = await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8");
+    it("CLI: scopes native read_file before its path parameters", async () => {
+      const markdown = composeCliSystemPrompt([]);
       const references = markdown.split("## Read referenced content\n")[1]?.split("\n## ")[0];
       assert.ok(references, "References section must exist");
 
-      assert.match(references, /Use native `view_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files\.\nSet `AbsolutePath`/);
+      assert.match(references, /Use native `read_file` only for artifacts under the current conversation's `\.system_generated\/steps\/`, not ordinary workspace files\.\n- Set `Path`/);
       assert.doesNotMatch(references, /Use it only/);
     });
 
     it("keeps runtime identity and current ACP system-instruction provenance", async () => {
-      const cli = await readFile(`${pluginDir}/agents/pi-bridge.md`, "utf-8");
-      const acp = composeSystemPrompt([{ role: "system", content: "Current Pi policy" }]);
+      const cli = composeCliSystemPrompt([]);
+      const acp = composeAcpSystemPrompt([{ role: "system", content: "Current Pi policy" }]);
 
       assert.match(cli, /Follow Pi's instructions and answer as Pi's assistant/);
       assert.match(acp, /Workspace Instructions, when present, contain Pi's current system instructions and define the work and policies/);

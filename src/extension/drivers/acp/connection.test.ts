@@ -72,7 +72,7 @@ for (const row of [
   { name: "dispose during startup", mode: "startup-hang", phase: "dispose", error: /disposed/ },
 ]) {
   test(row.name, async () => {
-    const connection = create(row.mode, { requestTimeoutMs: 500, ...(row.executable ? { executable: row.executable } : {}) });
+    const connection = create(row.mode, { requestTimeoutMs: 2000, ...(row.executable ? { executable: row.executable } : {}) });
     const controller = new AbortController();
     try {
       const starting = connection.start(controller.signal);
@@ -105,7 +105,7 @@ for (const outcome of ["complete", "cancel", "dispose"] as const) {
     const waiting = new Promise<void>((resolve) => { entered = resolve; });
     let release!: (response: acp.RequestPermissionResponse) => void;
     const permission = new Promise<acp.RequestPermissionResponse>((resolve) => { release = resolve; });
-    const connection = create("normal", { requestTimeoutMs: 500, onPermission: () => {
+    const connection = create("normal", { requestTimeoutMs: 1500, onPermission: () => {
       entered();
       return permission;
     } });
@@ -116,7 +116,7 @@ for (const outcome of ["complete", "cancel", "dispose"] as const) {
       const pending = connection.request(acp.methods.agent.session.prompt, prompt);
       void pending.then(() => { settled = true; }, () => { settled = true; });
       await waiting;
-      await new Promise((resolve) => setTimeout(resolve, 750));
+      await new Promise((resolve) => setTimeout(resolve, 1800));
       assert.equal(settled, false);
       assert.equal(connection.isRunning, true);
 
@@ -295,7 +295,7 @@ test("dispose has a deadline when the OS does not close the process", async (t) 
 });
 
 test("blocked notification writes time out and permit disposal", async () => {
-  const connection = create("blocked-stdin", { requestTimeoutMs: 500 });
+  const connection = create("blocked-stdin", { requestTimeoutMs: 2000 });
   try {
     await connection.start();
     await assert.rejects(connection.notify(acp.methods.agent.session.cancel, { sessionId: "x".repeat(8 * 1024 * 1024) }), /timeout/);

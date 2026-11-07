@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import readline from "node:readline";
+import { version } from "../version.js";
 import { connectBridge, parseBridgeUri } from "./socket.js";
 
 const JSON_RPC_VERSION = "2.0";
-const SERVER_INFO = { name: "pi-agy-bridge", version: "0.5.2" };
+const SERVER_INFO = { name: "pi-agy-bridge", version };
 
 async function main() {
   const bridgeUri = getBridgeEndpoint();
@@ -64,6 +65,7 @@ async function handleLine(line, socket, inFlight) {
 
   try {
     switch (request.method) {
+      case "server/discover":
       case "initialize":
         writeResult(id, {
           protocolVersion: protocolVersion(request.params),
@@ -133,9 +135,13 @@ function requestId(value) {
 }
 
 function protocolVersion(params) {
-  return isRecord(params) && typeof params.protocolVersion === "string"
-    ? params.protocolVersion
-    : "2025-06-18";
+  if (isRecord(params)) {
+    if (typeof params.protocolVersion === "string") return params.protocolVersion;
+    if (isRecord(params._meta) && typeof params._meta["io.modelcontextprotocol/protocolVersion"] === "string") {
+      return params._meta["io.modelcontextprotocol/protocolVersion"];
+    }
+  }
+  return "2025-06-18";
 }
 
 function debugLog(...args) {

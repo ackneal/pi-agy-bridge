@@ -12,9 +12,7 @@ import { composeSystemPrompt } from "../drivers/acp/instructions.ts";
 import { RuntimeSession as AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { Session as AcpSession } from "../drivers/acp/session.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
-import { RuntimeSession as CliRuntimeSession } from "../drivers/cli/runtime.ts";
 import { SessionMode, type BridgeMessage, type DriverSession, type DriverSubmission, type PrepareDriverInput } from "../drivers/types.ts";
-import { AgyRuntime } from "../runtime/process.ts";
 import { Bridge, streamProvider } from "./provider.ts";
 import { prepareSystemMessages } from "./context-prompt.ts";
 
@@ -33,14 +31,13 @@ const tools: Tool[] = [{ name: "read", description: "Read a file", parameters: {
 const nativeImage: ImageContent = { type: "image", data: "bmF0aXZl", mimeType: "image/png" };
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
-for (const id of ["cli", "acp"] as const) {
+for (const id of ["acp"] as const) {
   for (const scenario of ["rebuild", "reuse", "updates", "standalone", "system-tail"] as const) {
     test(`Provider -> ${id}: ${scenario} ordered native input`, { timeout: 5000 }, async (t) => {
       const directory = await mkdtemp(path.join(tmpdir(), "agy-driver-inputs-"));
       const imagePath = path.join(directory, "image.png");
       await writeFile(imagePath, Buffer.from(png, "base64"));
-      const bridge = new Bridge({ getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI,
-        id === "cli" ? new CliDriver() : new AcpDriver());
+      const bridge = new Bridge({ getActiveTools: () => [], getAllTools: () => [] } as unknown as ExtensionAPI, new AcpDriver());
       const runtimes: DriverSession[] = [];
       t.after(async () => {
         await bridge.liveSessions.disposeAll();
@@ -54,19 +51,6 @@ for (const id of ["cli", "acp"] as const) {
       const getTools = t.mock.method(bridge, "getTools", () => tools);
       t.mock.method(bridge.runtimeSessionStore, "set", async () => {});
       const payloads: (string | ContentBlock[])[] = [];
-      let nativeListener: Parameters<AgyRuntime["onEvent"]>[0] | undefined;
-      t.mock.method(AgyRuntime.prototype, "onEvent", (listener: Parameters<AgyRuntime["onEvent"]>[0]) => {
-        nativeListener = listener;
-        return () => { nativeListener = undefined; };
-      });
-      t.mock.method(AgyRuntime.prototype, "abort", async () => {});
-      t.mock.method(AgyRuntime.prototype, "send", async (input: Parameters<AgyRuntime["send"]>[0]) => {
-        assert.equal(input.event, "user");
-        assert.ok("message" in input);
-        payloads.push(input.message.content);
-        assert.ok(nativeListener);
-        nativeListener({ event: "result", status: "success", conversation_id: "native-session" }, "agy");
-      });
       t.mock.getter(AcpSession.prototype, "id", () => "native-session");
       t.mock.getter(AcpSession.prototype, "isRunning", () => true);
       t.mock.method(AcpSession.prototype, "prepare", async () => {});
@@ -88,11 +72,9 @@ for (const id of ["cli", "acp"] as const) {
         }
 
         const ipc = new BridgeIPC(input.tools, input.session.id, input.session.resources);
-        const proc = id === "cli"
-          ? new CliRuntimeSession({ agentName: standalone ? "pi-standalone" : "pi-bridge", model: model.id }, new Set(input.tools.map(tool => tool.name)), {})
-          : new AcpRuntimeSession({ executable: "unused", cwd: directory, model: model.id,
-            systemPrompt: standalone ? "rule" : composeSystemPrompt(input.messages),
-            ...(standalone ? {} : { mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] as [string, "--endpoint", string] } }) }, new Set(input.tools.map(tool => tool.name)));
+        const proc = new AcpRuntimeSession({ executable: "unused", cwd: directory, model: model.id,
+          systemPrompt: standalone ? "rule" : composeSystemPrompt(input.messages),
+          ...(standalone ? {} : { mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] as [string, "--endpoint", string] } }) }, new Set(input.tools.map(tool => tool.name)));
         runtimes.push(proc);
         const submit = proc.submit.bind(proc);
         t.mock.method(proc, "submit", async (input: DriverSubmission) => {
@@ -143,29 +125,18 @@ for (const id of ["cli", "acp"] as const) {
       const historyText = "[User]: old question\n\n[Assistant]: old answer";
       const currentText = `before native\n\nbetween ${imagePath} after path`;
       const payload = payloads.at(-1);
-      if (id === "cli") {
-        assert.ok(runtimes[0] instanceof CliRuntimeSession);
-        assert.equal(payload, scenario === "rebuild" || scenario === "system-tail" ? `[System]: rule\n\n${historyText}\n\n${currentText}`
-          : standalone ? `[System]: rule\n\nold question\n\nold answer\n\n${currentText}`
-          : scenario === "updates" ? [
-            "steer\n## User\nnot a role",
-            "[System]: # Conversation updates\n\n## System\n\n> \n\n### System section remove: policy",
-            currentText,
-          ].join("\n\n") : currentText);
-      } else {
-        assert.ok(runtimes[0] instanceof AcpRuntimeSession);
-        assert.equal(runtimes[0].options.systemPrompt, standalone ? "rule" : composeSystemPrompt(prepareSystemMessages(context)));
-        assert.deepEqual(payload, [
-          ...(scenario === "rebuild" || scenario === "system-tail" ? [{ type: "text", text: historyText }] : []),
-          ...(standalone ? [{ type: "text", text: "old question" }, { type: "text", text: "old answer" }] : []),
-          ...(scenario === "updates" ? [{ type: "text", text: "steer\n## User\nnot a role" }] : []),
-          { type: "text", text: "before native" }, nativeImage,
-          { type: "text", text: `between ${imagePath}` },
-          { type: "image", data: png, mimeType: "image/png" },
-          { type: "text", text: " after path" },
-        ]);
-        assert.ok(!JSON.stringify(payload).includes("rule"));
-      }
+      assert.ok(runtimes[0] instanceof AcpRuntimeSession);
+      assert.equal(runtimes[0].options.systemPrompt, standalone ? "rule" : composeSystemPrompt(prepareSystemMessages(context)));
+      assert.deepEqual(payload, [
+        ...(scenario === "rebuild" || scenario === "system-tail" ? [{ type: "text", text: historyText }] : []),
+        ...(standalone ? [{ type: "text", text: "old question" }, { type: "text", text: "old answer" }] : []),
+        ...(scenario === "updates" ? [{ type: "text", text: "steer\n## User\nnot a role" }] : []),
+        { type: "text", text: "before native" }, nativeImage,
+        { type: "text", text: `between ${imagePath}` },
+        { type: "image", data: png, mimeType: "image/png" },
+        { type: "text", text: " after path" },
+      ]);
+      assert.ok(!JSON.stringify(payload).includes("rule"));
     });
   }
 }

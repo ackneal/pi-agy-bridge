@@ -63,7 +63,13 @@ async function installPlugin(agyPath: string | undefined, pluginDir: string): Pr
   const targetDir = path.join(os.homedir(), ".gemini", "config", "plugins", sourceManifest.name);
   const installedManifest = await readPluginManifest(path.join(targetDir, "plugin.json"));
   if (installedManifest?.version === sourceManifest.version) {
-    return;
+    try {
+      // This required agent was added without changing the plugin version.
+      await fs.access(path.join(targetDir, "agents", "pi-bridge.md"));
+      return;
+    } catch (error) {
+      if (!isNodeError(error, "ENOENT")) throw error;
+    }
   }
 
   if (!installedManifest) {

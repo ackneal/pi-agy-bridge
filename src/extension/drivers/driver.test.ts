@@ -17,7 +17,7 @@ describe("createBridgeDriver", () => {
     { name: "default", id: undefined, expected: "acp" },
     { name: "ACP", id: "acp", expected: "acp" },
     { name: "CLI", id: "cli", expected: "cli" },
-  ] satisfies { name: string; id: DriverId | undefined; expected: "cli" | "acp" }[]) {
+  ] satisfies { name: string; id: DriverId | undefined; expected: DriverId }[]) {
     test(`driver selection does not detect or fall back: ${scenario.name}`, (t) => {
       const unexpected = () => { throw new Error("Selection must not inspect executables or authentication"); };
       const inspections = [
@@ -78,7 +78,7 @@ describe("session version propagation", () => {
       const options = { env: { AGY_BRIDGE_ENABLED: "1" } };
 
       const preparing = driver === "cli"
-        ? prepareCliRuntime(model, { messages: [] }, [], options, process.cwd(), dependencies, session, resolveModelAndEffort(model.id), preparationId)
+        ? prepareCliRuntime(model, { messages: [] }, [], [], options, process.cwd(), dependencies, session, resolveModelAndEffort(model.id), preparationId)
         : prepareAcpRuntime(model, { messages: [] }, [], [], options, { cwd: process.cwd(), resolve: async () => { throw new Error("Preparation must stop at lookup"); } }, dependencies, session, preparationId);
       await assert.rejects(preparing, stopAfterRead);
 

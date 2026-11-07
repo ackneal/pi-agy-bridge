@@ -1,267 +1,225 @@
+import os from "node:os";
+import path from "node:path";
+import type { SessionNotification, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { PromptResponse, Usage } from "@agentclientprotocol/sdk/unstable";
 import type { RuntimeEvent } from "../types.ts";
-import type { AgyEvent, AgyResultEvent, AgyStepUpdateEvent, AgyUsage } from "../../shared/types.ts";
-import { AGY_MCP_PREFIX, isAllowedPiToolName } from "../../bridge/capabilities.ts";
-import { debugLog } from "../../shared/debug.ts";
+import { expandHome } from "../../shared/paths.ts";
+import { isRegisteredPiMcpTool, PI_MCP_SERVER } from "../mcp-identity.ts";
 
-const AGY_INTERNAL_TOOL_NAMES = new Set(["list_resources", "call_mcp_tool", "manage_task", "view_file"]);
-
-export interface ConversationErrorState {
-  conversationId?: string | undefined;
-  lastError?: string | undefined;
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export interface EventTranslatorOptions {
-  errorState?: ConversationErrorState | undefined;
-  allowedToolNames?: ReadonlySet<string>;
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-export class EventTranslator {
-  private errorState: ConversationErrorState;
-  private readonly allowedToolNames: ReadonlySet<string> | undefined;
-  private contextTokens: number | undefined;
-  private completedResponse = false;
-  private hasTurnError = false;
-  private responseId: string | undefined;
-  private emit: (event: RuntimeEvent) => void = () => {};
+function mapUsage(raw: Usage | null | undefined): Extract<RuntimeEvent, { type: "accounting" }>["usage"] | undefined {
+  if (!raw) return undefined;
 
-  constructor(options: EventTranslatorOptions = {}) {
-    this.errorState = options.errorState ?? {};
-    this.allowedToolNames = options.allowedToolNames;
+  const inputTokens = tokenCount(raw.inputTokens);
+  const outputTokens = tokenCount(raw.outputTokens);
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+
+  const cacheRead = tokenCount(raw.cachedReadTokens) ?? 0;
+  const cacheWrite = tokenCount(raw.cachedWriteTokens) ?? 0;
+  const reasoning = tokenCount(raw.thoughtTokens);
+  const separateThought = reasoning !== undefined &&
+    tokenCount(raw.totalTokens) === inputTokens + outputTokens + reasoning;
+  const input = Math.max(0, inputTokens - cacheRead - cacheWrite);
+  const output = outputTokens + (separateThought ? reasoning : 0);
+
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    totalTokens: input + output + cacheRead + cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+function isAllowedNativeTool(call: ToolCallUpdate, sessionId: string): boolean {
+  const name = call.title ?? call.name ?? call.kind;
+  if (typeof name !== "string") return false;
+
+  const normalized = name.trim().toLowerCase();
+  const nativeTitle = normalized === "read_file" || normalized === "running read_file";
+
+  // CLI replaces read_file's tool title with the artifact's display path.
+  if (!/^[A-Za-z0-9_-]+$/.test(sessionId) || call._meta?.mcp !== undefined ||
+    call.name != null && call.name !== "read_file" || call.kind != null && call.kind !== "read" ||
+    !record(call.rawInput) || typeof call.rawInput.Path !== "string" ||
+    "ServerName" in call.rawInput || "ToolName" in call.rawInput) return false;
+
+  const target = call.rawInput.Path;
+  if (!path.isAbsolute(target) || target.includes("\0") || path.resolve(target) !== target) return false;
+
+  const home = expandHome(process.env.GEMINI_HOME || path.join(os.homedir(), ".gemini"));
+  const root = path.resolve(home, "antigravity-cli");
+  const steps = path.join(root, "brain", sessionId, ".system_generated", "steps");
+  const relative = path.relative(steps, target);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+
+  return nativeTitle || call.title === `File ${path.relative(root, target)}`;
+}
+
+function getMcpCall(call: ToolCallUpdate): { server: string; tool: string; args: unknown; displayTool: string | undefined } | undefined {
+  if (!record(call.rawInput)) return undefined;
+
+  const { ServerName: server, ToolName: tool } = call.rawInput;
+  if (typeof server !== "string" || !server || typeof tool !== "string" || !tool) return undefined;
+
+  const title = call.title?.trim().replace(/^running\s+/i, "");
+  const displayTool = title?.startsWith("MCP Tool ") ? title.slice("MCP Tool ".length) : undefined;
+  if (call.name !== "call_mcp_tool" && title !== "call_mcp_tool" && displayTool === undefined) return undefined;
+
+  return { server, tool, args: "Arguments" in call.rawInput ? call.rawInput.Arguments : call.rawInput, displayTool };
+}
+
+type ObservedCall = {
+  call: ToolCallUpdate;
+  // Keep the first identity even when a replacement snapshot is incomplete.
+  identity: { server: string; tool: string } | undefined;
+  warned?: boolean;
+};
+
+export class EventProcessor {
+  private readonly calls = new Map<string, ObservedCall>();
+  private overflowWarned = false;
+  private contextUsage: Extract<RuntimeEvent, { type: "usage" }>["usage"] | undefined;
+
+  private readonly sessionId: string;
+  private readonly allowedToolNames: ReadonlySet<string>;
+
+  constructor(sessionId: string, allowedToolNames: ReadonlySet<string> = new Set()) {
+    this.sessionId = sessionId;
+    this.allowedToolNames = new Set(allowedToolNames);
   }
 
-  public translate(event: AgyEvent, source: "agy" | "runtime", emit: (event: RuntimeEvent) => void): void {
-    this.emit = emit;
-    if (source === "runtime") {
-      const result = event as AgyResultEvent;
-      this.resetTurn();
-      this.emit({ type: "complete", reason: "error", error: (typeof result.error === "string" ? result.error : result.error?.message) || undefined, resumable: false });
-      return;
-    }
+  process(notification: SessionNotification, source: "live" | "replay", emit: (event: RuntimeEvent) => void): void {
+    if (source === "replay" || notification.sessionId !== this.sessionId) return;
 
-    switch (event.event) {
-      case "init":
-        if (typeof event["conversation_id"] === "string") {
-          this.setResponseId(event["conversation_id"]);
-        }
-        this.emit({ type: "start" });
-        break;
+    const update = notification.update;
+    if (update.sessionUpdate === "usage_update") {
+      const used = tokenCount(update.used);
+      if (used === undefined) return;
 
-      case "step_update": {
-        const update = event as AgyStepUpdateEvent;
-        this.handleStepUpdate({
-          ...update.step_update,
-          ...update,
-          event: "step_update",
-        });
-        break;
-      }
-
-      case "result": {
-        const result = event as AgyResultEvent;
-        this.handleResult({
-          ...result.result,
-          ...result,
-          event: "result",
-        });
-        break;
-      }
-
-      default:
-        debugLog("events", `Unhandled Antigravity CLI event type: "${event.event}"`);
-        break;
-    }
-  }
-
-  public replayContext(emit: (event: RuntimeEvent) => void): void {
-    if (this.contextTokens === undefined) return;
-
-    // A new Pi writer needs the current context, not another copy of the
-    // previous writer's billable usage, when a native prompt spans tool turns.
-    emit({ type: "usage", usage: {
-      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: this.contextTokens,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    } });
-  }
-
-  private resetTurn(): void {
-    this.contextTokens = undefined;
-    this.completedResponse = false;
-    this.hasTurnError = false;
-  }
-
-  private handleStepUpdate(step: AgyStepUpdateEvent): void {
-    const stepType = step.update_type ?? step.type ?? step.step_type;
-    if (stepType === "user_input") {
-      this.resetTurn();
-    } else if (stepType === "error_message") {
-      this.hasTurnError = true;
-    } else if (stepType === "agent_response") {
-      this.completedResponse = step.state === "DONE";
-    }
-
-    if (step.usage) {
-      debugLog("usage", "Antigravity CLI step usage:", step.usage);
-      this.addUsage(step.usage);
-    }
-
-    const deltaText = this.extractTextDelta(step);
-    if (deltaText !== null) {
-      this.emit({ type: "start" });
-      this.emit({ type: "text-delta", delta: deltaText });
-    }
-
-    const tool = this.selectToolName(step);
-    if (tool !== null) {
-      const blockedTool = this.getBlockedAgyToolName(tool.name);
-      if (blockedTool !== undefined) {
-        this.blockTool(blockedTool);
-        return;
-      }
-
-      debugLog("events", `Waiting for MCP bridge or internal coordination: ${String(tool.name)}`);
-      return;
-    }
-
-    if (deltaText === null) {
-      debugLog("events", "Step update without text delta or tool call:", step);
-    }
-  }
-
-  private extractTextDelta(step: AgyStepUpdateEvent): string | null {
-    if (typeof step.text_delta === "string" && step.text_delta.length > 0) {
-      return step.text_delta;
-    }
-
-    if (typeof step.delta === "string" && step.delta.length > 0) {
-      return step.delta;
-    }
-
-    if (step.delta && typeof step.delta === "object" && typeof step.delta.text === "string" && step.delta.text.length > 0) {
-      return step.delta.text;
-    }
-
-    const stepType = step.update_type ?? step.type ?? step.step_type;
-    if (stepType === "agent_response") {
-      if (typeof step.text === "string" && step.text.length > 0) {
-        return step.text;
-      }
-      if (typeof step.content === "string" && step.content.length > 0) {
-        return step.content;
-      }
-    }
-
-    return null;
-  }
-
-  private selectToolName(step: AgyStepUpdateEvent): { name: unknown } | null {
-    // A nested call owns its name, even when malformed; never use a flat fallback.
-    if (step.tool_call) return { name: step.tool_call.name };
-
-    const stepType = step.update_type ?? step.type ?? step.step_type;
-    if (stepType !== "tool") return null;
-    if ("tool_name" in step) return { name: step.tool_name };
-    if ("name" in step) return { name: step["name"] };
-
-    return null;
-  }
-
-  private getBlockedAgyToolName(name: unknown): string | undefined {
-    if (name === undefined) return "<unnamed>";
-    if (name !== null && typeof name === "object") return "<invalid>";
-    if (typeof name !== "string") return String(name);
-    if (name.length === 0) return name;
-    if (AGY_INTERNAL_TOOL_NAMES.has(name) || this.isAllowedAgyTool(name)) return undefined;
-
-    return name;
-  }
-
-  private isAllowedAgyTool(name: string): boolean {
-    if (this.allowedToolNames === undefined) return true;
-    if (this.allowedToolNames.has(name)) return true;
-
-    const bridgedNames = new Set(
-      [...this.allowedToolNames].map((toolName) => `${AGY_MCP_PREFIX}${toolName}`)
-    );
-    return isAllowedPiToolName(name, bridgedNames);
-  }
-
-  private blockTool(name: string): void {
-    debugLog("security", `Blocked Antigravity CLI tool call outside the Pi bridge allowlist: ${name}`);
-    this.emit({ type: "blocked-native-tool", name });
-  }
-
-  private handleResult(result: AgyResultEvent): void {
-    this.emit({ type: "start" });
-    this.emit({ type: "text-close" });
-
-    debugLog("usage", "Antigravity CLI result accounting fields:", Object.fromEntries(
-      Object.entries(result).filter(([key]) => /usage|token|metric|stat|metadata/i.test(key))
-    ));
-    // Result usage can cover the whole conversation, including restored turns.
-    // Without a trusted baseline it is neither current context nor turn billing.
-
-    if (result.conversation_id || result.session_id) {
-      this.setResponseId((result.conversation_id ?? result.session_id) as string);
-    }
-
-    debugLog("events", "Antigravity CLI result outcome:", { status: result.status, error: result.error });
-
-    const status = result.status?.toLowerCase();
-    const conversationId = this.responseId ?? this.errorState.conversationId;
-    if (conversationId !== this.errorState.conversationId) {
-      this.errorState.conversationId = conversationId;
-      this.errorState.lastError = undefined;
-    }
-    const error = typeof result.error === "string" ? result.error : result.error?.message;
-    const historicalError = status === "error" && conversationId !== undefined &&
-      error !== undefined && error === this.errorState.lastError && this.completedResponse && !this.hasTurnError;
-    this.resetTurn();
-    if (status === "success") this.errorState.lastError = undefined;
-    if (historicalError) {
-      debugLog("events", "Ignored historical Antigravity CLI error after completed response:", { conversationId, error });
-    }
-    if (!historicalError && (status === "aborted" || status === "error" || (status !== "success" && result.error))) {
-      const reason = status === "aborted" ? "aborted" : "error";
-      if (reason === "error") this.errorState.lastError = error;
-      const errorMessage = result.error || reason === "error"
-        ? (typeof result.error === "string" ? result.error : result.error?.message ?? "agy execution reported error status")
-        : undefined;
-      this.emit({ type: "complete", reason, error: errorMessage, resumable: true });
-      return;
-    }
-
-    this.emit({ type: "complete", reason: "stop", resumable: true });
-  }
-
-  private addUsage(agyUsage: AgyUsage): void {
-    const input = agyUsage.input_tokens ?? 0;
-    const output = agyUsage.output_tokens ?? 0;
-    const cacheRead = agyUsage.cache_read_tokens ?? 0;
-    const reasoning = agyUsage.thinking_tokens ?? 0;
-    this.contextTokens = input + output + cacheRead;
-    // Each step's usage describes that single model request. Antigravity CLI's total_tokens
-    // field omits cache_read_tokens, so compute the true per-request context size
-    // ourselves; keep the latest snapshot for Pi's overflow/compaction checks.
-    this.emit({ type: "usage", usage: {
-      input,
-      output,
-      cacheRead,
-      cacheWrite: 0,
-      ...(reasoning > 0 ? { reasoning } : {}),
-      totalTokens: this.contextTokens,
-      cost: {
+      this.contextUsage = {
         input: 0,
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
-        total: 0,
-      },
-    } });
+        totalTokens: used,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      emit({ type: "usage", usage: this.contextUsage });
+    } else if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+      const id = update.toolCallId;
+      if (!this.calls.has(id) && this.calls.size >= 1024) {
+        if (!this.overflowWarned) {
+          this.overflowWarned = true;
+          this.warn({ toolCallId: id, title: "ACP tool notification limit exceeded" }, emit);
+        }
+        return;
+      }
+      const prior = this.calls.get(id);
+      if (prior?.warned) return;
+      const before = prior?.call._meta?.mcp;
+      const after = update._meta?.mcp;
+      if (record(before) && record(after) && ["server", "tool"].some((key) =>
+        before[key] !== undefined && after[key] !== undefined && before[key] !== after[key])) {
+        this.warn({ ...prior!.call, ...update, status: update.status ?? prior!.call.status ?? null, _meta: { ...prior!.call._meta, ...update._meta, mcp: { ...before, ...after } } }, emit);
+        return;
+      }
+      // ACP null fields preserve prior values; rawInput is a replacement snapshot.
+      const call: ToolCallUpdate = {
+        ...prior?.call, ...Object.fromEntries(Object.entries(update).filter(([, value]) => value !== null)), toolCallId: id,
+      };
+      if (prior?.call._meta) call._meta = { ...prior.call._meta, ...update._meta };
+      if (record(before)) call._meta = { ...call._meta, mcp: record(after) ? { ...before, ...after } : before };
+      const currentMcp = getMcpCall(call) ??
+        (isRegisteredPiMcpTool(call._meta?.mcp, this.allowedToolNames) ? call._meta.mcp : undefined);
+      const identity = prior?.identity ?? (currentMcp && { server: currentMcp.server, tool: currentMcp.tool });
+      this.calls.set(id, { call, identity });
+      if (identity && currentMcp && (identity.server !== currentMcp.server || identity.tool !== currentMcp.tool)) {
+        this.warn(call, emit);
+        return;
+      }
+      this.check(id, emit, update.status === "completed" || update.status === "failed");
+    } else if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+      emit({ type: "session-reference", reference: this.sessionId });
+      if (update.content.text.length > 0) emit({ type: "text-delta", delta: update.content.text });
+    }
   }
 
-  private setResponseId(reference: string): void {
-    this.responseId = reference;
-    this.emit({ type: "session-reference", reference });
+  private check(id: string, emit: (event: RuntimeEvent) => void, final: boolean): void {
+    const entry = this.calls.get(id);
+    if (!entry || entry.warned) return;
+    const { call } = entry;
+    const mcp = call._meta?.mcp;
+    if (record(mcp) && !isRegisteredPiMcpTool(mcp, this.allowedToolNames) &&
+      (typeof mcp.server === "string" && mcp.server !== PI_MCP_SERVER ||
+        typeof mcp.server === "string" && typeof mcp.tool === "string")) {
+      this.warn(call, emit);
+      return;
+    }
+
+    const wrapped = getMcpCall(call);
+    if (wrapped) {
+      if (!isRegisteredPiMcpTool(wrapped, this.allowedToolNames) ||
+        wrapped.displayTool !== undefined && wrapped.displayTool !== wrapped.tool ||
+        record(mcp) && (mcp.server !== undefined && mcp.server !== wrapped.server ||
+          mcp.tool !== undefined && mcp.tool !== wrapped.tool)) {
+        this.warn(call, emit);
+      }
+      return;
+    }
+
+    if (isRegisteredPiMcpTool(mcp, this.allowedToolNames)) return;
+    if (isAllowedNativeTool(call, this.sessionId)) return;
+    if (final && (call.title !== undefined || call.kind !== undefined || call.rawInput !== undefined || call._meta !== undefined || call.name !== undefined)) {
+      this.warn(call, emit);
+    }
   }
 
+  private warn(call: ToolCallUpdate, emit: (event: RuntimeEvent) => void): void {
+    const entry = this.calls.get(call.toolCallId);
+    if (entry?.warned) return;
+    if (entry) entry.warned = true;
+
+    const mcp = call._meta?.mcp;
+    const wrapped = getMcpCall(call);
+    const name = record(mcp) && typeof mcp.tool === "string"
+      ? mcp.tool : wrapped?.tool ?? (call.title ?? call.name ?? call.kind ?? "unverified tool").replace(/^Running /, "");
+    const args = record(mcp) && record(call.rawInput) && record(call.rawInput.arguments)
+      ? call.rawInput.arguments : wrapped ? wrapped.args : call.rawInput;
+    emit({ type: "tool-warning", name, args, status: call.status ?? "unknown" });
+  }
+
+  complete(response: PromptResponse, emit: (event: RuntimeEvent) => void): void {
+    for (const id of this.calls.keys()) this.check(id, emit, true);
+    this.calls.clear();
+    this.overflowWarned = false;
+
+    const contextUsage = this.contextUsage;
+    this.contextUsage = undefined;
+    if (contextUsage) emit({ type: "usage", usage: contextUsage });
+
+    const usage = mapUsage(response.usage);
+    if (usage) emit({ type: "accounting", usage });
+
+    emit({ type: "session-reference", reference: this.sessionId });
+    switch (response.stopReason) {
+      case "end_turn":
+        emit({ type: "complete", reason: "stop", resumable: true });
+        break;
+      case "cancelled":
+        emit({ type: "complete", reason: "aborted", resumable: false });
+        break;
+      default:
+        emit({ type: "complete", reason: "error", error: `ACP prompt stopped: ${response.stopReason}`, resumable: false });
+    }
+  }
 }

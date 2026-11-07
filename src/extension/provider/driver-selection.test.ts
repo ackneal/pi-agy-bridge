@@ -53,6 +53,7 @@ for (const failure of ["installation", "initialization", "session", "authenticat
 
 for (const scenario of [
   { name: "saved CLI", credential: createAgyBridgeCredential("cli"), expected: "cli" },
+  { name: "saved CLI ACP falls back to ACP", credential: createAgyBridgeCredential("cli-acp" as any), expected: "acp" },
   { name: "saved ACP", credential: createAgyBridgeCredential("acp"), expected: "acp" },
   { name: "OAuth without driver", credential: createAgyBridgeCredential(), expected: "acp" },
   { name: "legacy marker", credential: { type: "api_key", env: { AGY_BRIDGE_ENABLED: "1" } }, expected: "acp" },
@@ -92,6 +93,7 @@ test("manual CLI selection without authentication is not persisted to the next s
     on: () => {}, registerCommand: () => {},
     registerProvider: (provider: Provider) => { providers.push(provider); },
   } as unknown as ExtensionAPI;
+  t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
   t.mock.method(CliDriver.prototype, "detectExecutable", () => process.execPath);
   t.mock.method(CliDriver.prototype, "discoverModels", async () => parseModelsOutput("gemini-3.8-flash-high  Gemini 3.8 Flash (High)"));
   const bridge = new Bridge(pi);
@@ -325,6 +327,7 @@ for (const result of ["success", "installation failure"] as const) {
 }
 
 async function mockDriverSwitchExecutables(t: TestContext) {
+  t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
   const directory = await mkdtemp(path.join(os.tmpdir(), "agy-switch-executables-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const agyPath = path.join(directory, "agy");
@@ -549,6 +552,7 @@ describe("stale driver switch report ownership", () => {
         registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) => handlers.set(name, options.handler),
         registerProvider: () => {},
       } as unknown as ExtensionAPI;
+      t.mock.method(CliDriver.prototype, "installPlugin", async () => {});
       const detections = new WeakSet<object>();
       for (const Driver of [CliDriver, AcpDriver]) {
         t.mock.method(Driver.prototype, "detectExecutable", function (this: AcpDriver | CliDriver) {
@@ -597,3 +601,58 @@ describe("stale driver switch report ownership", () => {
     });
   }
 });
+
+for (const outcome of ["wait", "failure", "cancel", "acp", "missing"] as const) {
+  test(`driver switch plugin preflight: ${outcome}`, async (t) => {
+    const { DEFAULT_AGY_PLUGIN_DIR } = await import("../discovery/plugin-install.ts");
+    let shutdown!: () => Promise<void>;
+    const register = t.mock.fn();
+    const oldDriver = outcome === "acp" ? new CliDriver() : new AcpDriver();
+    const bridge = new Bridge({
+      on: (event: string, handler: () => Promise<void>) => { if (event === "session_shutdown") shutdown = handler; },
+      registerCommand() {}, registerProvider: register,
+    } as unknown as ExtensionAPI, oldDriver);
+    bridge.start();
+    t.after(async () => { await shutdown(); });
+    const dispose = t.mock.method(bridge.liveSessions, "disposeAll", async () => {});
+    t.mock.method(CliDriver.prototype, "detectExecutable", () => outcome === "missing" ? undefined : process.execPath);
+    const discoverCli = t.mock.method(CliDriver.prototype, "discoverModels", async () => []);
+    t.mock.method(AcpDriver.prototype, "discoverModels", async () => []);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    t.after(release);
+    const install = t.mock.method(CliDriver.prototype, "installPlugin", async (directory: string) => {
+      assert.equal(directory, DEFAULT_AGY_PLUGIN_DIR);
+      await gate;
+      if (outcome === "failure") throw new Error("synthetic plugin install failure");
+    });
+    const switching = bridge.switchDriver(outcome === "acp" ? "acp" : "cli");
+    if (outcome === "acp" || outcome === "missing") {
+      if (outcome === "missing") await assert.rejects(switching, /executable not found/);
+      else await switching;
+      assert.equal(install.mock.callCount(), 0);
+      if (outcome === "missing") assert.equal(bridge.driver, oldDriver);
+      else assert.notEqual(bridge.driver, oldDriver);
+      assert.equal(bridge.driver.id, "acp");
+      return;
+    }
+
+    assert.equal(install.mock.callCount(), 1);
+    assert.equal(bridge.driver, oldDriver);
+    assert.equal(register.mock.callCount(), 1);
+    assert.equal(dispose.mock.callCount(), 0);
+    assert.equal(discoverCli.mock.callCount(), 0);
+    const rejected = outcome === "wait" ? undefined : assert.rejects(switching,
+      outcome === "failure" ? /synthetic plugin install failure/ : /bridge session ended/);
+    if (outcome === "cancel") await shutdown();
+    release();
+    if (rejected) await rejected;
+    else await switching;
+
+    assert.equal(bridge.driver.id, outcome === "wait" ? "cli" : "acp");
+    assert.equal(register.mock.callCount(), outcome === "wait" ? 2 : 1);
+    assert.equal(discoverCli.mock.callCount(), outcome === "wait" ? 1 : 0);
+    if (outcome !== "wait") assert.equal(bridge.driver, oldDriver);
+    if (outcome === "failure") assert.equal(dispose.mock.callCount(), 0);
+  });
+}
