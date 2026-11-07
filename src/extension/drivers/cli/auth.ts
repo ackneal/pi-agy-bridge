@@ -17,13 +17,13 @@ export function isAuthRequiredError(error: unknown): boolean {
     if (error.code === -32603 && error.data && typeof error.data === "object") {
       const details = (error.data as Record<string, unknown>).details;
       if (typeof details === "string") {
-        return /\b(?:authentication required|not authenticated|unauthenticated|login required)\b/i.test(details);
+        return /\b(?:authentication required|not authenticated|unauthenticated|login required|log in|sign in)\b/i.test(details);
       }
     }
     return false;
   }
   if (!(error instanceof Error)) return false;
-  return /\b(?:authentication required|not authenticated|unauthenticated|login required)\b/i.test(error.message);
+  return /\b(?:authentication required|not authenticated|unauthenticated|login required|log in|sign in)\b/i.test(error.message);
 }
 
 export async function withAcpConnection<T>(

@@ -39,7 +39,7 @@ function matchesPiRetryableError(errorMessage: string): boolean {
 }
 
 const NON_RETRYABLE_MESSAGE_PATTERN = new RegExp([
-  "\\b(?:authentication required|not authenticated|unauthenticated|login required|authorization denied|permission denied|unauthorized|forbidden|invalid api key|api key not valid)\\b",
+  "\\b(?:authentication required|not authenticated|unauthenticated|login required|log in|sign in|authorization denied|permission denied|unauthorized|forbidden|invalid api key|api key not valid)\\b",
   "\\b(?:quota exceeded|insufficient_quota|out of budget|billing|monthly usage limit reached|available balance|GoUsageLimitError|FreeUsageLimitError|subscription_sharing_usage_limit_exceeded|subscription_sharing_workplace_individual_usage_limit_exceeded)\\b",
   "\\b(?:unsupported|required configuration is unavailable|did not apply the requested|does not support session loading|must advertise|invalid acp|empty session id|prompt already active|must not be empty|unavailable tool|superseded|cancelled|aborted|disposed)\\b",
   "\\b(?:ENOENT|EACCES|EPERM|EISDIR|ENOTDIR|EINVAL|ENOEXEC)\\b",

@@ -163,6 +163,22 @@ describe("classifyFailure and formatFailureMessage", () => {
       expectedPattern: /agent failure: Authentication required: invalid credentials/,
     },
     {
+      name: "'sign in' authentication failure wrapped in -32603 Internal error is non-retryable",
+      error: new acp.RequestError(-32603, "Internal error", { details: "Please sign in to continue" }),
+      context: { phase: "active-prompt" },
+      expectedOutcome: "non-retryable",
+      expectedRetryableByPi: false,
+      expectedPattern: /agent failure: Please sign in to continue/,
+    },
+    {
+      name: "'log in' authentication failure wrapped in -32603 Internal error is non-retryable",
+      error: new acp.RequestError(-32603, "Internal error", { details: "Please log in to continue" }),
+      context: { phase: "pre-dispatch" },
+      expectedOutcome: "non-retryable",
+      expectedRetryableByPi: false,
+      expectedPattern: /agent failure: Please log in to continue/,
+    },
+    {
       name: "quota failure wrapped in -32603 Internal error is non-retryable",
       error: new acp.RequestError(-32603, "Internal error", { details: "Quota exceeded for quota metric" }),
       context: { phase: "active-prompt" },
