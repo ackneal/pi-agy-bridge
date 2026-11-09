@@ -249,6 +249,41 @@ describe("EventProcessor notifications and completion", () => {
       expected: { input: 50, output: 10, cacheRead: 30, cacheWrite: 20 },
     },
     {
+      name: "exclusive cache reads and writes are proven by total",
+      usage: { inputTokens: 100, outputTokens: 10, cachedReadTokens: 30, cachedWriteTokens: 20, totalTokens: 160 },
+      expected: { input: 100, output: 10, cacheRead: 30, cacheWrite: 20 },
+    },
+    {
+      name: "observed CLI-shaped exclusive counts preserve uncached input",
+      usage: { inputTokens: 10000, outputTokens: 1228, cachedReadTokens: 53000, totalTokens: 64228 },
+      expected: { input: 10000, output: 1228, cacheRead: 53000, cacheWrite: 0 },
+    },
+    {
+      name: "exclusive cache with separate thoughts is proven by total",
+      usage: { inputTokens: 100, outputTokens: 10, cachedReadTokens: 30, cachedWriteTokens: 20, thoughtTokens: 5, totalTokens: 165 },
+      expected: { input: 100, output: 15, cacheRead: 30, cacheWrite: 20, reasoning: 5 },
+    },
+    {
+      name: "exclusive cache with thoughts already in output",
+      usage: { inputTokens: 100, outputTokens: 15, cachedReadTokens: 30, cachedWriteTokens: 20, thoughtTokens: 5, totalTokens: 165 },
+      expected: { input: 100, output: 15, cacheRead: 30, cacheWrite: 20, reasoning: 5 },
+    },
+    {
+      name: "inclusive cache with separate thoughts",
+      usage: { inputTokens: 100, outputTokens: 10, cachedReadTokens: 30, cachedWriteTokens: 20, thoughtTokens: 5, totalTokens: 115 },
+      expected: { input: 50, output: 15, cacheRead: 30, cacheWrite: 20, reasoning: 5 },
+    },
+    {
+      name: "ambiguous cache equals thoughts preserves inclusive input",
+      usage: { inputTokens: 100, outputTokens: 10, cachedReadTokens: 30, cachedWriteTokens: 20, thoughtTokens: 50, totalTokens: 160 },
+      expected: { input: 50, output: 60, cacheRead: 30, cacheWrite: 20, reasoning: 50 },
+    },
+    ...[undefined, null, Number.NaN, Number.POSITIVE_INFINITY, -1, "160", 999].map((totalTokens) => ({
+      name: `unproven cache total ${String(totalTokens)} preserves inclusive input`,
+      usage: { inputTokens: 100, outputTokens: 10, cachedReadTokens: 30, cachedWriteTokens: 20, thoughtTokens: 5, totalTokens },
+      expected: { input: 50, output: 10, cacheRead: 30, cacheWrite: 20, reasoning: 5 },
+    })),
+    {
       name: "cache counts cannot make uncached input negative",
       usage: { inputTokens: 10, outputTokens: 2, cachedReadTokens: 8, cachedWriteTokens: 9, totalTokens: 12 },
       expected: { input: 0, output: 2, cacheRead: 8, cacheWrite: 9 },
@@ -286,6 +321,26 @@ describe("EventProcessor notifications and completion", () => {
 
       assert.deepEqual(facts.filter((fact) => fact.type === "accounting"), [
         { type: "accounting", usage: { ...row.expected, totalTokens: row.expected.input + row.expected.output + row.expected.cacheRead + row.expected.cacheWrite, cost: zeroCost } },
+      ]);
+    });
+  }
+
+  for (const row of [
+    { name: "forwards the optional last-call snapshot independently", responseUsage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 }, snapshot: true },
+    { name: "omits last-call usage when no snapshot is supplied", responseUsage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 }, snapshot: false },
+    { name: "snapshot cannot create accounting without response usage", responseUsage: null, snapshot: true },
+  ] satisfies { name: string; responseUsage: PromptResponse["usage"]; snapshot: boolean }[]) {
+    test(`EventProcessor.complete: ${row.name}`, () => {
+      const facts: RuntimeEvent[] = [];
+      const lastCallUsage = { input: 20, output: 3, cacheRead: 7, cacheWrite: 2, totalTokens: 32, cost: zeroCost };
+
+      new EventProcessor("session").complete({ stopReason: "end_turn", usage: row.responseUsage },
+        (fact) => facts.push(fact), row.snapshot ? lastCallUsage : undefined);
+
+      assert.deepEqual(facts, [
+        ...(row.responseUsage ? [{ type: "accounting", usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost: zeroCost }, ...(row.snapshot ? { lastCallUsage } : {}) }] : []),
+        { type: "session-reference", reference: "session" },
+        { type: "complete", reason: "stop", resumable: true },
       ]);
     });
   }

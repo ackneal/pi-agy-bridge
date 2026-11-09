@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import type { ContentBlock, SessionConfigOption, SessionNotification } from "@agentclientprotocol/sdk";
 import * as acp from "@agentclientprotocol/sdk";
 import type { Message, TextContent } from "@earendil-works/pi-ai";
@@ -7,6 +9,8 @@ import { EventProcessor } from "./events.ts";
 import { formatFailureMessage } from "../failure.ts";
 import { debugArtifact, debugLog } from "../../shared/debug.ts";
 import { serializeContextUpdate } from "../../provider/context-prompt.ts";
+import { expandHome } from "../../shared/paths.ts";
+import { readLastCallUsage } from "../transcript-usage.ts";
 
 type SessionRequests = {
   "session/new": [acp.NewSessionRequest, acp.NewSessionResponse];
@@ -275,6 +279,7 @@ export class RuntimeSession implements DriverSession {
   private submitting = false;
   private completion: Promise<void> | undefined;
   private failure: Promise<void> | undefined;
+  private readonly home = resolve(expandHome(process.env.GEMINI_HOME || `${homedir()}/.gemini`));
 
   constructor(
     connection: RuntimeConnection,
@@ -380,14 +385,26 @@ export class RuntimeSession implements DriverSession {
         promptBlocks: prompt.length,
       });
 
+      const priorUsage = this.options.standalone ? undefined
+        : await readLastCallUsage(this.home, "cli", this.sessionClient.id);
+      const startedAt = Math.floor(Date.now() / 1000) * 1000;
       if (!input.beforeInput()) return;
 
       this.emit({ type: "start" });
       this.emit({ type: "session-reference", reference: this.sessionClient.id });
 
-      this.completion = this.sessionClient.prompt(prompt).then((response) => {
+      this.completion = this.sessionClient.prompt(prompt).then(async (response) => {
+        const completedAt = Date.now();
+        const lastCall = response.stopReason === "end_turn" && !this.options.standalone
+          ? await readLastCallUsage(this.home, "cli", this.sessionClient.id)
+          : undefined;
+        const fresh = lastCall && lastCall.timestamp >= startedAt && lastCall.timestamp <= completedAt &&
+          (!priorUsage || lastCall.step > priorUsage.step);
+        debugLog("usage", "CLI prompt usage", {
+          sessionId: this.sessionClient.id, lastCallTokens: fresh ? lastCall.usage.totalTokens : undefined,
+        });
         this.completion = undefined;
-        this.eventProcessor?.complete(response, this.emit);
+        this.eventProcessor?.complete(response, this.emit, fresh ? lastCall.usage : undefined);
       }).catch((error: unknown) => this.fail(error));
     } finally {
       this.submitting = false;

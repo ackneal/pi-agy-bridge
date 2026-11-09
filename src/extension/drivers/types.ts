@@ -102,7 +102,7 @@ export type RuntimeEvent =
   | { type: "session-reference"; reference: string }
   | { type: "text-delta"; delta: string }
   | { type: "usage"; usage: AssistantMessage["usage"] }
-  | { type: "accounting"; usage: AssistantMessage["usage"] }
+  | { type: "accounting"; usage: AssistantMessage["usage"]; lastCallUsage?: AssistantMessage["usage"] }
   | { type: "complete"; reason: "stop" | "toolUse" | "error" | "aborted"; error?: string | undefined; cause?: unknown; resumable: boolean }
   | { type: "blocked-native-tool"; name: string }
   | { type: "tool-warning"; name: string; args: unknown; status: ToolWarningStatus; reason?: ToolWarningReason };

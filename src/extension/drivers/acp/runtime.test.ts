@@ -59,6 +59,83 @@ describe("serializeContent and RuntimeSession identity", () => {
   });
 });
 
+describe("RuntimeSession conditional transcript usage", () => {
+  for (const row of [
+    { name: "newer step at the prompt start second is fresh", priorStep: 4, step: 5, offset: 0, fresh: true },
+    { name: "newer step inside the prompt interval is fresh", priorStep: 4, step: 5, offset: 500, fresh: true },
+    { name: "newer step after prompt completion is not fresh", priorStep: 4, step: 5, offset: 1000, fresh: false },
+    { name: "first snapshot is fresh without a prior transcript", step: 0, offset: 0, fresh: true },
+    { name: "unchanged step is stale despite a current timestamp", priorStep: 5, step: 5, offset: 0, fresh: false },
+    { name: "lower step is stale despite a current timestamp", priorStep: 5, step: 4, offset: 0, fresh: false },
+    { name: "newer step before the start second is stale", priorStep: 4, step: 5, offset: -1, fresh: false },
+    { name: "old first snapshot is stale without a prior transcript", step: 5, offset: -1, fresh: false },
+    { name: "missing transcript leaves accounting available", fresh: false },
+    { name: "missing post-response transcript cannot reuse prior usage", priorStep: 4, fresh: false },
+    { name: "cancelled response cannot use a fresh snapshot", priorStep: 4, step: 5, offset: 0, stopReason: "cancelled", fresh: false },
+    { name: "refused response cannot use a fresh snapshot", priorStep: 4, step: 5, offset: 0, stopReason: "refusal", fresh: false },
+  ] satisfies { name: string; priorStep?: number; step?: number; offset?: number; stopReason?: "cancelled" | "refusal"; fresh: boolean }[]) {
+    test(row.name, { timeout: 10000 }, async (t) => {
+      const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join, dirname } = await import("node:path");
+      const { fileURLToPath } = await import("node:url");
+      const home = await mkdtemp(join(tmpdir(), "acp-runtime-usage-"));
+      const previousHome = process.env.GEMINI_HOME;
+      process.env.GEMINI_HOME = home;
+      t.after(async () => {
+        if (previousHome === undefined) delete process.env.GEMINI_HOME;
+        else process.env.GEMINI_HOME = previousHome;
+        await rm(home, { recursive: true, force: true });
+      });
+      const runtime = new RuntimeSession({ executable: process.execPath, cwd: process.cwd(), model: "selected",
+        args: ["--experimental-strip-types", fileURLToPath(new URL("./session-fixture.ts", import.meta.url)), "normal"],
+        mcp: { command: process.execPath, args: ["unused", "--endpoint", "unused"] } });
+      t.after(() => runtime.abort());
+      await runtime.prepare();
+
+      const startedAt = Date.parse("2026-11-09T14:31:54Z");
+      t.mock.method(Date, "now", () => startedAt + 750);
+      const filename = join(home, "antigravity-acp", "brain", runtime.session.id, ".system_generated/logs/transcript.jsonl");
+      await mkdir(dirname(filename), { recursive: true });
+      const transcript = (step: number, timestamp: number) => JSON.stringify({
+        source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", step_index: step,
+        created_at: new Date(timestamp).toISOString(), input_tokens: 10000, output_tokens: 1228,
+        cache_read_tokens: 53000, cache_write_tokens: 12,
+      }) + "\n";
+      if (row.priorStep !== undefined) await writeFile(filename, transcript(row.priorStep, startedAt - 10000));
+      const stopReason = row.stopReason ?? "end_turn";
+      const prompt = t.mock.method(runtime.session, "prompt", async () => {
+        if (row.step !== undefined) await writeFile(filename, transcript(row.step, startedAt + (row.offset ?? 0)));
+        else await rm(filename, { force: true });
+        return { stopReason, usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } };
+      });
+      const events: RuntimeEvent[] = [];
+      let finish!: () => void;
+      const completed = new Promise<void>((resolve) => { finish = resolve; });
+      runtime.onRuntimeEvent((event) => { events.push(event); if (event.type === "complete") finish(); });
+
+      await runtime.submit({ model: { id: "selected", name: "Synthetic", api: "anthropic-messages", provider: "anthropic",
+        baseUrl: "https://example.invalid", input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        reasoning: false, contextWindow: 1000, maxTokens: 100 }, messages: [{ role: "user", content: "Synthetic prompt" }],
+        options: undefined, beforeInput: () => true,
+      } satisfies DriverSubmission);
+      await completed;
+
+      assert.equal(prompt.mock.callCount(), 1);
+      const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+      assert.deepEqual(events.filter((event) => event.type === "accounting"), [{
+        type: "accounting", usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost },
+        ...(row.fresh ? { lastCallUsage: { input: 10000, output: 1228, cacheRead: 53000, cacheWrite: 12, totalTokens: 64240, cost } } : {}),
+      }]);
+      assert.deepEqual(events.filter((event) => event.type === "complete"), [
+        stopReason === "end_turn" ? { type: "complete", reason: "stop", resumable: true }
+          : stopReason === "cancelled" ? { type: "complete", reason: "aborted", resumable: false }
+            : { type: "complete", reason: "error", error: "ACP prompt stopped: refusal", resumable: false },
+      ]);
+    });
+  }
+});
+
 describe("RuntimeSession image observation and client tool routes", () => {
   test("runtime reads artifact images through an isolated observer with the original objective", async (t) => {
     const { mkdtemp, realpath, mkdir, writeFile, readFile, rm } = await import("node:fs/promises");

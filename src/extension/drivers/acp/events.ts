@@ -21,11 +21,16 @@ function mapUsage(raw: Usage | null | undefined): Extract<RuntimeEvent, { type: 
   const cacheRead = tokenCount(raw.cachedReadTokens) ?? 0;
   const cacheWrite = tokenCount(raw.cachedWriteTokens) ?? 0;
   const reasoning = tokenCount(raw.thoughtTokens);
-  // AGY includes cache tokens in inputTokens. Add thoughts to output only
-  // when the accounting total proves they were reported separately.
+  const total = tokenCount(raw.totalTokens);
+  const cache = cacheRead + cacheWrite;
+  const inclusive = total === inputTokens + outputTokens ||
+    reasoning !== undefined && total === inputTokens + outputTokens + reasoning;
+  const exclusive = !inclusive && cache > 0 && (total === inputTokens + cache + outputTokens ||
+    reasoning !== undefined && total === inputTokens + cache + outputTokens + reasoning);
+  // Accept exclusive cache accounting only when the reported total proves it.
   const separateThought = reasoning !== undefined &&
-    tokenCount(raw.totalTokens) === inputTokens + outputTokens + reasoning;
-  const input = Math.max(0, inputTokens - cacheRead - cacheWrite);
+    total === inputTokens + (exclusive ? cache : 0) + outputTokens + reasoning;
+  const input = exclusive ? inputTokens : Math.max(0, inputTokens - cache);
   const output = outputTokens + (separateThought ? reasoning : 0);
 
   return {
@@ -168,7 +173,11 @@ export class EventProcessor {
     emit({ type: "tool-warning", name, args, status: call.status ?? "unknown" });
   }
 
-  complete(response: PromptResponse, emit: (event: RuntimeEvent) => void): void {
+  complete(
+    response: PromptResponse,
+    emit: (event: RuntimeEvent) => void,
+    lastCallUsage?: Extract<RuntimeEvent, { type: "accounting" }>["usage"],
+  ): void {
     for (const id of this.calls.keys()) this.check(id, emit, true);
     this.calls.clear();
     this.overflowWarned = false;
@@ -180,7 +189,7 @@ export class EventProcessor {
     if (contextUsage) emit({ type: "usage", usage: contextUsage });
 
     const usage = mapUsage(response.usage);
-    if (usage) emit({ type: "accounting", usage });
+    if (usage) emit({ type: "accounting", usage, ...(lastCallUsage ? { lastCallUsage } : {}) });
 
     emit({ type: "session-reference", reference: this.sessionId });
     switch (response.stopReason) {
