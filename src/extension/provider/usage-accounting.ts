@@ -1,4 +1,10 @@
-import type { Usage } from "@earendil-works/pi-ai";
+import { calculateCost, type Api, type Model, type Usage } from "@earendil-works/pi-ai";
+
+export function estimateUsageCost(model: Model<Api>, usage: Usage): Usage {
+  const estimated = { ...usage, cost: { ...usage.cost } };
+  calculateCost(model, estimated);
+  return estimated;
+}
 
 function canSubtract(total: number, last: number): boolean {
   return Number.isFinite(total) && Number.isFinite(last) && last >= 0 && total >= last;

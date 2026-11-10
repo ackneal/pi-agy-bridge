@@ -1,11 +1,50 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Usage } from "@earendil-works/pi-ai";
-import { splitPromptUsage } from "./usage-accounting.ts";
+import type { Model, Usage } from "@earendil-works/pi-ai";
+import { estimateUsageCost, splitPromptUsage } from "./usage-accounting.ts";
 
 function usage(input = 10, output = 5, cacheRead = 3, cacheWrite = 2, totalTokens = input + output + cacheRead + cacheWrite): Usage {
   return { input, output, cacheRead, cacheWrite, totalTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+}
+
+for (const row of [
+  { name: "effective Argon rates", rates: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
+    record: usage(1000, 200, 300, 0), expected: { input: 0.004, output: 0.004, cacheRead: 0.00006, cacheWrite: 0 } },
+  { name: "user override rates and cached input", rates: { input: 9, output: 10, cacheRead: 2, cacheWrite: 3 },
+    record: { ...usage(1000, 200, 300, 400), reasoning: 100 },
+    expected: { input: 0.009, output: 0.002, cacheRead: 0.0006, cacheWrite: 0.0012 } },
+  { name: "unknown rates remain zero", rates: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    record: usage(), expected: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+  { name: "context occupancy is not billable usage", rates: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
+    record: usage(0, 0, 0, 0, 800), expected: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+  { name: "native tiers include cached input at their boundary",
+    rates: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0,
+      tiers: [{ inputTokensAbove: 1000, input: 3, output: 4, cacheRead: 0.3, cacheWrite: 0 }] },
+    record: usage(1000, 200, 1, 0), expected: { input: 0.003, output: 0.0008, cacheRead: 0.0000003, cacheWrite: 0 } },
+] satisfies { name: string; rates: Model<"anthropic-messages">["cost"]; record: Usage; expected: Omit<Usage["cost"], "total"> }[]) {
+  test(`estimateUsageCost: ${row.name}`, () => {
+    const model: Model<"anthropic-messages"> = {
+      id: "effective-model", name: "Effective model", api: "anthropic-messages", provider: "agy",
+      baseUrl: "https://example.invalid", input: ["text"], reasoning: true,
+      contextWindow: 1_048_576, maxTokens: 16384, cost: row.rates,
+    };
+    const before = structuredClone(row.record);
+    Object.freeze(row.record.cost);
+    Object.freeze(row.record);
+
+    const actual = estimateUsageCost(model, row.record);
+
+    assert.deepEqual({ ...actual, cost: row.record.cost }, row.record);
+    const expectedCost = { ...row.expected,
+      total: row.expected.input + row.expected.output + row.expected.cacheRead + row.expected.cacheWrite };
+    for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
+      assert.ok(Math.abs(actual.cost[field] - expectedCost[field]) < 1e-12, field);
+    }
+    assert.deepEqual(row.record, before);
+    assert.notStrictEqual(actual, row.record);
+    assert.notStrictEqual(actual.cost, row.record.cost);
+  });
 }
 
 type Case = { name: string; arrange: () => { total: Usage; last: Usage; expected: Usage | undefined } };

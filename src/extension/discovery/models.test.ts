@@ -3,11 +3,7 @@ import { calculateCost, type Usage, type AnyModel } from "@earendil-works/pi-ai"
 import { describe, it } from "node:test";
 import { discoverAgyModels, restoreStoredAgyModels, parseModelsOutput } from "./models.ts";
 
-const proIds = ["gemini-3.1-pro", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"];
-const proCost = {
-  input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0,
-  tiers: [{ inputTokensAbove: 200_000, input: 4, output: 18, cacheRead: 0.4, cacheWrite: 0 }],
-};
+const argonCost = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 };
 const flashCost = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
@@ -15,12 +11,14 @@ const unsupported = { off: null, minimal: null, low: null, medium: null, high: n
 
 describe("Antigravity CLI model discovery", () => {
   for (const { id, maxTokens, cost } of [
+    { id: "gemini-4-argon", maxTokens: 16_384, cost: argonCost },
+    { id: "gemini-4-argon-cyber-permissive", maxTokens: 16_384, cost: argonCost },
     { id: "gemini-3.8-flash", maxTokens: 65_536, cost: flashCost },
-    { id: "gemini-3.7-flash", maxTokens: 65_536, cost: flashCost },
-    { id: "gemini-3.6-flash", maxTokens: 65_536, cost: flashCost },
-    { id: "gemini-3.1-pro", maxTokens: 65_536, cost: proCost },
-    { id: "gemini-3.1-pro-preview", maxTokens: 65_536, cost: proCost },
-    { id: "gemini-3.1-pro-preview-customtools", maxTokens: 65_536, cost: proCost },
+    { id: "gemini-3.7-flash", maxTokens: 16_384, cost: zeroCost },
+    { id: "gemini-3.6-flash", maxTokens: 16_384, cost: zeroCost },
+    { id: "gemini-3.1-pro", maxTokens: 16_384, cost: zeroCost },
+    { id: "gemini-3.1-pro-preview", maxTokens: 16_384, cost: zeroCost },
+    { id: "gemini-3.1-pro-preview-customtools", maxTokens: 16_384, cost: zeroCost },
     { id: "gemini-new-flash", maxTokens: 16_384, cost: zeroCost },
     { id: "gemini-3.8-flash-preview", maxTokens: 16_384, cost: zeroCost },
   ]) {
@@ -53,37 +51,31 @@ describe("Antigravity CLI model discovery", () => {
     });
   }
 
-  for (const id of proIds) {
-    for (const prompt of [199_999, 200_000, 200_001]) {
-      for (const { label, cacheRead, cacheWrite } of [
-        { label: "uncached", cacheRead: 0, cacheWrite: 0 },
-        { label: "cache reads", cacheRead: 100_000, cacheWrite: 0 },
-        { label: "cache reads and writes", cacheRead: 60_000, cacheWrite: 40_000 },
-      ]) {
-        it(`uses native request-wide pricing: ${id}, prompt ${prompt}, ${label}`, () => {
-          const [model] = parseModelsOutput(`${id}-high  Gemini (High)`);
-          const usage: Usage = {
-            input: prompt - cacheRead - cacheWrite, output: 1_000, cacheRead, cacheWrite,
-            totalTokens: prompt + 1_000,
-            cost: { ...zeroCost, total: 0 },
-          };
-          const rates = prompt > 200_000 ? proCost.tiers[0]! : proCost;
-          const expected = {
-            input: (rates.input / 1_000_000) * usage.input,
-            output: (rates.output / 1_000_000) * usage.output,
-            cacheRead: (rates.cacheRead / 1_000_000) * cacheRead,
-            cacheWrite: 0,
-          };
+  for (const { id, rates } of [
+    { id: "gemini-4-argon", rates: argonCost },
+    { id: "gemini-4-argon-cyber-permissive", rates: argonCost },
+    { id: "gemini-3.8-flash", rates: flashCost },
+  ]) {
+    it(`uses global standard pricing without promotional discounts: ${id}`, () => {
+      const [model] = parseModelsOutput(`${id}  Gemini`);
+      const usage: Usage = {
+        input: 1_000, output: 2_000, cacheRead: 3_000, cacheWrite: 4_000,
+        reasoning: 500, totalTokens: 10_000,
+        cost: { ...zeroCost, total: 0 },
+      };
+      const expected = {
+        input: (rates.input / 1_000_000) * usage.input,
+        output: (rates.output / 1_000_000) * usage.output,
+        cacheRead: (rates.cacheRead / 1_000_000) * usage.cacheRead,
+        cacheWrite: 0,
+      };
 
-          const cost = calculateCost(model!, usage);
+      const cost = calculateCost(model!, usage);
 
-          assert.deepEqual(cost, {
-            ...expected, total: expected.input + expected.output + expected.cacheRead,
-          });
-          assert.equal(usage.cost, cost);
-        });
-      }
-    }
+      assert.deepEqual(cost, {
+        ...expected, total: expected.input + expected.output + expected.cacheRead,
+      });
+    });
   }
 
   for (const levels of [[], ["low"], ["low", "medium", "high"], ["off", "minimal", "xhigh", "max"]]) {
@@ -172,7 +164,7 @@ other-model-low        Other Model (Low)
     assert.deepEqual(models[3]?.thinkingLevelMap, { ...unsupported, low: "low" });
     assert.equal(models[3]?.contextWindow, 272_000);
     for (const model of models) {
-      assert.deepEqual(model.cost, proIds.includes(model.id) ? proCost : /^gemini-3\.[678]-flash$/.test(model.id) ? flashCost : zeroCost);
+      assert.deepEqual(model.cost, model.id === "gemini-3.8-flash" ? flashCost : zeroCost);
     }
   });
 
@@ -220,11 +212,11 @@ gpt-oss-120b-medium       GPT-OSS 120B (Medium)
       assert.equal(model.api, "agy");
       assert.equal(model.baseUrl, "agy");
       assert.equal(model.type, "chat");
-      assert.equal(model.maxTokens, model.id.startsWith("gemini-") ? 65_536 : 16_384);
+      assert.equal(model.maxTokens, model.id === "gemini-3.8-flash" ? 65_536 : 16_384);
       assert.deepEqual(model.input, ["text", "image"]);
       assert.equal(typeof model.name, "string");
       assert.equal(model.reasoning, true);
-      assert.deepEqual(model.cost, proIds.includes(model.id) ? proCost : /^gemini-3\.[678]-flash$/.test(model.id) ? flashCost : zeroCost);
+      assert.deepEqual(model.cost, model.id === "gemini-3.8-flash" ? flashCost : zeroCost);
     }
   });
 

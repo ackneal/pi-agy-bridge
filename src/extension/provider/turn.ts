@@ -1,4 +1,4 @@
-import type { Context, Usage } from "@earendil-works/pi-ai";
+import type { Api, Context, Model, Usage } from "@earendil-works/pi-ai";
 import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { PiToolCallBatch } from "../bridge/capabilities.ts";
 import type { PiRuntimeOutput } from "./output.ts";
@@ -7,9 +7,10 @@ import { formatFailureMessage } from "../drivers/failure.ts";
 import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
-import { splitPromptUsage } from "./usage-accounting.ts";
+import { estimateUsageCost, splitPromptUsage } from "./usage-accounting.ts";
 
 interface TurnOptions {
+  model: Model<Api>;
   session: LiveSession;
   adapter: PiRuntimeOutput;
   context: Context;
@@ -147,21 +148,27 @@ export class Turn {
 
     // Only the last model call belongs on the final assistant. Earlier calls
     // are accounted separately so context size and cumulative totals both hold.
-    if (event.type === "accounting" && this.options.onAccounting) {
+    if (event.type === "accounting") {
       try {
+        const { model, onAccounting } = this.options;
+        if (!onAccounting) {
+          adapter.handleRuntimeEvent({ ...event, usage: estimateUsageCost(model, event.usage) });
+          return;
+        }
+
         const lastCallUsage = event.lastCallUsage;
         const remainder = lastCallUsage && !adapter.isCompleted()
           ? splitPromptUsage(event.usage, lastCallUsage)
           : undefined;
         if (remainder && lastCallUsage) {
-          adapter.handleRuntimeEvent({ type: "accounting", usage: lastCallUsage });
+          adapter.handleRuntimeEvent({ type: "accounting", usage: estimateUsageCost(model, lastCallUsage) });
           if (remainder.totalTokens > 0 || remainder.input + remainder.output + remainder.cacheRead + remainder.cacheWrite > 0 ||
             (remainder.reasoning ?? 0) > 0 || remainder.cost.total > 0) {
-            this.options.onAccounting(remainder);
+            onAccounting(estimateUsageCost(model, remainder));
           }
         } else {
           // Missing or inconsistent snapshots must never turn prompt totals into context.
-          this.options.onAccounting(event.usage);
+          onAccounting(estimateUsageCost(model, event.usage));
         }
       } catch (error) {
         this.fail(error);

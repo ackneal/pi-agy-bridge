@@ -102,7 +102,7 @@ describe("driver-scoped model cache restoration", () => {
 
       assert.equal(bridge.driver.id, "acp");
       assert.ok(runtime.getModel("agy", "gemini-3.8-flash"));
-      assert.ok(runtime.getModel("agy", "gemini-3.1-pro"));
+      assert.equal(runtime.getModel("agy", "gemini-3.1-pro"), undefined);
       assert.equal(start.mock.callCount(), allowNetwork ? 1 : 0);
     });
   }
@@ -234,11 +234,9 @@ describe("CLI catalog discovery and persistence", () => {
     assert.equal(stored.agy.models[0].contextWindow, 1048576);
     assert.equal(stored.agy.models[0].maxTokens, 65536);
     assert.deepEqual(stored.agy.models[0].cost, { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 });
-    const proCost = {
-      input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0,
-      tiers: [{ inputTokensAbove: 200000, input: 4, output: 18, cacheRead: 0.4, cacheWrite: 0 }],
-    };
-    assert.deepEqual(stored.agy.models[1].cost, proCost);
+    const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    assert.equal(stored.agy.models[1].maxTokens, 16384);
+    assert.deepEqual(stored.agy.models[1].cost, defaultCost);
 
     const next = await ModelRuntime.create({ modelsPath, authPath: path.join(directory, "auth.json"), refreshOnCreate: false });
     await registerAndAwaitRefresh(t, next, () => new Bridge(
@@ -249,7 +247,7 @@ describe("CLI catalog discovery and persistence", () => {
     assert.equal(restored.errors.size, 0);
     assert.equal(next.getModel("agy", "gemini-3.8-flash")?.contextWindow, 123456);
     assert.equal(next.getModel("agy", "gemini-3.8-flash")?.maxTokens, 4321);
-    assert.deepEqual(next.getModel("agy", "gemini-3.1-pro")?.cost, proCost);
+    assert.deepEqual(next.getModel("agy", "gemini-3.1-pro")?.cost, defaultCost);
     assert.deepEqual(next.getModel("agy", "gemini-3.8-flash")?.cost, { input: 9, output: 10, cacheRead: 2, cacheWrite: 3, tiers: undefined });
   });
 

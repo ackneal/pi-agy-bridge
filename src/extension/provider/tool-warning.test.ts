@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
+import type { Model } from "@earendil-works/pi-ai";
 import { BridgeIPC } from "../bridge/ipc.ts";
 import type { DriverId, DriverSession, RuntimeEvent, ToolWarningStatus } from "../drivers/types.ts";
 import { LiveSession, PiContextAdapter } from "../session/session.ts";
@@ -7,6 +8,12 @@ import { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { PiRuntimeOutput } from "./output.ts";
 import { formatToolWarning } from "./tool-warning.ts";
 import { Turn } from "./turn.ts";
+
+const model: Model<"agy"> = {
+  id: "synthetic", name: "Synthetic", api: "agy", provider: "agy", baseUrl: "agy",
+  reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 1024,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
 
 for (const row of [
   { name: "active output", handoff: false, throws: false },
@@ -33,7 +40,7 @@ for (const row of [
       if (row.throws) throw new Error("synthetic UI failure");
     });
     const turn = new Turn({
-      session, adapter, context: { messages: [] }, sync: new RuntimeSessionSync(),
+      session, adapter, model, context: { messages: [] }, sync: new RuntimeSessionSync(),
       store: new RuntimeSessionStore(new PiContextAdapter()), preparationId,
       signal: undefined, sessionVersion: "acp:v1", onWarning,
     });
