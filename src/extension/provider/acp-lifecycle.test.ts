@@ -10,7 +10,7 @@ import { BridgeIPC } from "../bridge/ipc.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { RuntimeSession as AcpRuntimeSession } from "../drivers/acp/runtime.ts";
 import { Session as AcpSession } from "../drivers/acp/session.ts";
-import { composeSystemPrompt, fingerprintSystemPrompt } from "../drivers/acp/instructions.ts";
+import { composeSystemPrompt, composeBaseSystemPrompt, fingerprintSystemPrompt } from "../drivers/acp/instructions.ts";
 import { useExecutable } from "../drivers/acp/executable-fixture.ts";
 import { prepareSystemMessages } from "./context-prompt.ts";
 import { CapabilityGateway } from "../bridge/capabilities.ts";
@@ -156,9 +156,9 @@ describe("ACP instruction compatibility", () => {
       assert.equal(first.reason, "toolUse");
       const runtime = session.activeProcess;
       assert.ok(runtime instanceof AcpRuntimeSession);
-      assert.equal(runtime.options.systemPrompt, composeSystemPrompt(prepareSystemMessages(context)));
+      assert.equal(runtime.options.systemPrompt, composeSystemPrompt(prepareSystemMessages(context), tools));
       assert.ok(runtime.options.systemPrompt?.includes("PRIVATE_SECTION"));
-      assert.equal(runtime.compatibilityKey, fingerprintSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeSystemPrompt(prepareSystemMessages(context))])));
+      assert.equal(runtime.compatibilityKey, fingerprintSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeBaseSystemPrompt(prepareSystemMessages(context))])));
       assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, runtime.compatibilityKey);
       assert.ok(!JSON.stringify(prompts[0]).includes("PRIVATE_"));
       assert.ok(gateway.hasPendingCalls);
@@ -177,8 +177,8 @@ describe("ACP instruction compatibility", () => {
       assert.equal(second.reason, "stop");
       const active = session.activeProcess;
       assert.ok(active instanceof AcpRuntimeSession);
-      assert.equal(active.options.systemPrompt, composeSystemPrompt(prepareSystemMessages(next)));
-      assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, fingerprintSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeSystemPrompt(prepareSystemMessages(next))])));
+      assert.equal(active.options.systemPrompt, composeSystemPrompt(prepareSystemMessages(next), tools));
+      assert.equal((await bridge.runtimeSessionStore.get(sessionId, bridge.driver.sessionVersion))?.compatibilityKey, fingerprintSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeBaseSystemPrompt(prepareSystemMessages(next))])));
       if (changed) {
         assert.notEqual(active, runtime);
         assert.equal(resolve.mock.callCount(), 0);
@@ -390,7 +390,7 @@ describe("ACP resume recovery", () => {
     const session = bridge.liveSessions.getOrCreate(sessionId);
     await bridge.runtimeSessionStore.set(sessionId, {
       sessionId: "stale-session-id",
-      compatibilityKey: fingerprintSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeSystemPrompt(prepareSystemMessages({ messages: [] }))])),
+      compatibilityKey: fingerprintSystemPrompt(JSON.stringify([path.join(process.env.GEMINI_HOME!, "antigravity-acp"), composeBaseSystemPrompt(prepareSystemMessages({ messages: [] }))])),
     }, [], bridge.driver.sessionVersion);
     t.after(async () => {
       await bridge.liveSessions.disposeAll();

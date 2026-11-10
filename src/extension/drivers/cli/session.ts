@@ -2,7 +2,7 @@ import path from "node:path";
 import type { Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
 import { Connection } from "./connection.ts";
 import { RuntimeSession } from "./runtime.ts";
-import { composeSystemPrompt, fingerprintSystemPrompt } from "./instructions.ts";
+import { composeSystemPrompt, composeBaseSystemPrompt, fingerprintSystemPrompt } from "./instructions.ts";
 import { BridgeIPC } from "../../bridge/ipc.ts";
 import { calculateSyncKey, type LiveSession } from "../../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../../session/state.ts";
@@ -79,8 +79,9 @@ export async function prepareRuntime(
 
   const systemPrompt = standalone
     ? systemMessages.filter((message) => message.role === "system").map((message) => message.content.trim()).filter(Boolean).join("\n\n") || undefined
-    : composeSystemPrompt(systemMessages);
-  const compatibilityKey = systemPrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([cwd, systemPrompt]));
+    : composeSystemPrompt(systemMessages, tools);
+  const basePrompt = standalone ? systemPrompt : composeBaseSystemPrompt(systemMessages);
+  const compatibilityKey = basePrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([cwd, basePrompt]));
 
   const toolSyncValues = tools.map((tool) => JSON.stringify({
     name: tool.name,
