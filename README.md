@@ -13,7 +13,7 @@ The bridge supports two drivers:
 - **Antigravity ACP (`acp`):** Connects to the standalone Antigravity ACP server managed by the bridge.
 - **Antigravity CLI (`cli`):** Connects to the user-installed Antigravity CLI through `agy acp --stdio`.
 
-Both drivers communicate over the Agent Client Protocol (ACP). Each driver uses its own runtime, model catalog, and capabilities while Pi retains control of tools, extensions, skills, and session history.
+Both drivers communicate over the Agent Client Protocol (ACP). Each driver uses its own runtime, model catalog, and capabilities.
 
 ---
 
@@ -42,14 +42,12 @@ Local MCP bridge
 Pi tools -> Results return to the model
 ```
 
-Both drivers communicate over the ACP protocol. The selected driver determines whether the bridge connects to the managed Antigravity ACP server or the installed Antigravity CLI, selecting the corresponding runtime, model catalog, and capabilities.
-
 ---
 
 ## Features
 
-- **Native Pi Experience** — Keep Pi tools, extensions, skills, and session history.
-- **Pi Tool Integration** — Run registered tool requests through Pi with its applicable permissions.
+- **Native Pi Experience** — Keep Pi tools, extensions, skills, and session history. Tool requests run through Pi with its applicable permissions.
+- **Native Tool Limits** — Limit Antigravity's native tool capabilities so supported tool requests run through Pi.
 - **Two Drivers, One Protocol** — Choose Antigravity ACP or Antigravity CLI. Both drivers communicate over the ACP protocol.
 - **Session Continuity** — Reuse compatible sessions. Restore context from Pi history when needed.
 - **Image Support** — Read images through Pi tools. The ACP driver also supports automatic image loading and uses an observer for offloaded images.
@@ -122,18 +120,11 @@ Driver and doctor results are user-only notifications, not model conversation me
 
 ## How It Works
 
-### Tool Execution
-
-Antigravity models request tools through the bridge. Pi runs registered tool requests and returns the results. The bridge limits native tool capabilities through the selected driver.
-
 ### Choose a Driver
-
-Both drivers communicate over the **ACP protocol** and route supported tool requests back through Pi. The difference is the backend process and the capabilities each driver exposes.
 
 | | Antigravity ACP (`acp`, default) | Antigravity CLI (`cli`, optional) |
 | :--- | :--- | :--- |
 | Backend process | Managed Antigravity ACP server | User-installed `agy` CLI (`agy acp --stdio`) |
-| Protocol | ACP | ACP |
 | Setup | Installed and managed automatically | Install and maintain `agy` yourself |
 | Models | Managed ACP model catalog | `agy` model catalog, including supported third-party models |
 | Pi tools | Through the Pi MCP bridge | Through the Pi MCP bridge |
@@ -145,11 +136,9 @@ Both drivers communicate over the **ACP protocol** and route supported tool requ
 
 Use `/agy-bridge:driver` to switch drivers and `/model` to see available models. On startup, the bridge uses the driver recorded in its saved authentication. If no saved authentication or valid driver is present, it defaults to ACP.
 
-**Images:** Both drivers support image reads through Pi tools. The ACP driver can also automatically load images referenced in user messages. Offloaded image content requires an additional image observer; observer-assisted reads may add latency and model usage. Tool-based reads remain available for images in history and other locations.
+**Images:** ACP uses an additional observer for offloaded images, which may add latency and model usage. Tool-based reads remain available for images in history and other locations.
 
-**Usage:** Model token usage and account quotas are different measurements. The CLI driver retrieves quota information through `agy --output-format json --print /usage` and displays it in `/agy-bridge:doctor`.
-
-Reported token usage is not a billing total. The bridge does not calculate monetary costs.
+**Usage:** Pi's standard usage display shows token usage and costs estimated from configured model prices, including overrides in `models.json`. Estimates do not represent AGY billing or quota consumption. For CLI account quotas, use `/agy-bridge:doctor`.
 
 ### Sessions
 
