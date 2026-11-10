@@ -8,7 +8,7 @@ import { debugLog } from "../../shared/debug.ts";
 interface Options {
   home: string;
   sessionId: () => string;
-  allowedToolNames: ReadonlySet<string>;
+  allowedToolNames?: ReadonlySet<string>;
   observeImage: (image: { data: string; mimeType: string }, signal: AbortSignal) => Promise<string>;
 }
 interface Prompt {
@@ -18,6 +18,11 @@ interface Prompt {
   bytes: number;
 }
 const FILE_BYTES = 8 * 1024 * 1024;
+function inside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 function same(a: Stats, b: Stats): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.ctimeMs === b.ctimeMs && a.mtimeMs === b.mtimeMs && a.nlink === b.nlink;
 }
@@ -36,7 +41,7 @@ export class ArtifactReader {
   private prompt: Prompt | undefined;
 
   constructor(options: Options) {
-    this.options = { ...options, allowedToolNames: new Set(options.allowedToolNames) };
+    this.options = { ...options, allowedToolNames: new Set(options.allowedToolNames ?? []) };
   }
 
   beginPrompt(): void {
@@ -65,21 +70,21 @@ export class ArtifactReader {
     const target = request.path;
     if (!path.isAbsolute(target) || target.includes("\0") || target.split(path.sep).some(part => part === ".." || part === ".")) throw new Error("Invalid artifact path");
     const root = path.resolve(this.options.home, "antigravity-acp", "brain", session);
-    const relative = path.relative(root, target);
-    const parts = relative.split(path.sep);
-    const artifact = parts[0] === ".system_generated" && parts[1] === "steps" && parts.length > 2;
-    const metadata = parts.length === 3 && parts[0] === "mcp" && parts[1] === "pi-agy-bridge_pi" &&
-      (parts[2] === "instructions.md" || (parts[2]!.endsWith(".json") && this.options.allowedToolNames.has(parts[2]!.slice(0, -5))));
-    if (!artifact && !metadata) throw new Error("Unauthorized artifact path");
+    const stepsRoot = path.join(root, ".system_generated", "steps");
+    const mcpRoot = path.join(root, "mcp", "pi-agy-bridge_pi");
+
+    const isStepArtifact = inside(stepsRoot, target);
+    const isMcpTarget = target.endsWith(".json") && inside(mcpRoot, target);
+
+    if (!isStepArtifact && !isMcpTarget) throw new Error("Unauthorized artifact path");
     if (path.resolve(target) !== target) throw new Error("Noncanonical artifact path");
 
     let snapshot = prompt.snapshots.get(target);
     if (!snapshot) {
-      const artifactPrefix = path.join(root, ".system_generated", "steps") + path.sep;
-      const artifactCount = [...prompt.snapshots.keys()].filter(name => name.startsWith(artifactPrefix)).length;
-      if (artifact && artifactCount >= 8) throw new Error("Artifact file budget exceeded");
+      const artifactCount = [...prompt.snapshots.keys()].filter(name => inside(stepsRoot, name)).length;
+      if (isStepArtifact && artifactCount >= 8) throw new Error("Artifact file budget exceeded");
       // Reserve a slot before any filesystem or observer await; failures consume it.
-      snapshot = this.load(root, target, metadata, prompt, signal);
+      snapshot = this.load(root, target, isMcpTarget, prompt, signal);
       prompt.snapshots.set(target, snapshot);
     }
     const text = await snapshot;
@@ -93,7 +98,7 @@ export class ArtifactReader {
     return response;
   }
 
-  private async load(root: string, target: string, metadata: boolean, prompt: Prompt, signal: AbortSignal): Promise<string> {
+  private async load(root: string, target: string, isMcpTarget: boolean, prompt: Prompt, signal: AbortSignal): Promise<string> {
     const checked = async <T>(work: Promise<T>): Promise<T> => {
       const result = await work;
       signal.throwIfAborted();
@@ -147,7 +152,7 @@ export class ArtifactReader {
     }
     signal.throwIfAborted();
     const mimeType = mime(bytes);
-    if (mimeType && !metadata) {
+    if (mimeType && !isMcpTarget) {
       // The observer owns its deadline and settles only after process cleanup.
       debugLog("acp-read", "Image observer started", { path: target, mimeType, bytes: bytes.length });
       const description = await this.options.observeImage({ data: bytes.toString("base64"), mimeType }, signal);
@@ -158,7 +163,7 @@ export class ArtifactReader {
     }
     const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     if (text.includes("\0")) throw new Error("Binary artifact denied");
-    if (metadata && target.endsWith(".json")) {
+    if (isMcpTarget) {
       const schema: unknown = JSON.parse(text);
       if (!schema || typeof schema !== "object" || Array.isArray(schema)) throw new Error("Schema must be a JSON object");
     }

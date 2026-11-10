@@ -48,9 +48,10 @@ for (const row of [
   { name: "traversal", file: "/tmp/../secret", error: /Invalid artifact path/ },
   { name: "NUL", file: "/tmp/\0", error: /Invalid artifact path/ },
   { name: "cross session", suffix: "../other/.system_generated/steps/a", error: /Unauthorized/ },
-  { name: "unknown tool", suffix: "mcp/pi-agy-bridge_pi/bash.json", error: /Unauthorized/ },
   { name: "unknown server", suffix: "mcp/other/read.json", error: /Unauthorized/ },
+  { name: "non-json in mcp", suffix: "mcp/pi-agy-bridge_pi/other.txt", error: /Unauthorized/ },
   { name: "arbitrary file", suffix: "secret", error: /Unauthorized/ },
+  { name: "session log", suffix: ".system_generated/logs/transcript.jsonl", error: /Unauthorized/ },
 ]) {
   test(`rejects ${row.name}`, async () => {
     const f = await fixture();
@@ -107,11 +108,10 @@ for (const [mimeType, bytes] of [
 test("metadata stays text and validates only JSON object", async () => {
   const f = await fixture();
   try {
-    for (const [name, text] of [["read.json", '{"anything":true}'], ["instructions.md", "instructions"]]) {
-      const file = path.join(f.metadata, name!);
-      await writeFile(file, text!);
-      assert.equal((await f.read(file)).content, text);
-    }
+    const file = path.join(f.metadata, "read.json");
+    const text = '{"anything":true}';
+    await writeFile(file, text);
+    assert.equal((await f.read(file)).content, text);
     assert.equal(f.observed.length, 0);
   } finally { await f.cleanup(); }
 });
