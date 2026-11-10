@@ -19,18 +19,189 @@ async function fixture() {
   return { home, root, steps, metadata, reader, read, observed, cleanup: async () => { await reader.endPrompt(); await rm(home, { recursive: true, force: true }); } };
 }
 
-test("immutable text pagination and prompt reset", async () => {
+test("text changes are rejected until prompt reset", async () => {
   const f = await fixture();
   try {
     const file = path.join(f.steps, "result");
     await writeFile(file, "one\ntwo\nthree\n");
     assert.match((await f.read(file, 1, 1)).content, /^one\n[\s\S]*start_line=2/);
     await writeFile(file, "replacement");
-    assert.equal((await f.read(file, 2, 2)).content, "two\nthree\n");
+    await assert.rejects(f.read(file, 2, 2), /Artifact changed/);
     await f.reader.endPrompt();
     f.reader.beginPrompt();
     assert.equal((await f.read(file)).content, "replacement");
   } finally { await f.cleanup(); }
+});
+
+for (const size of [16 * 1024 * 1024, 1024 * 1024 * 1024]) {
+  test(`small page from ${size}-byte artifact uses bounded buffers and reads`, async (t) => {
+    const f = await fixture();
+    let probe: FileHandle | undefined;
+    try {
+      const file = path.join(f.steps, "large");
+      await writeFile(file, "first\n" + "x\n".repeat(70_000));
+      await truncate(file, size);
+      probe = await open(file, "r");
+      const prototype = Object.getPrototypeOf(probe) as FileHandle;
+      const read = prototype.read;
+      const alloc = Buffer.alloc;
+      let bytesRead = 0;
+      let maxAllocation = 0;
+      t.mock.method(Buffer, "alloc", (length: number) => {
+        maxAllocation = Math.max(maxAllocation, length);
+        assert.ok(length <= 128 * 1024, `unexpected ${length}-byte allocation`);
+        return alloc(length);
+      });
+      t.mock.method(prototype, "read", async function (this: FileHandle, buffer: Buffer, offset: number, length: number, position: number) {
+        const result = await read.call(this, { buffer, offset, length, position });
+        bytesRead += result.bytesRead;
+        return result;
+      });
+      const page = await f.read(file, 1, 1);
+      assert.match(page.content, /^first\n[\s\S]*start_line=2/);
+      assert.ok(bytesRead <= 128 * 1024 + 12);
+      assert.equal(maxAllocation, 128 * 1024);
+    } finally {
+      await probe?.close();
+      t.mock.restoreAll();
+      await f.cleanup();
+    }
+  });
+}
+
+for (const text of [
+  "a\r\n\n紅色😀\r\n尾",
+  "\ufeff" + "α😀\r\n\nend\n".repeat(2100),
+]) {
+  test(`file pages reconstruct text (${text.length} code units)`, async () => {
+    const f = await fixture();
+    try {
+      const file = path.join(f.steps, "pages");
+      await writeFile(file, text);
+      let line = 1;
+      const parts: string[] = [];
+      while (true) {
+        const { content } = await f.read(file, line, 1000);
+        const footer = /\n\n\[Showing lines [^\]]*Use start_line=(\d+) to continue[^\]]*\]$/.exec(content);
+        parts.push(footer ? content.slice(0, footer.index) : content);
+        if (!footer) break;
+        line = Number(footer[1]);
+      }
+      assert.equal(parts.join(""), text);
+      assert.equal((await f.read(file, 1, 1)).content, (await f.read(file, 1, 1)).content);
+    } finally { await f.cleanup(); }
+  });
+}
+
+for (const change of ["overwrite", "replace"] as const) {
+  test(`later page rejects ${change}`, async () => {
+    const f = await fixture();
+    try {
+      const file = path.join(f.steps, "changed");
+      await writeFile(file, "first\nsecond\n");
+      await f.read(file, 1, 1);
+      if (change === "overwrite") await writeFile(file, "other\nsecond\n");
+      else {
+        await writeFile(file + "-new", "first\nsecond\n");
+        await rename(file + "-new", file);
+      }
+      await assert.rejects(f.read(file, 2, 1), /Artifact changed since first read/);
+    } finally { await f.cleanup(); }
+  });
+}
+
+for (const action of ["modify", "replace", "connection abort", "prompt abort"] as const) {
+  test(`page read cleanup after ${action}`, async (t) => {
+    const f = await fixture();
+    let probe: FileHandle | undefined;
+    let ending: Promise<void> | undefined;
+    try {
+      const file = path.join(f.steps, "result");
+      await writeFile(file, "one\ntwo\n".repeat(20_000));
+      probe = await open(file, "r");
+      const prototype = Object.getPrototypeOf(probe) as FileHandle;
+      const read = prototype.read;
+      const controller = new AbortController();
+      let changed = false;
+      const handles = new Set<FileHandle>();
+      t.mock.method(prototype, "read", async function (this: FileHandle, buffer: Buffer, offset: number, length: number, position: number) {
+        const result = await read.call(this, { buffer, offset, length, position });
+        handles.add(this);
+        if (buffer.length > 12 && !changed) {
+          changed = true;
+          if (action === "modify") await writeFile(file, "changed\n");
+          else if (action === "replace") {
+            await writeFile(file + "-new", "replacement\n");
+            await rename(file + "-new", file);
+          } else if (action === "connection abort") controller.abort(new Error("connection cancelled"));
+          else {
+            ending = f.reader.endPrompt();
+            assert.throws(() => f.reader.beginPrompt(), /Previous artifact prompt/);
+          }
+        }
+        return result;
+      });
+      await assert.rejects(f.read(file, 1, 1, controller.signal), /Artifact.*changed|cancelled|prompt ended/);
+      await ending;
+      assert.equal(changed, true);
+      assert.equal(handles.size, 2);
+      for (const handle of handles) assert.equal(handle.fd, -1, "inspection and page descriptors close before settlement");
+    } finally {
+      t.mock.restoreAll();
+      await probe?.close();
+      await ending;
+      await f.cleanup();
+    }
+  });
+}
+
+test("endPrompt waits for a cancelled page descriptor to close", async (t) => {
+  const f = await fixture();
+  let probe: FileHandle | undefined;
+  let release!: () => void;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let closing!: () => void;
+  const startedClosing = new Promise<void>(resolve => { closing = resolve; });
+  let ending: Promise<void> | undefined;
+  let rejection: Promise<void> | undefined;
+  try {
+    const file = path.join(f.steps, "result");
+    await writeFile(file, "one\ntwo\n".repeat(20_000));
+    probe = await open(file, "r");
+    const prototype = Object.getPrototypeOf(probe) as FileHandle;
+    const read = prototype.read;
+    let cleaned = false;
+    t.mock.method(prototype, "read", async function (this: FileHandle, buffer: Buffer, offset: number, length: number, position: number) {
+      const result = await read.call(this, { buffer, offset, length, position });
+      if (buffer.length > 12) {
+        const close = this.close;
+        t.mock.method(this, "close", async () => {
+          closing();
+          await released;
+          await close.call(this);
+          cleaned = true;
+        });
+        ending = f.reader.endPrompt();
+      }
+      return result;
+    });
+    rejection = assert.rejects(f.read(file, 1, 1), /prompt ended/);
+    await startedClosing;
+    assert.equal(cleaned, false);
+    assert.throws(() => f.reader.beginPrompt(), /Previous artifact prompt/);
+    release();
+    await ending;
+    await rejection;
+    assert.equal(cleaned, true);
+    f.reader.beginPrompt();
+  } finally {
+    release();
+    await ending;
+    await rejection;
+    t.mock.restoreAll();
+    await probe?.close();
+    await f.cleanup();
+  }
 });
 
 test("UTF-8 tool text preserves CRLF, Unicode and ANSI sequences", async () => {
@@ -69,6 +240,38 @@ test("session callback identity and invalid segments", async () => {
   }
 });
 
+for (const phase of ["inspection", "page"] as const) {
+  test(`session change during ${phase} rejects content and closes descriptors`, async (t) => {
+    const f = await fixture();
+    let probe: FileHandle | undefined;
+    let session = "session";
+    const reader = new ArtifactReader({ home: f.home, sessionId: () => session, observeImage: async () => "" });
+    reader.beginPrompt();
+    try {
+      const file = path.join(f.steps, "result");
+      await writeFile(file, "one\ntwo\n".repeat(20_000));
+      probe = await open(file, "r");
+      const prototype = Object.getPrototypeOf(probe) as FileHandle;
+      const read = prototype.read;
+      const handles = new Set<FileHandle>();
+      t.mock.method(prototype, "read", async function (this: FileHandle, buffer: Buffer, offset: number, length: number, position: number) {
+        const result = await read.call(this, { buffer, offset, length, position });
+        handles.add(this);
+        if (phase === "inspection" || buffer.length > 12) session = "other";
+        return result;
+      });
+      await assert.rejects(reader.read({ sessionId: "session", path: file, limit: 1 }, new AbortController().signal), /Artifact session changed/);
+      assert.equal(handles.size, phase === "inspection" ? 1 : 2);
+      for (const handle of handles) assert.equal(handle.fd, -1);
+    } finally {
+      t.mock.restoreAll();
+      await probe?.close();
+      await reader.endPrompt();
+      await f.cleanup();
+    }
+  });
+}
+
 for (const kind of ["symlink", "parent symlink", "hardlink", "directory", "binary", "schema array"] as const) {
   test(`rejects ${kind}`, async () => {
     const f = await fixture();
@@ -98,7 +301,8 @@ for (const [mimeType, bytes] of [
       const file = path.join(f.steps, "image.txt");
       await writeFile(file, bytes);
       assert.match((await f.read(file)).content, /^Image observation \(derived\):\nvisible text$/);
-      await f.read(file);
+      await writeFile(file, "replaced with text");
+      assert.match((await f.read(file)).content, /^Image observation \(derived\):\nvisible text$/);
       assert.deepEqual(f.observed, [{ data: bytes.toString("base64"), mimeType }]);
     } finally { await f.cleanup(); }
   });
@@ -294,7 +498,7 @@ test("text integrity errors are explicit and failed snapshots do not retry", asy
     for (const [name, text, error] of [
       ["long", "x".repeat(150_000), /cannot fit/],
       ["schema", "{", /JSON/],
-      ["control", "a\0b", /Binary artifact/],
+      ["control", "a\0b", /NUL/],
     ] as const) {
       await f.reader.endPrompt();
       f.reader.beginPrompt();
