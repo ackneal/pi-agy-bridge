@@ -37,7 +37,6 @@ if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1])))
     let input = "";
     for await (const chunk of process.stdin) {
       input += chunk;
-      if (Buffer.byteLength(input) > 1024 * 1024) throw new Error("Input too large");
     }
     console.log(JSON.stringify(await decide(JSON.parse(input))));
   } catch {
