@@ -1,4 +1,4 @@
-import type { Context, Usage } from "@earendil-works/pi-ai";
+import type { Api, Context, Model, Usage } from "@earendil-works/pi-ai";
 import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { PiToolCallBatch } from "../bridge/capabilities.ts";
 import type { PiRuntimeOutput } from "./output.ts";
@@ -7,8 +7,10 @@ import { formatFailureMessage } from "../drivers/failure.ts";
 import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
+import { estimateUsageCost, splitPromptUsage } from "./usage-accounting.ts";
 
 interface TurnOptions {
+  model: Model<Api>;
   session: LiveSession;
   adapter: PiRuntimeOutput;
   context: Context;
@@ -138,18 +140,42 @@ export class Turn {
       return;
     }
 
-    // A native prompt can finish after a Pi tool-handoff message. Account for
-    // it once even when that message's writer has already completed.
-    if (event.type === "accounting" && this.options.onAccounting) {
+    const { adapter } = this.options;
+    const cli = this.runtime!.proc.driver === "cli";
+    if (cli && event.type === "usage" && event.usage.totalTokens <= 0) return;
+    if (cli && event.type === "accounting" && event.usage.totalTokens <= 0 &&
+      event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite <= 0) return;
+
+    // Only the last model call belongs on the final assistant. Earlier calls
+    // are accounted separately so context size and cumulative totals both hold.
+    if (event.type === "accounting") {
       try {
-        this.options.onAccounting(event.usage);
+        const { model, onAccounting } = this.options;
+        if (!onAccounting) {
+          adapter.handleRuntimeEvent({ ...event, usage: estimateUsageCost(model, event.usage) });
+          return;
+        }
+
+        const lastCallUsage = event.lastCallUsage;
+        const remainder = lastCallUsage && !adapter.isCompleted()
+          ? splitPromptUsage(event.usage, lastCallUsage)
+          : undefined;
+        if (remainder && lastCallUsage) {
+          adapter.handleRuntimeEvent({ type: "accounting", usage: estimateUsageCost(model, lastCallUsage) });
+          if (remainder.totalTokens > 0 || remainder.input + remainder.output + remainder.cacheRead + remainder.cacheWrite > 0 ||
+            (remainder.reasoning ?? 0) > 0 || remainder.cost.total > 0) {
+            onAccounting(estimateUsageCost(model, remainder));
+          }
+        } else {
+          // Missing or inconsistent snapshots must never turn prompt totals into context.
+          onAccounting(estimateUsageCost(model, event.usage));
+        }
       } catch (error) {
         this.fail(error);
       }
       return;
     }
 
-    const { adapter } = this.options;
     const mcpServer = this.runtime!.mcpServer;
     if (adapter.isCompleted()) {
       // Pi may still be executing tools after its stream ends.

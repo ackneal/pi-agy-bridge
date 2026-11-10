@@ -370,6 +370,55 @@ describe("EventProcessor", () => {
     }
   });
 
+  for (const row of [
+    { name: "reported total differs from components", totalTokens: 1000, expected: 1000 },
+    { name: "reported zero is preserved", totalTokens: 0, expected: 0 },
+    { name: "missing total falls back to components", totalTokens: undefined, expected: 120 },
+    { name: "invalid total falls back to components", totalTokens: Number.NaN, expected: 120 },
+    { name: "negative total falls back to components", totalTokens: -1, expected: 120 },
+  ]) {
+    test(`complete usage total: ${row.name}`, () => {
+      const processor = new EventProcessor("session-123");
+      const events: RuntimeEvent[] = [];
+
+      const usage = { inputTokens: 100, outputTokens: 20, totalTokens: row.totalTokens ?? 120 };
+      if (row.totalTokens === undefined) Reflect.deleteProperty(usage, "totalTokens");
+
+      processor.complete({ stopReason: "end_turn", usage }, (event) => events.push(event));
+
+      const accounting = events.find((event) => event.type === "accounting");
+      assert.ok(accounting);
+      assert.equal(accounting.usage.totalTokens, row.expected);
+      assert.equal(accounting.usage.input, 100);
+      assert.equal(accounting.usage.output, 20);
+    });
+  }
+
+  for (const row of [
+    { name: "30 model calls in one prompt", input: 123355, output: 6774, cacheRead: 887639, reasoning: 3933, total: 1017768 },
+    { name: "two model calls in next prompt", input: 67036, output: 749, cacheRead: 62395, reasoning: 429, total: 130180 },
+    { name: "cache writes are separate from uncached input", input: 100, output: 20, cacheRead: 30, cacheWrite: 40, reasoning: 0, total: 190 },
+  ]) {
+    test(`CLI exclusive input accounting: ${row.name}`, () => {
+      const processor = new EventProcessor("session-123");
+      const events: RuntimeEvent[] = [];
+
+      processor.complete({ stopReason: "end_turn", usage: {
+        inputTokens: row.input, outputTokens: row.output, cachedReadTokens: row.cacheRead,
+        cachedWriteTokens: row.cacheWrite ?? 0, thoughtTokens: row.reasoning, totalTokens: row.total,
+      } }, (event) => events.push(event));
+
+      const accounting = events.find((event) => event.type === "accounting");
+      assert.ok(accounting);
+      assert.equal(accounting.usage.input, row.input);
+      assert.equal(accounting.usage.output, row.output);
+      assert.equal(accounting.usage.cacheRead, row.cacheRead);
+      assert.equal(accounting.usage.cacheWrite, row.cacheWrite ?? 0);
+      assert.equal(accounting.usage.totalTokens, row.total);
+      assert.equal(accounting.usage.input + accounting.usage.output + accounting.usage.cacheRead + accounting.usage.cacheWrite, row.total);
+    });
+  }
+
   test("complete emits accounting and completion reason", () => {
     const processor = new EventProcessor("session-123");
     const events: RuntimeEvent[] = [];
@@ -384,7 +433,7 @@ describe("EventProcessor", () => {
           cachedReadTokens: 20,
           cachedWriteTokens: 0,
           thoughtTokens: 10,
-          totalTokens: 160,
+          totalTokens: 180,
         },
       },
       emit
@@ -393,7 +442,7 @@ describe("EventProcessor", () => {
     const accounting = events.find((e) => e.type === "accounting");
     assert.ok(accounting);
     if (accounting?.type === "accounting") {
-      assert.equal(accounting.usage.input, 80);
+      assert.equal(accounting.usage.input, 100);
       assert.equal(accounting.usage.output, 60);
       assert.equal(accounting.usage.cacheRead, 20);
     }

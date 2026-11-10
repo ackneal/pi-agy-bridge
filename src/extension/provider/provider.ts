@@ -84,6 +84,7 @@ export function streamProvider(
     : bridge.liveSessions.getOrCreate(piSessionId);
   const preparationId = liveSession.beginPreparation();
   const turn = new Turn({
+    model,
     session: liveSession,
     adapter,
     context,

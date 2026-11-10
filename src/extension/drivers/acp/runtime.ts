@@ -13,6 +13,7 @@ import { extractImagesFromText, serializeContextUpdate } from "../../provider/co
 import { expandHome } from "../../shared/paths.ts";
 import { ArtifactReader } from "./artifact-reader.ts";
 import { observeImage } from "./image-observer.ts";
+import { readLastCallUsage } from "../transcript-usage.ts";
 
 export function serializeContent(messages: readonly BridgeMessage[]): ContentBlock[] {
   const blocks: ContentBlock[] = [];
@@ -56,6 +57,7 @@ export class RuntimeSession implements DriverSession {
   private failure: Promise<void> | undefined;
   private userPrompt = "";
   private readonly reader: ArtifactReader;
+  private readonly home = resolve(expandHome(process.env.GEMINI_HOME ?? `${homedir()}/.gemini`));
   readonly options: Omit<SessionOptions, "onUpdate" | "onRead">;
   constructor(
     options: Omit<SessionOptions, "onUpdate" | "onRead">,
@@ -65,7 +67,7 @@ export class RuntimeSession implements DriverSession {
     this.compatibilityKey = options.systemPrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
     this.allowedToolNames = allowedToolNames;
     this.reader = new ArtifactReader({
-      home: resolve(expandHome(process.env.GEMINI_HOME ?? `${homedir()}/.gemini`)),
+      home: this.home,
       sessionId: () => this.session.id,
       allowedToolNames,
       observeImage: (image, signal) => observeImage({
@@ -150,6 +152,8 @@ export class RuntimeSession implements DriverSession {
         if (block.type === "image" && "data" in block && typeof block.data === "string" && "mimeType" in block && typeof block.mimeType === "string") return { type: "image", data: block.data, mimeType: block.mimeType };
         throw new Error("ACP payload supports text and image content blocks");
       });
+      const priorUsage = await readLastCallUsage(this.home, "acp", this.session.id);
+      const startedAt = Math.floor(Date.now() / 1000) * 1000;
       if (!input.beforeInput()) return;
       const userMessage = [...input.messages].reverse().find((m) => m.role === "user");
       let userPrompt = "";
@@ -166,10 +170,19 @@ export class RuntimeSession implements DriverSession {
       this.emit({ type: "session-reference", reference: this.session.id });
       // Do not await the native prompt: MCP can suspend it across Pi turns.
       this.completion = this.session.prompt(prompt).then(async (response) => {
+        const completedAt = Date.now();
         await this.reader.endPrompt();
         this.userPrompt = "";
+        const lastCall = response.stopReason === "end_turn"
+          ? await readLastCallUsage(this.home, "acp", this.session.id)
+          : undefined;
+        const fresh = lastCall && lastCall.timestamp >= startedAt && lastCall.timestamp <= completedAt &&
+          (!priorUsage || lastCall.step > priorUsage.step);
+        debugLog("usage", "ACP prompt usage", {
+          sessionId: this.session.id, lastCallTokens: fresh ? lastCall.usage.totalTokens : undefined,
+        });
         this.completion = undefined;
-        this.eventProcessor?.complete(response, this.emit);
+        this.eventProcessor?.complete(response, this.emit, fresh ? lastCall.usage : undefined);
       }).catch((error: unknown) => this.fail(error));
     } finally { this.submitting = false; }
   }

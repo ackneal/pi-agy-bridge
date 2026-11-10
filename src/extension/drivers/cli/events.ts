@@ -25,8 +25,9 @@ function mapUsage(raw: Usage | null | undefined): Extract<RuntimeEvent, { type: 
   const cacheWrite = tokenCount(raw.cachedWriteTokens) ?? 0;
   const reasoning = tokenCount(raw.thoughtTokens);
   const separateThought = reasoning !== undefined &&
-    tokenCount(raw.totalTokens) === inputTokens + outputTokens + reasoning;
-  const input = Math.max(0, inputTokens - cacheRead - cacheWrite);
+    tokenCount(raw.totalTokens) === inputTokens + cacheRead + cacheWrite + outputTokens + reasoning;
+  // CLI reports uncached input separately from cache reads and writes.
+  const input = inputTokens;
   const output = outputTokens + (separateThought ? reasoning : 0);
 
   return {
@@ -35,7 +36,7 @@ function mapUsage(raw: Usage | null | undefined): Extract<RuntimeEvent, { type: 
     cacheRead,
     cacheWrite,
     ...(reasoning !== undefined ? { reasoning } : {}),
-    totalTokens: input + output + cacheRead + cacheWrite,
+    totalTokens: tokenCount(raw.totalTokens) ?? input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }
@@ -198,7 +199,11 @@ export class EventProcessor {
     emit({ type: "tool-warning", name, args, status: call.status ?? "unknown" });
   }
 
-  complete(response: PromptResponse, emit: (event: RuntimeEvent) => void): void {
+  complete(
+    response: PromptResponse,
+    emit: (event: RuntimeEvent) => void,
+    lastCallUsage?: Extract<RuntimeEvent, { type: "accounting" }>["usage"],
+  ): void {
     for (const id of this.calls.keys()) this.check(id, emit, true);
     this.calls.clear();
     this.overflowWarned = false;
@@ -208,7 +213,7 @@ export class EventProcessor {
     if (contextUsage) emit({ type: "usage", usage: contextUsage });
 
     const usage = mapUsage(response.usage);
-    if (usage) emit({ type: "accounting", usage });
+    if (usage) emit({ type: "accounting", usage, ...(lastCallUsage ? { lastCallUsage } : {}) });
 
     emit({ type: "session-reference", reference: this.sessionId });
     switch (response.stopReason) {
