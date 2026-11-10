@@ -46,16 +46,16 @@ for (const field of ["line", "limit"] as const) {
   }
 }
 test("oversized requested limit returns a bounded page with continuation", () => {
-  const page = parsePage(readTextPage("x\n".repeat(700), 1, 1000).content);
+  const page = parsePage(readTextPage("x\n".repeat(2500), 1, 3000).content);
   assert.equal(page.text, "x\n".repeat(MAX_TEXT_PAGE_LINES));
   assert.equal(page.endLine, MAX_TEXT_PAGE_LINES);
   assert.equal(page.nextLine, MAX_TEXT_PAGE_LINES + 1);
 });
 
 for (const row of [
-  { name: "default line bound", text: "x\n".repeat(700), firstCount: MAX_TEXT_PAGE_LINES },
-  { name: "ASCII serialized escaping budget", text: ('"\\\u0000😀'.repeat(300) + '\r\n').repeat(20), firstCount: undefined },
-  { name: "mixed multipage", text: ("α😀\r\n\nend\n").repeat(900) + "tail", firstCount: MAX_TEXT_PAGE_LINES },
+  { name: "default line bound", text: "x\n".repeat(2500), firstCount: MAX_TEXT_PAGE_LINES },
+  { name: "ASCII serialized escaping budget", text: ('"\\\u0000😀'.repeat(300) + '\r\n').repeat(500), firstCount: undefined },
+  { name: "mixed multipage", text: ("α😀\r\n\nend\n").repeat(2500) + "tail", firstCount: MAX_TEXT_PAGE_LINES },
 ]) {
   test(`lossless reconstruction: ${row.name}`, () => {
     let line: number | null = 1;

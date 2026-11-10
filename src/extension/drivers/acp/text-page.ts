@@ -1,5 +1,5 @@
-export const MAX_TEXT_PAGE_LINES = 256;
-export const MAX_TEXT_PAGE_BYTES = 24 * 1024;
+export const MAX_TEXT_PAGE_LINES = 2000;
+export const MAX_TEXT_PAGE_BYTES = 128 * 1024;
 
 export function readTextPage(text: string, line = 1, limit = MAX_TEXT_PAGE_LINES): { content: string } {
   if (!Number.isInteger(line) || line < 1 || line > 0xffffffff) {
