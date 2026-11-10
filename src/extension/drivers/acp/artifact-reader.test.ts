@@ -69,7 +69,7 @@ test("session callback identity and invalid segments", async () => {
   }
 });
 
-for (const kind of ["symlink", "parent symlink", "hardlink", "directory", "oversize", "binary", "schema array"] as const) {
+for (const kind of ["symlink", "parent symlink", "hardlink", "directory", "binary", "schema array"] as const) {
   test(`rejects ${kind}`, async () => {
     const f = await fixture();
     try {
@@ -79,10 +79,9 @@ for (const kind of ["symlink", "parent symlink", "hardlink", "directory", "overs
       if (kind === "parent symlink") { await symlink(f.steps, path.join(f.steps, "redirect")); file = path.join(f.steps, "redirect/result"); }
       if (kind === "hardlink") await link(file, file + "-link");
       if (kind === "directory") file = f.steps + "/directory", await mkdir(file);
-      if (kind === "oversize") await truncate(file, 8 * 1024 * 1024 + 1);
       if (kind === "binary") await writeFile(file, Buffer.from([255, 0]));
       if (kind === "schema array") { file = path.join(f.metadata, "read.json"); await writeFile(file, "[]"); }
-      await assert.rejects(f.read(file), kind === "oversize" ? /size exceeded/ : kind === "schema array" ? /JSON object/ : kind === "binary" ? /encoded data|encoding/i : /Redirected|regular/);
+      await assert.rejects(f.read(file), kind === "schema array" ? /JSON object/ : kind === "binary" ? /encoded data|encoding/i : /Redirected|regular/);
     } finally { await f.cleanup(); }
   });
 }
@@ -139,7 +138,7 @@ test("registered tool schemas do not consume artifact file slots", async () => {
   }
 });
 
-test("request and concurrent file reservations are bounded", async () => {
+test("concurrent file reservations are bounded", async () => {
   const f = await fixture();
   try {
     const files = await Promise.all(Array.from({ length: 9 }, async (_, i) => { const file = path.join(f.steps, String(i)); await writeFile(file, "x"); return file; }));
@@ -147,15 +146,6 @@ test("request and concurrent file reservations are bounded", async () => {
     assert.equal(results.filter(result => result.status === "fulfilled").length, 8);
     for (let i = 9; i < 128; i++) await f.read(files[0]!);
     await assert.rejects(f.read(files[0]!), /request budget/);
-  } finally { await f.cleanup(); }
-});
-
-test("aggregate byte budget reserves before concurrent reads", async () => {
-  const f = await fixture();
-  try {
-    const files = await Promise.all([0, 1, 2].map(async i => { const file = path.join(f.steps, String(i)); await writeFile(file, ""); await truncate(file, 8 * 1024 * 1024); return file; }));
-    const results = await Promise.allSettled(files.map(file => f.read(file)));
-    assert.ok(results.some(result => result.status === "rejected" && /source byte budget/.test(String(result.reason))));
   } finally { await f.cleanup(); }
 });
 
@@ -302,7 +292,7 @@ test("text integrity errors are explicit and failed snapshots do not retry", asy
   const f = await fixture();
   try {
     for (const [name, text, error] of [
-      ["long", "x".repeat(30_000), /cannot fit/],
+      ["long", "x".repeat(150_000), /cannot fit/],
       ["schema", "{", /JSON/],
       ["control", "a\0b", /Binary artifact/],
     ] as const) {

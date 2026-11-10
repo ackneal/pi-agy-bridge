@@ -15,9 +15,7 @@ interface Prompt {
   controller: AbortController;
   snapshots: Map<string, Promise<string>>;
   requests: number;
-  bytes: number;
 }
-const FILE_BYTES = 8 * 1024 * 1024;
 function inside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -46,7 +44,7 @@ export class ArtifactReader {
 
   beginPrompt(): void {
     if (this.prompt) throw new Error("Previous artifact prompt must finish cleanup before starting another");
-    this.prompt = { controller: new AbortController(), snapshots: new Map(), requests: 0, bytes: 0 };
+    this.prompt = { controller: new AbortController(), snapshots: new Map(), requests: 0 };
   }
 
   async endPrompt(): Promise<void> {
@@ -127,9 +125,6 @@ export class ArtifactReader {
     if (await checked(realpath(root)) !== root || await checked(realpath(target)) !== target) throw new Error("Redirected artifact path");
     const initial = await checked(lstat(target));
     if (!initial.isFile() || initial.nlink !== 1) throw new Error("Artifact must be a regular file with a single link");
-    if (initial.size > FILE_BYTES) throw new Error("Artifact file size exceeded");
-    if (prompt.bytes + initial.size > 16 * 1024 * 1024) throw new Error("Artifact source byte budget exceeded");
-    prompt.bytes += initial.size;
 
     // Do not cancellation-wrap open: its eventual descriptor must always be closed.
     const fd = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -157,7 +152,6 @@ export class ArtifactReader {
       debugLog("acp-read", "Image observer started", { path: target, mimeType, bytes: bytes.length });
       const description = await this.options.observeImage({ data: bytes.toString("base64"), mimeType }, signal);
       signal.throwIfAborted();
-      if (Buffer.byteLength(description) > FILE_BYTES) throw new Error("Derived image text too large");
       debugLog("acp-read", "Image observer completed", { path: target, responseBytes: Buffer.byteLength(description) });
       return `Image observation (derived):\n${description}`;
     }
