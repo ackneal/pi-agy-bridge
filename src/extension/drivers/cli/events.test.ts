@@ -83,6 +83,9 @@ describe("EventProcessor", () => {
   const stepsRoot = path.resolve(geminiHome, "antigravity-cli", "brain", artifactSession, ".system_generated", "steps");
   const artifactTitle = `File brain/${artifactSession}/.system_generated/steps/1/output.txt`;
   const artifactInput = { Path: path.join(stepsRoot, "1", "output.txt") };
+  const mcpRoot = path.resolve(geminiHome, "antigravity-cli", "mcp", "pi-agy-bridge_pi");
+  const mcpSchemaInput = { Path: path.join(mcpRoot, "read.json") };
+  const mcpSchemaTitle = `File mcp/pi-agy-bridge_pi/read.json`;
 
   const toolCases: { name: string; call: Omit<ToolCallUpdate, "toolCallId">; warning?: string }[] = [
     ...["read_file", "Running read_file", " \tRUNNING READ_FILE\n"].map((title) => ({ name: title, call: { title } })),
@@ -119,6 +122,10 @@ describe("EventProcessor", () => {
     name: string; calls: ToolCallUpdate[]; warned: boolean; sessionId?: string; warningName?: string;
   }[] = [
     { name: "session UUID artifact", calls: [artifactCall], warned: false },
+    { name: "MCP tool schema path", calls: [{ toolCallId: "mcp-schema", title: mcpSchemaTitle, rawInput: mcpSchemaInput, status: "completed" }], warned: false },
+    { name: "MCP tool schema native title", calls: [{ toolCallId: "mcp-schema", title: "read_file", rawInput: mcpSchemaInput, status: "completed" }], warned: false },
+    { name: "MCP foreign server path", calls: [{ toolCallId: "foreign-schema", title: "read_file", rawInput: { Path: path.resolve(geminiHome, "antigravity-cli", "mcp", "other", "read.json") }, status: "completed" }], warned: true },
+    { name: "MCP non-schema file", calls: [{ toolCallId: "mcp-txt", title: "read_file", rawInput: { Path: path.join(mcpRoot, "notes.txt") }, status: "completed" }], warned: true },
     { name: "read kind", calls: [{ ...artifactCall, kind: "read" }], warned: false },
     { name: "native title still checks path", calls: [{ ...artifactCall, title: "read_file", rawInput: { Path: "/tmp/outside-artifact.txt" } }], warned: true },
     { name: "native title still checks name", calls: [{ ...artifactCall, title: "read_file", name: "edit_file" }], warned: true },

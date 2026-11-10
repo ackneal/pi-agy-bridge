@@ -1,12 +1,12 @@
 {
-  "restrict-read-file": {
+  "gate-tools": {
     "PreToolUse": [
       {
-        "matcher": "^read_file$",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "if [ \"${PI_AGY_BRIDGE_RECOVERY-}\" = 1 ]; then exec \"$PI_AGY_BRIDGE_HOOK_RUNTIME\" ./hooks/restrict-read-file.js; else printf '%s\\n' '{\"decision\":\"allow\"}'; fi",
+            "command": "if [ \"${PI_AGY_BRIDGE_RECOVERY-}\" = 1 ]; then exec \"$PI_AGY_BRIDGE_HOOK_RUNTIME\" ./hooks/gate-tools.js; else printf '%s\\n' '{\"decision\":\"allow\"}'; fi",
             "timeout": 5
           }
         ]

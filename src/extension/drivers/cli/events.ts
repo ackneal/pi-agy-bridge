@@ -60,8 +60,16 @@ function isAllowedNativeTool(call: ToolCallUpdate, sessionId: string): boolean {
   const home = expandHome(process.env.GEMINI_HOME || path.join(os.homedir(), ".gemini"));
   const root = path.resolve(home, "antigravity-cli");
   const steps = path.join(root, "brain", sessionId, ".system_generated", "steps");
-  const relative = path.relative(steps, target);
-  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+  const mcp = path.join(root, "mcp", PI_MCP_SERVER);
+
+  const relativeSteps = path.relative(steps, target);
+  const isStepArtifact = relativeSteps !== "" && relativeSteps !== ".." && !relativeSteps.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeSteps);
+
+  const relativeMcp = path.relative(mcp, target);
+  const isMcpSchema = target.endsWith(".json") &&
+    relativeMcp !== "" && relativeMcp !== ".." && !relativeMcp.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeMcp);
+
+  if (!isStepArtifact && !isMcpSchema) return false;
 
   return nativeTitle || call.title === `File ${path.relative(root, target)}`;
 }
