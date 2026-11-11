@@ -8,7 +8,7 @@ import type { ConnectionOptions } from "./connection.ts";
 import { resolveEffort } from "./options.ts";
 import { debugLog } from "../../shared/debug.ts";
 import { RuntimeSession } from "./runtime.ts";
-import { composeSystemPrompt, fingerprintSystemPrompt } from "./instructions.ts";
+import { composeSystemPrompt, composeBaseSystemPrompt, fingerprintSystemPrompt } from "./instructions.ts";
 
 class PreparationCleanupError extends AggregateError {}
 
@@ -27,8 +27,9 @@ export async function prepareRuntime(
   const requested = resolveEffort(model, options);
   const systemPrompt = standalone
     ? messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n") || undefined
-    : composeSystemPrompt(messages);
-  const compatibilityKey = fingerprintSystemPrompt(JSON.stringify([connection.cwd, systemPrompt]));
+    : composeSystemPrompt(messages, tools);
+  const basePrompt = standalone ? systemPrompt : composeBaseSystemPrompt(messages);
+  const compatibilityKey = basePrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([connection.cwd, basePrompt]));
   const syncKey = calculateSyncKey(systemPrompt, tools.map((tool) => JSON.stringify(tool)), model.id, requested, "acp");
   let resolvedConnection: ConnectionOptions | undefined;
   if (liveSession.driverId !== undefined && liveSession.driverId !== "acp") {
@@ -41,7 +42,9 @@ export async function prepareRuntime(
   check();
   const latest = [...context.messages].reverse().find((message) => message.role === "assistant");
   const decision = standalone ? { action: "rebuild" as const } : dependencies.sync.decide(liveSession, {
-    syncKey, compatibilityKey, messages: context.messages,
+    syncKey,
+    ...(compatibilityKey !== undefined ? { compatibilityKey } : {}),
+    messages: context.messages,
     ...(latest?.responseId ? { conversationId: latest.responseId } : {}),
     ...(checkpoint ? { checkpoint } : {}),
   });
@@ -78,7 +81,7 @@ export async function prepareRuntime(
         ...(requested ? { effort: requested } : {}),
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         ...(conversationId ? { sessionId: conversationId } : {}),
-      }, new Set(tools.map((tool) => tool.name)));
+      }, new Set(tools.map((tool) => tool.name)), compatibilityKey);
       await proc.prepare(options?.signal);
       check();
       if (!proc.isRunning) throw new Error("ACP exited before input delivery");

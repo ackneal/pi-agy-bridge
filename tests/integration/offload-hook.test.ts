@@ -38,10 +38,23 @@ it("restricts native read_file to current conversation regular step files", asyn
     const namedFile = path.join(namedArtifact, ".system_generated/steps/artifact.md");
     await mkdir(path.dirname(namedFile), { recursive: true });
     await writeFile(namedFile, "artifact");
+    const appMcp = path.join(home, "mcp", "pi-agy-bridge_pi");
+    await mkdir(appMcp, { recursive: true });
+    const mcpSchemaFile = path.join(appMcp, "read.json");
+    const mcpArbitraryFile = path.join(appMcp, "arbitrary.txt");
+    await writeFile(mcpSchemaFile, '{"type":"object"}');
+    await writeFile(mcpArbitraryFile, "arbitrary");
+    const foreignMcp = path.join(home, "mcp", "other");
+    await mkdir(foreignMcp, { recursive: true });
+    const foreignSchemaFile = path.join(foreignMcp, "read.json");
+    await writeFile(foreignSchemaFile, '{"type":"object"}');
     const request = (target: string, conversationId = id) => ({ conversationId, artifactDirectoryPath: artifact, toolCall: { name: "read_file", args: { Path: target } } });
     const cases = [
       { name: "current artifact outside default CLI home", input: request(file), decision: "allow" },
-      { name: "non-UUID conversation", input: { conversationId: "named-conversation", artifactDirectoryPath: namedArtifact, toolCall: { args: { Path: namedFile } } }, decision: "allow" },
+      { name: "MCP tool schema in app mcp root", input: request(mcpSchemaFile), decision: "allow" },
+      { name: "arbitrary non-schema file in mcp root", input: request(mcpArbitraryFile), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "foreign server in mcp root", input: request(foreignSchemaFile), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
+      { name: "non-UUID conversation", input: { conversationId: "named-conversation", artifactDirectoryPath: namedArtifact, toolCall: { name: "read_file", args: { Path: namedFile } } }, decision: "allow" },
       { name: "internal symlink", input: request(path.join(steps, "internal")), decision: "allow" },
       { name: "cross conversation", input: request(path.join(other, "artifact.md")), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
       { name: "project file", input: request(project), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
@@ -85,7 +98,13 @@ it("restricts native read_file to current conversation regular step files", asyn
       { name: "traversal", input: request(`${steps}/../steps/artifact.md`), decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
       { name: "relative path", input: request("artifact.md"), decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
       { name: "conversation mismatch", input: request(file, "../escape"), decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
-      { name: "tool selection belongs to manifest", input: { ...request(file), toolCall: { name: "another_tool", args: { Path: file } } }, decision: "allow" },
+      { name: "unauthorized tool is denied", input: { ...request(file), toolCall: { name: "another_tool", args: { Path: file } } }, decision: "deny", reason: "Tool 'another_tool' is unauthorized. In Pi bridge mode, only 'call_mcp_tool' (for Pi tools) and 'read_file' (for step artifacts) are allowed." },
+      { name: "call_mcp_tool with pi-agy-bridge_pi is allowed", input: { ...request(file), toolCall: { name: "call_mcp_tool", args: { ServerName: "pi-agy-bridge_pi", ToolName: "read" } } }, decision: "allow" },
+      { name: "call_mcp_tool with foreign server is denied", input: { ...request(file), toolCall: { name: "call_mcp_tool", args: { ServerName: "foreign_server", ToolName: "read" } } }, decision: "deny", reason: "MCP server 'foreign_server' is unauthorized. Only 'pi-agy-bridge_pi' is allowed in Pi bridge mode." },
+      { name: "call_mcp_tool with missing ServerName is denied", input: { ...request(file), toolCall: { name: "call_mcp_tool", args: { ToolName: "read" } } }, decision: "deny", reason: "MCP server '' is unauthorized. Only 'pi-agy-bridge_pi' is allowed in Pi bridge mode." },
+      { name: "manage_task is denied", input: { ...request(file), toolCall: { name: "manage_task", args: {} } }, decision: "deny", reason: "Tool 'manage_task' is unauthorized. In Pi bridge mode, only 'call_mcp_tool' (for Pi tools) and 'read_file' (for step artifacts) are allowed." },
+      { name: "web_search is denied", input: { ...request(file), toolCall: { name: "web_search", args: { query: "test" } } }, decision: "deny", reason: "Tool 'web_search' is unauthorized. In Pi bridge mode, only 'call_mcp_tool' (for Pi tools) and 'read_file' (for step artifacts) are allowed." },
+      { name: "list_resources is denied", input: { ...request(file), toolCall: { name: "list_resources", args: {} } }, decision: "deny", reason: "Tool 'list_resources' is unauthorized. In Pi bridge mode, only 'call_mcp_tool' (for Pi tools) and 'read_file' (for step artifacts) are allowed." },
       { name: "legacy AbsolutePath is rejected", input: { ...request(file), toolCall: { name: "read_file", args: { AbsolutePath: file } } }, decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
       { name: "legacy AbsolutePath cannot override Path", input: { ...request(file), toolCall: { name: "read_file", args: { Path: project, AbsolutePath: file } } }, decision: "deny", reason: "Authorization Denied: Access is restricted to current-conversation artifacts" },
       { name: "null", input: null, decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
@@ -94,8 +113,8 @@ it("restricts native read_file to current conversation regular step files", asyn
       { name: "malformed JSON", input: undefined, decision: "deny", reason: "Malformed Request: Invalid or missing arguments" },
     ];
     const manifest = JSON.parse(await readFile(path.join(plugin, "hooks.json"), "utf8"));
-    const policy = manifest["restrict-read-file"].PreToolUse[0];
-    assert.equal(policy.matcher, "^read_file$");
+    const policy = manifest["gate-tools"].PreToolUse[0];
+    assert.equal(policy.matcher, ".*");
     const hook = policy.hooks[0];
     assert.equal(hook.type, "command");
     assert.equal(hook.timeout, 5);
@@ -125,7 +144,7 @@ it("gates the command on the exact recovery marker", async (t) => {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const inputPath = path.join(directory, "input");
   const manifest = JSON.parse(await readFile(path.join(plugin, "hooks.json"), "utf8"));
-  const command = manifest["restrict-read-file"].PreToolUse[0].hooks[0].command;
+  const command = manifest["gate-tools"].PreToolUse[0].hooks[0].command;
   const missingNode = path.join(plugin, "nonexistent-node");
   const cases = [
     { name: "unmarked delegates despite invalid metadata", marker: undefined, node: process.execPath, input: "{}", decision: "allow" },

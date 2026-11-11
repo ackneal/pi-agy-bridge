@@ -64,8 +64,9 @@ async function installPlugin(agyPath: string | undefined, pluginDir: string): Pr
   const installedManifest = await readPluginManifest(path.join(targetDir, "plugin.json"));
   if (installedManifest?.version === sourceManifest.version) {
     try {
-      // This required agent was added without changing the plugin version.
+      // Required bridge assets added without changing the plugin version.
       await fs.access(path.join(targetDir, "agents", "pi-bridge.md"));
+      await fs.access(path.join(targetDir, "hooks", "gate-tools.js"));
       return;
     } catch (error) {
       if (!isNodeError(error, "ENOENT")) throw error;

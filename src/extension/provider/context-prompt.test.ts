@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe, it } from "node:test";
-import type { AssistantMessage, Context, Message } from "@earendil-works/pi-ai";
-import { prepareBridgeMessages, serializeConversation } from "./context-prompt.ts";
+import type { AssistantMessage, Context, Message, Tool } from "@earendil-works/pi-ai";
+import { prepareBridgeMessages, serializeConversation, serializeToolSnippets } from "./context-prompt.ts";
 import { serializeContent } from "../drivers/acp/runtime.ts";
 import { serializePrompt } from "../drivers/cli/runtime.ts";
 
@@ -686,4 +686,46 @@ test("standalone raw content bypasses markdown transcript wrapping", () => {
   assert.ok(!cliPrompt.includes("# System prompt"));
   assert.ok(!cliPrompt.includes("## User"));
   assert.ok(!cliPrompt.startsWith("> ") && !cliPrompt.includes("\n> "));
+});
+
+describe("serializeToolSnippets", () => {
+  const cases: { name: string; tools?: readonly Tool[] | undefined; expected: string }[] = [
+    { name: "undefined", tools: undefined, expected: "" },
+    { name: "empty list", tools: [], expected: "" },
+    {
+      name: "tool with single-line description",
+      tools: [{ name: "read", description: "Read a file from workspace", parameters: {} as any }],
+      expected: "- read: Read a file from workspace",
+    },
+    {
+      name: "tool with multiline description and extra whitespace",
+      tools: [{ name: "bash", description: "Execute a command.\n  Second line\r\n\twith spaces.", parameters: {} as any }],
+      expected: "- bash: Execute a command. Second line with spaces.",
+    },
+    {
+      name: "tool with empty description",
+      tools: [{ name: "custom", description: "", parameters: {} as any }],
+      expected: "- custom",
+    },
+    {
+      name: "tool with whitespace description",
+      tools: [{ name: "noop", description: "   \n\t  ", parameters: {} as any }],
+      expected: "- noop",
+    },
+    {
+      name: "multiple tools preserve order",
+      tools: [
+        { name: "read", description: "Read a file", parameters: {} as any },
+        { name: "write", description: "Write content to a file", parameters: {} as any },
+        { name: "edit", description: "", parameters: {} as any },
+      ],
+      expected: "- read: Read a file\n- write: Write content to a file\n- edit",
+    },
+  ];
+
+  for (const row of cases) {
+    it(row.name, () => {
+      assert.equal(serializeToolSnippets(row.tools), row.expected);
+    });
+  }
 });

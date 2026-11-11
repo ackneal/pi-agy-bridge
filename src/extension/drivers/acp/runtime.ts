@@ -62,9 +62,10 @@ export class RuntimeSession implements DriverSession {
   constructor(
     options: Omit<SessionOptions, "onUpdate" | "onRead">,
     allowedToolNames: ReadonlySet<string> = new Set(),
+    compatibilityKey?: string,
   ) {
     this.options = options;
-    this.compatibilityKey = options.systemPrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt]));
+    this.compatibilityKey = compatibilityKey ?? (options.systemPrompt === undefined ? undefined : fingerprintSystemPrompt(JSON.stringify([options.cwd, options.systemPrompt])));
     this.allowedToolNames = allowedToolNames;
     this.reader = new ArtifactReader({
       home: this.home,

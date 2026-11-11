@@ -10,7 +10,7 @@ function inside(root, candidate) {
   return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-async function decide(input) {
+export async function decide(input) {
   const id = input?.conversationId;
   const artifact = input?.artifactDirectoryPath;
   const target = input?.toolCall?.args?.Path;
@@ -20,10 +20,21 @@ async function decide(input) {
     return malformed;
   }
 
-  const root = path.join(artifact, ".system_generated", "steps");
-  if (path.basename(artifact) !== id || !inside(root, target)) {
+  if (path.basename(artifact) !== id) {
     return unauthorized;
   }
+
+  const stepsRoot = path.join(artifact, ".system_generated", "steps");
+  const appMcpRoot = path.join(path.dirname(path.dirname(artifact)), "mcp", "pi-agy-bridge_pi");
+
+  const isStepArtifact = inside(stepsRoot, target);
+  const isMcpTarget = target.endsWith(".json") && inside(appMcpRoot, target);
+
+  if (!isStepArtifact && !isMcpTarget) {
+    return unauthorized;
+  }
+
+  const root = isStepArtifact ? stepsRoot : appMcpRoot;
 
   try {
     const [resolvedRoot, resolvedTarget] = await Promise.all([realpath(root), realpath(target)]);
@@ -38,13 +49,14 @@ async function decide(input) {
   return { decision: "allow" };
 }
 
-try {
-  let input = "";
-  for await (const chunk of process.stdin) {
-    input += chunk;
-    if (Buffer.byteLength(input) > 1024 * 1024) throw new Error("Input too large");
+if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]))) {
+  try {
+    let input = "";
+    for await (const chunk of process.stdin) {
+      input += chunk;
+    }
+    console.log(JSON.stringify(await decide(JSON.parse(input))));
+  } catch {
+    console.log(JSON.stringify(malformed));
   }
-  console.log(JSON.stringify(await decide(JSON.parse(input))));
-} catch {
-  console.log(JSON.stringify(malformed));
 }

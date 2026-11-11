@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { debugLog, isDebugEnabled } from "../shared/debug.ts";
-import { getCurrentSystemPrompt, normalizeContext, type Context, type ImageContent, type Message, type TextContent } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt, normalizeContext, type Context, type ImageContent, type Message, type TextContent, type Tool } from "@earendil-works/pi-ai";
 import type { BridgeMessage, ContentPart } from "../drivers/types.ts";
 
 type ContextPart = string | ImageContent;
@@ -218,6 +218,15 @@ interface ResolvedToolCall {
   call: ToolCall;
   status: "SUCCESS" | "ERROR" | "ABORTED" | "UNKNOWN";
   suffix: string;
+}
+
+export function serializeToolSnippets(tools?: readonly Tool[]): string {
+  if (!tools?.length) return "";
+
+  return tools.map((tool) => {
+    const desc = tool.description ? tool.description.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim() : "";
+    return desc ? `- ${tool.name}: ${desc}` : `- ${tool.name}`;
+  }).join("\n");
 }
 
 export function serializeToolArguments(call: ToolCall): string {
