@@ -235,7 +235,7 @@ describe("CLI catalog discovery and persistence", () => {
     assert.equal(stored.agy.models[0].maxTokens, 65536);
     assert.deepEqual(stored.agy.models[0].cost, { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 });
     const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    assert.equal(stored.agy.models[1].maxTokens, 16384);
+    assert.equal(stored.agy.models[1].maxTokens, 65536);
     assert.deepEqual(stored.agy.models[1].cost, defaultCost);
 
     const next = await ModelRuntime.create({ modelsPath, authPath: path.join(directory, "auth.json"), refreshOnCreate: false });
