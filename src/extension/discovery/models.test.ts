@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { discoverAgyModels, restoreStoredAgyModels, parseModelsOutput } from "./models.ts";
 
 const argonCost = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 };
+const hydrogenCost = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
 const flashCost = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
@@ -11,16 +12,17 @@ const unsupported = { off: null, minimal: null, low: null, medium: null, high: n
 
 describe("Antigravity CLI model discovery", () => {
   for (const { id, maxTokens, cost } of [
-    { id: "gemini-4-argon", maxTokens: 16_384, cost: argonCost },
-    { id: "gemini-4-argon-cyber-permissive", maxTokens: 16_384, cost: argonCost },
+    { id: "gemini-4-argon", maxTokens: 65_536, cost: argonCost },
+    { id: "gemini-4-carbon", maxTokens: 65_536, cost: argonCost },
+    { id: "gemini-4-hydrogen", maxTokens: 65_536, cost: hydrogenCost },
     { id: "gemini-3.8-flash", maxTokens: 65_536, cost: flashCost },
-    { id: "gemini-3.7-flash", maxTokens: 16_384, cost: zeroCost },
-    { id: "gemini-3.6-flash", maxTokens: 16_384, cost: zeroCost },
-    { id: "gemini-3.1-pro", maxTokens: 16_384, cost: zeroCost },
-    { id: "gemini-3.1-pro-preview", maxTokens: 16_384, cost: zeroCost },
-    { id: "gemini-3.1-pro-preview-customtools", maxTokens: 16_384, cost: zeroCost },
-    { id: "gemini-new-flash", maxTokens: 16_384, cost: zeroCost },
-    { id: "gemini-3.8-flash-preview", maxTokens: 16_384, cost: zeroCost },
+    { id: "gemini-3.7-flash", maxTokens: 65_536, cost: zeroCost },
+    { id: "gemini-3.6-flash", maxTokens: 65_536, cost: zeroCost },
+    { id: "gemini-3.1-pro", maxTokens: 65_536, cost: zeroCost },
+    { id: "gemini-3.1-pro-preview", maxTokens: 65_536, cost: zeroCost },
+    { id: "gemini-3.1-pro-preview-customtools", maxTokens: 65_536, cost: zeroCost },
+    { id: "gemini-new-flash", maxTokens: 65_536, cost: zeroCost },
+    { id: "gemini-3.8-flash-preview", maxTokens: 65_536, cost: zeroCost },
   ]) {
     it(`applies metadata after effort normalization: ${id}`, () => {
       const [model] = parseModelsOutput(`${id}-high  Gemini (High)`);
@@ -53,7 +55,8 @@ describe("Antigravity CLI model discovery", () => {
 
   for (const { id, rates } of [
     { id: "gemini-4-argon", rates: argonCost },
-    { id: "gemini-4-argon-cyber-permissive", rates: argonCost },
+    { id: "gemini-4-carbon", rates: argonCost },
+    { id: "gemini-4-hydrogen", rates: hydrogenCost },
     { id: "gemini-3.8-flash", rates: flashCost },
   ]) {
     it(`uses global standard pricing without promotional discounts: ${id}`, () => {
@@ -212,7 +215,7 @@ gpt-oss-120b-medium       GPT-OSS 120B (Medium)
       assert.equal(model.api, "agy");
       assert.equal(model.baseUrl, "agy");
       assert.equal(model.type, "chat");
-      assert.equal(model.maxTokens, model.id === "gemini-3.8-flash" ? 65_536 : 16_384);
+      assert.equal(model.maxTokens, model.id.startsWith("gemini-") ? 65_536 : 16_384);
       assert.deepEqual(model.input, ["text", "image"]);
       assert.equal(typeof model.name, "string");
       assert.equal(model.reasoning, true);
