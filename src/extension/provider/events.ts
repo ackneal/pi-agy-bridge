@@ -1,4 +1,4 @@
-import type { AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, TextContent, ToolCall } from "@earendil-works/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, TextContent, ThinkingContent, ToolCall } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 
 export interface PiEventWriterOptions {
@@ -12,7 +12,7 @@ export class PiEventWriter {
   public readonly stream: AssistantMessageEventStream;
   private started = false;
   private completed = false;
-  private currentTextIndex: number | null = null;
+  private currentContentIndex: number | null = null;
   private partial: AssistantMessage;
 
   constructor(options: PiEventWriterOptions) {
@@ -112,47 +112,59 @@ export class PiEventWriter {
   }
 
   public appendTextDelta(delta: string): void {
-    if (this.completed) return;
+    this.appendContentDelta("text", delta);
+  }
+
+  public appendThinkingDelta(delta: string): void {
+    this.appendContentDelta("thinking", delta);
+  }
+
+  private appendContentDelta(kind: "text" | "thinking", delta: string): void {
+    if (this.completed || (kind === "thinking" && delta.length === 0)) return;
 
     this.ensureStarted();
-    if (this.currentTextIndex === null) {
-      const textBlock: TextContent = {
-        type: "text",
-        text: "",
-      };
-      this.partial.content.push(textBlock);
-      this.currentTextIndex = this.partial.content.length - 1;
+    if (this.currentContentIndex !== null && this.partial.content[this.currentContentIndex]?.type !== kind) {
+      this.closeActiveText();
+    }
+    if (this.currentContentIndex === null) {
+      const block: TextContent | ThinkingContent = kind === "text"
+        ? { type: "text", text: "" }
+        : { type: "thinking", thinking: "" };
+      this.partial.content.push(block);
+      this.currentContentIndex = this.partial.content.length - 1;
 
       this.stream.push({
-        type: "text_start",
-        contentIndex: this.currentTextIndex,
+        type: `${kind}_start`,
+        contentIndex: this.currentContentIndex,
         partial: this.snapshot(),
       });
     }
 
-    (this.partial.content[this.currentTextIndex] as TextContent).text += delta;
+    const block = this.partial.content[this.currentContentIndex] as TextContent | ThinkingContent;
+    if (block.type === "text") block.text += delta;
+    else block.thinking += delta;
 
     this.stream.push({
-      type: "text_delta",
-      contentIndex: this.currentTextIndex,
+      type: `${kind}_delta`,
+      contentIndex: this.currentContentIndex,
       delta,
       partial: this.snapshot(),
     });
   }
 
   public closeActiveText(): void {
-    if (this.currentTextIndex !== null) {
-      const index = this.currentTextIndex;
-      const content = (this.partial.content[index] as TextContent).text;
-      this.currentTextIndex = null;
+    if (this.completed || this.currentContentIndex === null) return;
 
-      this.stream.push({
-        type: "text_end",
-        contentIndex: index,
-        content,
-        partial: this.snapshot(),
-      });
-    }
+    const index = this.currentContentIndex;
+    const block = this.partial.content[index] as TextContent | ThinkingContent;
+    this.currentContentIndex = null;
+
+    this.stream.push({
+      type: `${block.type}_end`,
+      contentIndex: index,
+      content: block.type === "text" ? block.text : block.thinking,
+      partial: this.snapshot(),
+    });
   }
 
   public appendToolCall(toolCall: ToolCall): void {

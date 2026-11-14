@@ -60,7 +60,11 @@ describe("EventProcessor notifications and completion", () => {
   for (const row of [
     { name: "text delta", update: textUpdate, source: "live", sessionId: "session", expected: [{ type: "session-reference", reference: "session" }, { type: "text-delta", delta: "hello" }] },
     { name: "empty text delta", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "" } }, source: "live", sessionId: "session", expected: [{ type: "session-reference", reference: "session" }] },
-    { name: "thought chunk ignored", update: { ...textUpdate, sessionUpdate: "agent_thought_chunk" }, source: "live", sessionId: "session", expected: [] },
+    { name: "thought delta", update: { ...textUpdate, sessionUpdate: "agent_thought_chunk" }, source: "live", sessionId: "session", expected: [{ type: "session-reference", reference: "session" }, { type: "thinking-delta", delta: "hello" }] },
+    { name: "empty thought delta", update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "" } }, source: "live", sessionId: "session", expected: [{ type: "session-reference", reference: "session" }] },
+    { name: "replay thought suppressed", update: { ...textUpdate, sessionUpdate: "agent_thought_chunk" }, source: "replay", sessionId: "session", expected: [] },
+    { name: "foreign thought ignored", update: { ...textUpdate, sessionUpdate: "agent_thought_chunk" }, source: "live", sessionId: "other", expected: [] },
+    { name: "image thought ignored", update: { sessionUpdate: "agent_thought_chunk", content: { type: "image", data: "AA==", mimeType: "image/png" } }, source: "live", sessionId: "session", expected: [] },
     { name: "user chunk ignored", update: { ...textUpdate, sessionUpdate: "user_message_chunk" }, source: "live", sessionId: "session", expected: [] },
     { name: "image chunk ignored", update: { sessionUpdate: "agent_message_chunk", content: { type: "image", data: "AA==", mimeType: "image/png" } }, source: "live", sessionId: "session", expected: [] },
     { name: "native tool call ignored", update: { sessionUpdate: "tool_call", toolCallId: "native", title: "read", status: "pending" }, source: "live", sessionId: "session", expected: [] },

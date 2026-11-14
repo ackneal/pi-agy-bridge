@@ -101,6 +101,7 @@ export type RuntimeEvent =
   | { type: "text-close" }
   | { type: "session-reference"; reference: string }
   | { type: "text-delta"; delta: string }
+  | { type: "thinking-delta"; delta: string }
   | { type: "usage"; usage: AssistantMessage["usage"] }
   | { type: "accounting"; usage: AssistantMessage["usage"]; lastCallUsage?: AssistantMessage["usage"] }
   | { type: "complete"; reason: "stop" | "toolUse" | "error" | "aborted"; error?: string | undefined; cause?: unknown; resumable: boolean }
