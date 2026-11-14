@@ -120,9 +120,11 @@ export class EventProcessor {
       if (record(before)) call._meta = { ...call._meta, mcp: record(after) ? { ...before, ...after } : before };
       this.calls.set(id, { call });
       this.check(id, emit, update.status === "completed" || update.status === "failed");
-    } else if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+    } else if ((update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") && update.content.type === "text") {
       emit({ type: "session-reference", reference: this.sessionId });
-      if (update.content.text.length > 0) emit({ type: "text-delta", delta: update.content.text });
+      if (update.content.text.length > 0) {
+        emit({ type: update.sessionUpdate === "agent_thought_chunk" ? "thinking-delta" : "text-delta", delta: update.content.text });
+      }
     }
   }
 
