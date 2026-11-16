@@ -89,6 +89,77 @@ for (const stage of ["before-start", "after-text-close"] as const) {
   });
 }
 
+const thinkingCases: {
+  name: string;
+  act: (writer: PiEventWriter) => void;
+  lifecycle: string[];
+  content: PiEventWriter["message"]["content"];
+}[] = [
+  { name: "thinking deltas share a block", act: (w) => { w.appendThinkingDelta("a"); w.appendThinkingDelta("b"); w.finish(); },
+    lifecycle: ["start", "thinking_start:0", "thinking_delta:0", "thinking_delta:0", "thinking_end:0", "done"],
+    content: [{ type: "thinking", thinking: "ab" }] },
+  { name: "alternating kinds close before opening the next block", act: (w) => { w.appendThinkingDelta("a"); w.appendTextDelta("b"); w.appendThinkingDelta("c"); w.finish(); },
+    lifecycle: ["start", "thinking_start:0", "thinking_delta:0", "thinking_end:0", "text_start:1", "text_delta:1", "text_end:1", "thinking_start:2", "thinking_delta:2", "thinking_end:2", "done"],
+    content: [{ type: "thinking", thinking: "a" }, { type: "text", text: "b" }, { type: "thinking", thinking: "c" }] },
+  { name: "tool call closes thinking", act: (w) => { w.appendThinkingDelta("a"); w.appendToolCall(tool); w.finish(); },
+    lifecycle: ["start", "thinking_start:0", "thinking_delta:0", "thinking_end:0", "toolcall_start:1", "toolcall_delta:1", "toolcall_end:1", "done"],
+    content: [{ type: "thinking", thinking: "a" }, tool] },
+  { name: "text-close boundary splits thinking blocks", act: (w) => { w.appendThinkingDelta("a"); w.closeActiveText(); w.closeActiveText(); w.appendThinkingDelta("b"); w.finish(); },
+    lifecycle: ["start", "thinking_start:0", "thinking_delta:0", "thinking_end:0", "thinking_start:1", "thinking_delta:1", "thinking_end:1", "done"],
+    content: [{ type: "thinking", thinking: "a" }, { type: "thinking", thinking: "b" }] },
+  { name: "empty thinking does not create blocks or interrupt text", act: (w) => { w.appendThinkingDelta(""); w.appendTextDelta("a"); w.appendThinkingDelta(""); w.appendTextDelta("b"); w.finish(); },
+    lifecycle: ["start", "text_start:0", "text_delta:0", "text_delta:0", "text_end:0", "done"],
+    content: [{ type: "text", text: "ab" }] },
+  { name: "empty thinking alone emits no block", act: (w) => { w.appendThinkingDelta(""); w.finish(); },
+    lifecycle: ["start", "done"], content: [] },
+  ...(["error", "aborted"] as const).map((reason) => ({
+    name: `${reason} closes thinking`, act: (w: PiEventWriter) => { w.appendThinkingDelta("a"); w.handleTermination(reason, "failure"); },
+    lifecycle: ["start", "thinking_start:0", "thinking_delta:0", "thinking_end:0", "error"],
+    content: [{ type: "thinking" as const, thinking: "a" }],
+  })),
+];
+
+for (const row of thinkingCases) {
+  test(`native thinking writer: ${row.name}`, async () => {
+    const writer = new PiEventWriter({ model: "model" });
+
+    row.act(writer);
+    const final = writer.message;
+    writer.appendThinkingDelta("late");
+    writer.appendTextDelta("late");
+    writer.closeActiveText();
+    writer.appendToolCall(tool);
+    writer.finish();
+    writer.handleTermination("error", "late");
+    const events: AssistantMessageEvent[] = [];
+    for await (const event of writer.stream) events.push(event);
+
+    assert.deepEqual(events.map((event) => "contentIndex" in event ? `${event.type}:${event.contentIndex}` : event.type), row.lifecycle);
+    assert.deepEqual(final.content, row.content);
+    assert.deepEqual(writer.message, final);
+    const accumulated: PiEventWriter["message"]["content"] = [];
+    for (const event of events) {
+      if (event.type === "text_start") accumulated.push({ type: "text", text: "" });
+      if (event.type === "thinking_start") accumulated.push({ type: "thinking", thinking: "" });
+      if (event.type === "toolcall_start") accumulated.push(tool);
+      if (event.type === "text_delta" || event.type === "thinking_delta") {
+        const block = accumulated[event.contentIndex]!;
+        if (block.type === "text") block.text += event.delta;
+        if (block.type === "thinking") block.thinking += event.delta;
+      }
+      if (event.type === "text_end" || event.type === "thinking_end") {
+        const block = accumulated[event.contentIndex]!;
+        assert.equal(event.content, block.type === "text" ? block.text : block.type === "thinking" ? block.thinking : undefined);
+      }
+      const snapshot = "partial" in event ? event.partial : event.type === "done" ? event.message : event.error;
+      assert.deepEqual(snapshot.content, accumulated, `${event.type} snapshot reflects only content emitted so far`);
+    }
+    const thinking = final.content.find((block) => block.type === "thinking");
+    if (thinking) thinking.thinking = "mutated snapshot";
+    assert.deepEqual(writer.message.content, row.content);
+  });
+}
+
 const accountingUsage = {
   inputTokens: 848726, outputTokens: 7989, cachedReadTokens: 697052,
   thoughtTokens: 4474, totalTokens: 856715,

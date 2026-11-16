@@ -31,6 +31,59 @@ describe("EventProcessor", () => {
     ]);
   });
 
+  test("handles agent_thought_chunk updates", () => {
+    const cases: {
+      name: string;
+      sessionId: string;
+      source: "live" | "replay";
+      update: SessionNotification["update"];
+      expected: RuntimeEvent[];
+    }[] = [
+      {
+        name: "live text thought delta",
+        sessionId: "session-123",
+        source: "live",
+        update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking..." } },
+        expected: [{ type: "session-reference", reference: "session-123" }, { type: "thinking-delta", delta: "Thinking..." }],
+      },
+      {
+        name: "empty text thought delta",
+        sessionId: "session-123",
+        source: "live",
+        update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "" } },
+        expected: [{ type: "session-reference", reference: "session-123" }],
+      },
+      {
+        name: "replay thought suppressed",
+        sessionId: "session-123",
+        source: "replay",
+        update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking..." } },
+        expected: [],
+      },
+      {
+        name: "foreign session thought ignored",
+        sessionId: "other-session",
+        source: "live",
+        update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking..." } },
+        expected: [],
+      },
+      {
+        name: "non-text thought ignored",
+        sessionId: "session-123",
+        source: "live",
+        update: { sessionUpdate: "agent_thought_chunk", content: { type: "image", data: "AA==", mimeType: "image/png" } },
+        expected: [],
+      },
+    ];
+
+    for (const row of cases) {
+      const processor = new EventProcessor("session-123");
+      const events: RuntimeEvent[] = [];
+      processor.process({ sessionId: row.sessionId, update: row.update }, row.source, (e) => events.push(e));
+      assert.deepEqual(events, row.expected, row.name);
+    }
+  });
+
   test("ignores notifications from other sessions or replay", () => {
     const processor = new EventProcessor("session-123");
     const events: RuntimeEvent[] = [];

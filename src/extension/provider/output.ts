@@ -33,6 +33,7 @@ export class PiRuntimeOutput {
       case "text-close": this.writer.closeActiveText(); break;
       case "session-reference": this.writer.setResponseId(event.reference); break;
       case "text-delta": this.writer.appendTextDelta(event.delta); break;
+      case "thinking-delta": this.writer.appendThinkingDelta(event.delta); break;
       case "usage": this.writer.setUsage(event.usage); break;
       // Standalone summaries return their accounting to Pi's summary caller.
       // Conversation turns persist accounting separately before reaching here.
