@@ -208,3 +208,13 @@ bun run typecheck
 bun run test
 ```
 
+### ACP Registry Automation
+
+[`.github/workflows/acp-registry.yml`](.github/workflows/acp-registry.yml) runs weekly on Mondays at `06:00 UTC` and on manual `workflow_dispatch` to sync [`src/extension/drivers/acp/registry.json`](src/extension/drivers/acp/registry.json) against upstream and open or update a single pull request on `automation/update-acp-registry`.
+
+Required GitHub repository settings:
+
+1. **Repository variable:** Set `ACP_REGISTRY_UPSTREAM_URL` under **Settings → Secrets and variables → Actions → Variables** to the upstream registry JSON URL. If unset, scheduled runs skip without modifying files or creating a PR.
+2. **Actions PR permission:** Enable **Allow GitHub Actions to create and approve pull requests** under **Settings → Actions → General → Workflow permissions** so `GITHUB_TOKEN` can create and update pull requests.
+3. **CI check approval:** Pull requests created or updated with `GITHUB_TOKEN` create `CI` workflow runs in an **Awaiting approval** state. A maintainer with write access must select **Approve workflows to run** on the PR before required CI checks execute.
+

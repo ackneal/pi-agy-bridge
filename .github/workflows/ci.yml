@@ -24,6 +24,3 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - run: npm pack --dry-run
-
-  acp-registry:
-    uses: ./.github/workflows/acp-registry.yml

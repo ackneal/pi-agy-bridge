@@ -1,61 +1,60 @@
-name: ACP Registry Check
+name: ACP Registry Sync
 
 on:
-  workflow_call:
   schedule:
     - cron: '0 6 * * 1'
   workflow_dispatch:
+
+concurrency:
+  group: acp-registry-sync
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  check:
-    name: ACP Registry Check
+  sync:
+    name: Sync ACP Registry
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Compare local registry.json with upstream
+      - name: Sync registry.json with upstream
+        id: sync
         env:
-          UPSTREAM_URL: ${{ vars.ACP_REGISTRY_UPSTREAM_URL }}
-        run: |
-          node --input-type=module -e '
-            import { appendFileSync, readFileSync } from "node:fs";
-            import { isDeepStrictEqual } from "node:util";
+          ACP_REGISTRY_UPSTREAM_URL: ${{ vars.ACP_REGISTRY_UPSTREAM_URL }}
+        run: node scripts/acp-registry-sync.ts
+      - name: Verify automation branch ownership
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/acp-registry-branch-guard.ts
+      - name: Create or update ACP registry PR
+        if: steps.sync.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ github.token }}
+          base: main
+          branch: automation/update-acp-registry
+          delete-branch: true
+          add-paths: src/extension/drivers/acp/registry.json
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          commit-message: "chore: update ACP registry to ${{ steps.sync.outputs.upstream_version }}"
+          title: "chore: update ACP registry to ${{ steps.sync.outputs.upstream_version }}"
+          body: |
+            Update `src/extension/drivers/acp/registry.json` from `${{ steps.sync.outputs.local_version }}` to `${{ steps.sync.outputs.upstream_version }}`.
 
-            const localPath = "src/extension/drivers/acp/registry.json";
-            const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-            const note = (line) => summaryPath && appendFileSync(summaryPath, `${line}\n`);
-            const escape = (msg) => msg.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
-            const url = process.env.UPSTREAM_URL?.trim();
+            - Source: `${{ vars.ACP_REGISTRY_UPSTREAM_URL }}`
+            - Validated schema, platform coverage, official Google HTTPS archive URLs, and SHA-256 checksums without downloading binaries.
 
-            if (!url) {
-              console.log("::notice::ACP_REGISTRY_UPSTREAM_URL is not set; skipping upstream check.");
-              note("- **ACP registry check:** skipped (`ACP_REGISTRY_UPSTREAM_URL` is not set).");
-              process.exit(0);
-            }
-
-            try {
-              const local = JSON.parse(readFileSync(localPath, "utf8"));
-              const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-              if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`.trim());
-              const upstream = await res.json();
-
-              if (isDeepStrictEqual(local, upstream)) {
-                const msg = `ACP registry matches upstream (version ${local.version}).`;
-                console.log(msg);
-                note(`- **ACP registry check:** ${msg}`);
-              } else {
-                const msg = `Local ACP registry (${local.version}) differs from upstream (${upstream.version}).`;
-                console.log(`::warning file=${localPath},title=ACP registry differs from upstream::${escape(msg)}`);
-                note(`- **ACP registry check:** ⚠️ ${msg}`);
-              }
-            } catch (err) {
-              const reason = err instanceof Error ? err.message : String(err);
-              console.log(`::warning title=ACP registry check skipped::${escape(reason)}`);
-              note(`- **ACP registry check skipped:** ${reason}`);
-            }
-          '
+            > [!NOTE]
+            > Because this pull request was created or updated with `GITHUB_TOKEN`, a maintainer with write access must approve workflow runs in the merge box before required CI checks execute.
