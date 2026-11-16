@@ -12,8 +12,11 @@ import {
   AUTOMATION_BRANCH,
   AUTOMATION_REGISTRY_PATH,
   inspectGitBranchState,
+  type OpenPullRequestSummary,
+  type PullRequestClient,
+  publishAutomationPullRequest,
   validateAutomationBranchState,
-} from "../../scripts/acp-registry-branch-guard.ts";
+} from "../../scripts/acp-registry-pr.ts";
 import {
   type AcpRegistry,
   fetchUpstreamRegistry,
@@ -430,7 +433,7 @@ describe("ACP registry PR branch ownership guard", () => {
     });
   }
 
-  it("updates existing automation PR when a newer upstream version arrives and blocks manual commits", async (t) => {
+  it("creates, skips unchanged, updates on newer upstream version, and blocks manual commits", async (t) => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "acp-registry-git-"));
     t.after(() => rm(dir, { recursive: true, force: true }));
 
@@ -452,24 +455,65 @@ describe("ACP registry PR branch ownership guard", () => {
     await git(["commit", "-m", "chore: initial registry 1.5.0"]);
     await git(["push", "-u", "origin", "main"]);
 
-    // Open automation PR #48 on automation/update-acp-registry at 1.5.1.
-    const botEnv = {
-      GIT_AUTHOR_NAME: AUTOMATION_BOT_LOGIN,
-      GIT_AUTHOR_EMAIL: AUTOMATION_BOT_EMAIL,
-      GIT_COMMITTER_NAME: AUTOMATION_BOT_LOGIN,
-      GIT_COMMITTER_EMAIL: AUTOMATION_BOT_EMAIL,
+    let openPrs: OpenPullRequestSummary[] = [];
+    const prCalls: Array<{ action: "create" | "update"; title: string; body: string; prNumber?: number }> = [];
+    const prClient: PullRequestClient = {
+      async fetchOpenPullRequests() {
+        return openPrs;
+      },
+      async createPullRequest({ title, body }) {
+        prCalls.push({ action: "create", title, body });
+        openPrs = [{ number: 48, authorLogin: AUTOMATION_BOT_LOGIN, baseRef: "main" }];
+        return "https://github.com/ackneal/pi-agy-bridge/pull/48";
+      },
+      async updatePullRequest({ prNumber, title, body }) {
+        prCalls.push({ action: "update", prNumber, title, body });
+      },
     };
-    await git(["checkout", "-b", AUTOMATION_BRANCH]);
+
+    // 1. Initial upstream 1.5.1 creates branch + PR #48.
     await syncAcpRegistry({
       registryPath: registryFile,
       upstreamUrl: "https://registry.test/agent.json",
       fetchImpl: async () => new Response(JSON.stringify(makeRegistryVersion("1.5.1", "a")), { status: 200 }),
     });
-    await git(["add", AUTOMATION_REGISTRY_PATH]);
-    await git(["commit", "-m", "chore: update ACP registry to 1.5.1"], botEnv);
-    await git(["push", "-u", "origin", AUTOMATION_BRANCH]);
+    const created = await publishAutomationPullRequest({
+      cwd: workDir,
+      repository: "ackneal/pi-agy-bridge",
+      localVersion: currentRegistry.version,
+      upstreamVersion: "1.5.1",
+      upstreamUrl: "https://registry.test/agent.json",
+      prClient,
+    });
+    assert.deepEqual(created, {
+      status: "created",
+      mode: "create",
+      prUrl: "https://github.com/ackneal/pi-agy-bridge/pull/48",
+    });
+    assert.equal(prCalls.length, 1);
+    assert.equal(prCalls[0]?.action, "create");
+    assert.equal(prCalls[0]?.title, "chore: update ACP registry to 1.5.1");
+    assert.match(prCalls[0]?.body ?? "", /from `1\.5\.0` to `1\.5\.1`/);
 
-    // Switch back to main and detect newer upstream version 1.5.2 while PR #48 is open.
+    // 2. Re-running with the same upstream 1.5.1 while PR #48 is open skips push and PR edit.
+    await git(["checkout", "main"]);
+    await syncAcpRegistry({
+      registryPath: registryFile,
+      upstreamUrl: "https://registry.test/agent.json",
+      fetchImpl: async () => new Response(JSON.stringify(makeRegistryVersion("1.5.1", "a")), { status: 200 }),
+    });
+    const unchanged = await publishAutomationPullRequest({
+      cwd: workDir,
+      repository: "ackneal/pi-agy-bridge",
+      localVersion: currentRegistry.version,
+      upstreamVersion: "1.5.1",
+      upstreamUrl: "https://registry.test/agent.json",
+      prClient,
+    });
+    assert.deepEqual(unchanged, { status: "unchanged", mode: "update", prNumber: 48 });
+    assert.equal(prCalls.length, 1);
+
+    // 3. Newer upstream 1.5.2 resets the branch to 1 commit and updates PR #48.
     await git(["checkout", "main"]);
     const syncResult = await syncAcpRegistry({
       registryPath: registryFile,
@@ -481,30 +525,27 @@ describe("ACP registry PR branch ownership guard", () => {
       localVersion: currentRegistry.version,
       upstreamVersion: "1.5.2",
     });
+    const updated = await publishAutomationPullRequest({
+      cwd: workDir,
+      repository: "ackneal/pi-agy-bridge",
+      localVersion: currentRegistry.version,
+      upstreamVersion: "1.5.2",
+      upstreamUrl: "https://registry.test/agent.json",
+      prClient,
+    });
+    assert.deepEqual(updated, { status: "updated", mode: "update", prNumber: 48 });
+    assert.equal(prCalls.length, 2);
+    assert.equal(prCalls[1]?.action, "update");
+    assert.equal(prCalls[1]?.prNumber, 48);
+    assert.equal(prCalls[1]?.title, "chore: update ACP registry to 1.5.2");
+    assert.match(prCalls[1]?.body ?? "", /from `1\.5\.0` to `1\.5\.2`/);
 
-    const openBotPr = [{ number: 48, authorLogin: AUTOMATION_BOT_LOGIN, baseRef: "main" }];
-    const gitStateBeforeUpdate = await inspectGitBranchState({ cwd: workDir });
-    assert.deepEqual(
-      validateAutomationBranchState({ ...gitStateBeforeUpdate, openPullRequests: openBotPr }),
-      { mode: "update", prNumber: 48 },
-    );
-
-    // Apply updated 1.5.2 commit onto the fixed automation branch, updating the existing PR.
-    await git(["checkout", "-B", AUTOMATION_BRANCH, "main"]);
-    await git(["add", AUTOMATION_REGISTRY_PATH]);
-    await git(["commit", "-m", "chore: update ACP registry to 1.5.2"], botEnv);
-    await git(["push", "--force-with-lease", "origin", AUTOMATION_BRANCH]);
     await git(["checkout", "main"]);
-
     const gitStateAfterUpdate = await inspectGitBranchState({ cwd: workDir });
     assert.deepEqual(gitStateAfterUpdate.changedFiles, [AUTOMATION_REGISTRY_PATH]);
     assert.equal(gitStateAfterUpdate.commits.length, 1);
-    assert.deepEqual(
-      validateAutomationBranchState({ ...gitStateAfterUpdate, openPullRequests: openBotPr }),
-      { mode: "update", prNumber: 48 },
-    );
 
-    // A manual commit on the fixed branch must block future automation updates.
+    // 4. A manual commit on the fixed branch must block future automation updates before committing/pushing.
     await git(["checkout", AUTOMATION_BRANCH]);
     await writeFile(path.join(workDir, "README.md"), "manual note\n", "utf8");
     await git(["add", "README.md"]);
@@ -512,10 +553,22 @@ describe("ACP registry PR branch ownership guard", () => {
     await git(["push", "origin", AUTOMATION_BRANCH]);
     await git(["checkout", "main"]);
 
-    const manualGitState = await inspectGitBranchState({ cwd: workDir });
-    assert.throws(
-      () => validateAutomationBranchState({ ...manualGitState, openPullRequests: openBotPr }),
+    await syncAcpRegistry({
+      registryPath: registryFile,
+      upstreamUrl: "https://registry.test/agent.json",
+      fetchImpl: async () => new Response(JSON.stringify(makeRegistryVersion("1.5.3", "c")), { status: 200 }),
+    });
+    await assert.rejects(
+      () =>
+        publishAutomationPullRequest({
+          cwd: workDir,
+          repository: "ackneal/pi-agy-bridge",
+          localVersion: currentRegistry.version,
+          upstreamVersion: "1.5.3",
+          prClient,
+        }),
       /not authored and committed by/,
     );
+    assert.equal(prCalls.length, 2);
   });
 });

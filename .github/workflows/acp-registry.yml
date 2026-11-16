@@ -32,29 +32,11 @@ jobs:
         env:
           ACP_REGISTRY_UPSTREAM_URL: ${{ vars.ACP_REGISTRY_UPSTREAM_URL }}
         run: node scripts/acp-registry-sync.ts
-      - name: Verify automation branch ownership
+      - name: Create or update ACP registry PR
         if: steps.sync.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/acp-registry-branch-guard.ts
-      - name: Create or update ACP registry PR
-        if: steps.sync.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v8
-        with:
-          token: ${{ github.token }}
-          base: main
-          branch: automation/update-acp-registry
-          delete-branch: true
-          add-paths: src/extension/drivers/acp/registry.json
-          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-          commit-message: "chore: update ACP registry to ${{ steps.sync.outputs.upstream_version }}"
-          title: "chore: update ACP registry to ${{ steps.sync.outputs.upstream_version }}"
-          body: |
-            Update `src/extension/drivers/acp/registry.json` from `${{ steps.sync.outputs.local_version }}` to `${{ steps.sync.outputs.upstream_version }}`.
-
-            - Source: `${{ vars.ACP_REGISTRY_UPSTREAM_URL }}`
-            - Validated schema, platform coverage, official Google HTTPS archive URLs, and SHA-256 checksums without downloading binaries.
-
-            > [!NOTE]
-            > Because this pull request was created or updated with `GITHUB_TOKEN`, a maintainer with write access must approve workflow runs in the merge box before required CI checks execute.
+          LOCAL_VERSION: ${{ steps.sync.outputs.local_version }}
+          UPSTREAM_VERSION: ${{ steps.sync.outputs.upstream_version }}
+          ACP_REGISTRY_UPSTREAM_URL: ${{ vars.ACP_REGISTRY_UPSTREAM_URL }}
+        run: node scripts/acp-registry-pr.ts
