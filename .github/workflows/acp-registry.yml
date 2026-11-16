@@ -1,0 +1,42 @@
+name: ACP Registry Sync
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: acp-registry-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync ACP Registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Sync registry.json with upstream
+        id: sync
+        env:
+          ACP_REGISTRY_UPSTREAM_URL: ${{ vars.ACP_REGISTRY_UPSTREAM_URL }}
+        run: node scripts/acp-registry-sync.ts
+      - name: Create or update ACP registry PR
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCAL_VERSION: ${{ steps.sync.outputs.local_version }}
+          UPSTREAM_VERSION: ${{ steps.sync.outputs.upstream_version }}
+          ACP_REGISTRY_UPSTREAM_URL: ${{ vars.ACP_REGISTRY_UPSTREAM_URL }}
+        run: node scripts/acp-registry-pr.ts
