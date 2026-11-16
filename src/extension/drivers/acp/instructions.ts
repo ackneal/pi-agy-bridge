@@ -8,8 +8,8 @@ import {
 } from "../instructions.ts";
 
 export const acpReferencedContent = `## Read referenced content
-- Use Pi MCP tools for ordinary file operations, including original workspace files. Pi read, when available, supports text and images.
-- Use the advertised ACP client reader, client_view_file, instead of Pi read for offload and metadata references. Limit client reads to current-session AGY offloads under brain/<current-session-id>/.system_generated/steps/ and allowed Pi MCP schema files under brain/<current-session-id>/mcp/pi-agy-bridge_pi/.
+- Use the advertised MCP tools for ordinary file operations, including original workspace files. When available, the MCP \`read\` tool supports both text and images.
+- Use the advertised ACP client reader, client_view_file, instead of MCP \`read\` for offload and metadata references. Limit client reads to current-session AGY offloads under brain/<current-session-id>/.system_generated/steps/ and allowed MCP schema files under brain/<current-session-id>/mcp/pi-agy-bridge_pi/.
 - These references are not ordinary workspace files. This interface does not authorize workspace, home-directory, or other conversations' files.
 - When you need image content and have a current-session offload reference, use client_view_file if advertised. Do this before you claim that you cannot see or retrieve the image.
 - Convert a local file:// artifact reference to an absolute filesystem path. For client_view_file, use absolute_path and start_line. The line offset is 1-based.

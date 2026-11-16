@@ -38,12 +38,12 @@ for (const row of cases) {
 
 test("CLI integration instructions restrict native read_file to referenced artifacts", () => {
   assert.ok(integrationInstructions.includes("Use native `read_file` directly"));
-  assert.ok(integrationInstructions.includes("Use native `read_file` only for artifacts under the current conversation's `.system_generated/steps/` and allowed Pi MCP schema files under `mcp/pi-agy-bridge_pi/`, not ordinary workspace files."));
+  assert.ok(integrationInstructions.includes("Use native `read_file` only for artifacts under the current conversation's `.system_generated/steps/` and allowed MCP schema files under `mcp/pi-agy-bridge_pi/`, not ordinary workspace files."));
   assert.ok(integrationInstructions.includes("Set `Path` to the referenced local path. Convert `file://` URIs to local paths if needed."));
-  assert.ok(integrationInstructions.includes("Use Pi MCP tools for ordinary file operations."));
+  assert.ok(integrationInstructions.includes("Use the advertised MCP tools for ordinary file operations; the MCP `read` tool can read both text and images."));
   assert.ok(!integrationInstructions.includes("view_file"));
   assert.ok(!integrationInstructions.includes("AbsolutePath"));
-  assert.ok(integrationInstructions.includes("Pi provides all workspace tools, capabilities, and subagents exclusively through server \"pi-agy-bridge_pi\""));
+  assert.ok(integrationInstructions.includes("All workspace tools, capabilities, and subagents are provided exclusively through server \"pi-agy-bridge_pi\""));
   assert.ok(integrationInstructions.includes("Do not call any other native or undeclared tools directly"));
 });
 
@@ -68,9 +68,9 @@ test("CLI composeSystemPrompt appends serialized tool snippets under available t
   ];
   const prompt = composeSystemPrompt([], tools);
 
-  assert.ok(prompt.includes("Available Pi MCP tools:\n- read: Read file contents\n- bash: Execute a command"));
+  assert.ok(prompt.includes("Available MCP tools:\n- read: Read file contents\n- bash: Execute a command"));
   const toolsSection = prompt.split("## Use the available tools\n")[1]?.split("\n\n## ")[0];
-  assert.ok(toolsSection?.endsWith("Available Pi MCP tools:\n- read: Read file contents\n- bash: Execute a command"));
+  assert.ok(toolsSection?.endsWith("Available MCP tools:\n- read: Read file contents\n- bash: Execute a command"));
 });
 
 test("composeBaseSystemPrompt excludes tool snippets so fingerprint remains stable across tool changes", () => {

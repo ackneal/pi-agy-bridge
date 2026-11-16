@@ -8,9 +8,9 @@ import {
 } from "../instructions.ts";
 
 export const cliReferencedContent = `## Read referenced content
-- Use Pi MCP tools for ordinary file operations. Pi MCP \`read\` can read text and images.
+- Use the advertised MCP tools for ordinary file operations; the MCP \`read\` tool can read both text and images.
 - Large tool outputs may be stored in temporary files. Use native \`read_file\` directly to read needed content supplied as a file reference.
-- Use native \`read_file\` only for artifacts under the current conversation's \`.system_generated/steps/\` and allowed Pi MCP schema files under \`mcp/pi-agy-bridge_pi/\`, not ordinary workspace files.
+- Use native \`read_file\` only for artifacts under the current conversation's \`.system_generated/steps/\` and allowed MCP schema files under \`mcp/pi-agy-bridge_pi/\`, not ordinary workspace files.
 - Set \`Path\` to the referenced local path. Convert \`file://\` URIs to local paths if needed.`;
 
 export const integrationInstructions = buildIntegrationInstructions({
