@@ -19,7 +19,6 @@ import {
 } from "../../scripts/acp-registry-pr.ts";
 import {
   type AcpRegistry,
-  fetchUpstreamRegistry,
   registriesEqual,
   syncAcpRegistry,
   validateRegistry,
@@ -330,10 +329,6 @@ describe("ACP registry sync", () => {
       }
     });
   }
-  it("allows fetchUpstreamRegistry error paths to be tested directly", async () => {
-    await assert.rejects(() => fetchUpstreamRegistry("not-a-url"), /Invalid ACP_REGISTRY_UPSTREAM_URL/);
-    await assert.rejects(() => fetchUpstreamRegistry("file:///tmp/registry.json"), /Unsupported ACP_REGISTRY_UPSTREAM_URL protocol/);
-  });
 });
 
 describe("ACP registry PR branch ownership guard", () => {

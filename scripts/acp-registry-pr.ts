@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 export const AUTOMATION_BRANCH = "automation/update-acp-registry";
-export const AUTOMATION_BASE = "main";
+const AUTOMATION_BASE = "main";
 export const AUTOMATION_REGISTRY_PATH = "src/extension/drivers/acp/registry.json";
 export const AUTOMATION_BOT_LOGIN = "github-actions[bot]";
 export const AUTOMATION_BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com";
@@ -182,11 +182,11 @@ export async function inspectGitBranchState(options: {
   return { branchExists: true, commits, changedFiles };
 }
 
-export function buildPrTitle(upstreamVersion: string): string {
+function buildPrTitle(upstreamVersion: string): string {
   return `chore: update ACP registry to ${upstreamVersion}`;
 }
 
-export function buildPrBody(params: {
+function buildPrBody(params: {
   localVersion: string;
   upstreamVersion: string;
   upstreamUrl?: string;

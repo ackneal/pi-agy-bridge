@@ -36,7 +36,7 @@ export interface SyncRegistryOptions {
   fetchImpl?: typeof fetch;
 }
 
-export const DEFAULT_REGISTRY_PATH = "src/extension/drivers/acp/registry.json";
+const DEFAULT_REGISTRY_PATH = "src/extension/drivers/acp/registry.json";
 
 const EXPECTED_ID = "antigravity-acp";
 const TOP_LEVEL_KEYS = new Set([
@@ -188,7 +188,7 @@ export function registriesEqual(local: AcpRegistry, upstream: AcpRegistry): bool
   return isDeepStrictEqual(local, upstream);
 }
 
-export async function fetchUpstreamRegistry(url: string, fetchImpl: typeof fetch = globalThis.fetch): Promise<unknown> {
+async function fetchUpstreamRegistry(url: string, fetchImpl: typeof fetch = globalThis.fetch): Promise<unknown> {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(url);
