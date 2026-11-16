@@ -229,7 +229,7 @@ export class CapabilityGateway {
       return Promise.resolve(toolError(error instanceof Error ? error.message : String(error)));
     }
     if (!toolCall) {
-      return Promise.resolve(toolError(`Tool "${name}" is not registered in this Pi session.`));
+      return Promise.resolve(toolError(`Tool "${name}" is not registered in this session.`));
     }
 
     return new Promise((resolve) => {
