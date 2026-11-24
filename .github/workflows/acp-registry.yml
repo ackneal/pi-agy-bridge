@@ -38,5 +38,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           LOCAL_VERSION: ${{ steps.sync.outputs.local_version }}
           UPSTREAM_VERSION: ${{ steps.sync.outputs.upstream_version }}
-          ACP_REGISTRY_UPSTREAM_URL: ${{ vars.ACP_REGISTRY_UPSTREAM_URL }}
         run: node scripts/acp-registry-pr.ts

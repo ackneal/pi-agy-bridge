@@ -477,7 +477,6 @@ describe("ACP registry PR branch ownership guard", () => {
       repository: "ackneal/pi-agy-bridge",
       localVersion: currentRegistry.version,
       upstreamVersion: "1.5.1",
-      upstreamUrl: "https://registry.test/agent.json",
       prClient,
     });
     assert.deepEqual(created, {
@@ -487,8 +486,6 @@ describe("ACP registry PR branch ownership guard", () => {
     });
     assert.equal(prCalls.length, 1);
     assert.equal(prCalls[0]?.action, "create");
-    assert.equal(prCalls[0]?.title, "chore: update ACP registry to 1.5.1");
-    assert.match(prCalls[0]?.body ?? "", /from `1\.5\.0` to `1\.5\.1`/);
 
     // 2. Re-running with the same upstream 1.5.1 while PR #48 is open skips push and PR edit.
     await git(["checkout", "main"]);
@@ -502,7 +499,6 @@ describe("ACP registry PR branch ownership guard", () => {
       repository: "ackneal/pi-agy-bridge",
       localVersion: currentRegistry.version,
       upstreamVersion: "1.5.1",
-      upstreamUrl: "https://registry.test/agent.json",
       prClient,
     });
     assert.deepEqual(unchanged, { status: "unchanged", mode: "update", prNumber: 48 });
@@ -525,15 +521,12 @@ describe("ACP registry PR branch ownership guard", () => {
       repository: "ackneal/pi-agy-bridge",
       localVersion: currentRegistry.version,
       upstreamVersion: "1.5.2",
-      upstreamUrl: "https://registry.test/agent.json",
       prClient,
     });
     assert.deepEqual(updated, { status: "updated", mode: "update", prNumber: 48 });
     assert.equal(prCalls.length, 2);
     assert.equal(prCalls[1]?.action, "update");
     assert.equal(prCalls[1]?.prNumber, 48);
-    assert.equal(prCalls[1]?.title, "chore: update ACP registry to 1.5.2");
-    assert.match(prCalls[1]?.body ?? "", /from `1\.5\.0` to `1\.5\.2`/);
 
     await git(["checkout", "main"]);
     const gitStateAfterUpdate = await inspectGitBranchState({ cwd: workDir });

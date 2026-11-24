@@ -67,7 +67,6 @@ export interface PublishPrOptions extends GuardOptions {
   repository: string;
   localVersion: string;
   upstreamVersion: string;
-  upstreamUrl?: string;
   prClient?: PullRequestClient;
 }
 
@@ -189,17 +188,13 @@ function buildPrTitle(upstreamVersion: string): string {
 function buildPrBody(params: {
   localVersion: string;
   upstreamVersion: string;
-  upstreamUrl?: string;
 }): string {
   const lines = [
-    `Update \`${AUTOMATION_REGISTRY_PATH}\` from \`${params.localVersion}\` to \`${params.upstreamVersion}\`.`,
+    `Update ACP registry from \`${params.localVersion}\` to \`${params.upstreamVersion}\`.`,
     "",
+    "Validated registry schema, platform coverage, official Google HTTPS archive URLs, and SHA-256 checksum format. Binaries were not downloaded or tested.",
   ];
-  if (params.upstreamUrl) {
-    lines.push(`- Source: \`${params.upstreamUrl}\``);
-  }
   lines.push(
-    "- Validated schema, platform coverage, official Google HTTPS archive URLs, and SHA-256 checksums without downloading binaries.",
     "",
     "> [!NOTE]",
     "> Because this pull request was created or updated with `GITHUB_TOKEN`, a maintainer with write access must approve workflow runs in the merge box before required CI checks execute.",
@@ -298,7 +293,6 @@ export async function publishAutomationPullRequest(options: PublishPrOptions): P
   const body = buildPrBody({
     localVersion: options.localVersion,
     upstreamVersion: options.upstreamVersion,
-    ...(options.upstreamUrl ? { upstreamUrl: options.upstreamUrl } : {}),
   });
 
   await runGit(["checkout", "-B", branch], cwd);
@@ -377,13 +371,10 @@ async function main(): Promise<void> {
   if (!localVersion || !upstreamVersion) {
     throw new Error("LOCAL_VERSION and UPSTREAM_VERSION must be set.");
   }
-  const upstreamUrl = process.env.ACP_REGISTRY_UPSTREAM_URL?.trim();
-
   const result = await publishAutomationPullRequest({
     repository,
     localVersion,
     upstreamVersion,
-    ...(upstreamUrl ? { upstreamUrl } : {}),
   });
 
   const detail =
