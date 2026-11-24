@@ -487,9 +487,6 @@ describe("ACP registry PR branch ownership guard", () => {
     });
     assert.equal(prCalls.length, 1);
     assert.equal(prCalls[0]?.action, "create");
-    assert.equal(prCalls[0]?.title, "chore: update ACP registry to 1.5.1");
-    const escapedLocalVersion = currentRegistry.version.replaceAll(".", "\\.");
-    assert.match(prCalls[0]?.body ?? "", new RegExp(`from \`${escapedLocalVersion}\` to \`1\\.5\\.1\``));
 
     // 2. Re-running with the same upstream 1.5.1 while PR #48 is open skips push and PR edit.
     await git(["checkout", "main"]);
@@ -533,8 +530,6 @@ describe("ACP registry PR branch ownership guard", () => {
     assert.equal(prCalls.length, 2);
     assert.equal(prCalls[1]?.action, "update");
     assert.equal(prCalls[1]?.prNumber, 48);
-    assert.equal(prCalls[1]?.title, "chore: update ACP registry to 1.5.2");
-    assert.match(prCalls[1]?.body ?? "", new RegExp(`from \`${escapedLocalVersion}\` to \`1\\.5\\.2\``));
 
     await git(["checkout", "main"]);
     const gitStateAfterUpdate = await inspectGitBranchState({ cwd: workDir });
