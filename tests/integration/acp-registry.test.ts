@@ -477,7 +477,6 @@ describe("ACP registry PR branch ownership guard", () => {
       repository: "ackneal/pi-agy-bridge",
       localVersion: currentRegistry.version,
       upstreamVersion: "1.5.1",
-      upstreamUrl: "https://registry.test/agent.json",
       prClient,
     });
     assert.deepEqual(created, {
@@ -500,7 +499,6 @@ describe("ACP registry PR branch ownership guard", () => {
       repository: "ackneal/pi-agy-bridge",
       localVersion: currentRegistry.version,
       upstreamVersion: "1.5.1",
-      upstreamUrl: "https://registry.test/agent.json",
       prClient,
     });
     assert.deepEqual(unchanged, { status: "unchanged", mode: "update", prNumber: 48 });
@@ -523,7 +521,6 @@ describe("ACP registry PR branch ownership guard", () => {
       repository: "ackneal/pi-agy-bridge",
       localVersion: currentRegistry.version,
       upstreamVersion: "1.5.2",
-      upstreamUrl: "https://registry.test/agent.json",
       prClient,
     });
     assert.deepEqual(updated, { status: "updated", mode: "update", prNumber: 48 });
