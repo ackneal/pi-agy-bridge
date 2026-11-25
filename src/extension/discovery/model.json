@@ -42,11 +42,19 @@
         "cacheWrite": 0
       }
     },
+    "gemini-4-neon": {
+      "cost": {
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.15,
+        "cacheWrite": 0
+      }
+    },
     "gemini-4-hydrogen": {
       "cost": {
         "input": 1.5,
         "output": 7.5,
-        "cacheRead": 0.15,
+        "cacheRead": 0.075,
         "cacheWrite": 0
       }
     },
