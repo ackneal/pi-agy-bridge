@@ -5,7 +5,7 @@ import { discoverAgyModels, restoreStoredAgyModels, parseModelsOutput } from "./
 
 const argonCost = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 };
 const neonCost = { input: 3, output: 15, cacheRead: 0.15, cacheWrite: 0 };
-const hydrogenCost = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
+const hydrogenCost = { input: 1.5, output: 7.5, cacheRead: 0.075, cacheWrite: 0 };
 const flashCost = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
