@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { discoverAgyModels, restoreStoredAgyModels, parseModelsOutput } from "./models.ts";
 
 const argonCost = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 };
+const neonCost = { input: 3, output: 15, cacheRead: 0.15, cacheWrite: 0 };
 const hydrogenCost = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
 const flashCost = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -14,6 +15,7 @@ describe("Antigravity CLI model discovery", () => {
   for (const { id, maxTokens, cost } of [
     { id: "gemini-4-argon", maxTokens: 65_536, cost: argonCost },
     { id: "gemini-4-carbon", maxTokens: 65_536, cost: argonCost },
+    { id: "gemini-4-neon", maxTokens: 65_536, cost: neonCost },
     { id: "gemini-4-hydrogen", maxTokens: 65_536, cost: hydrogenCost },
     { id: "gemini-3.8-flash", maxTokens: 65_536, cost: flashCost },
     { id: "gemini-3.7-flash", maxTokens: 65_536, cost: zeroCost },
@@ -56,6 +58,7 @@ describe("Antigravity CLI model discovery", () => {
   for (const { id, rates } of [
     { id: "gemini-4-argon", rates: argonCost },
     { id: "gemini-4-carbon", rates: argonCost },
+    { id: "gemini-4-neon", rates: neonCost },
     { id: "gemini-4-hydrogen", rates: hydrogenCost },
     { id: "gemini-3.8-flash", rates: flashCost },
   ]) {
