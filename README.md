@@ -62,7 +62,7 @@ Pi tools -> Results return to the model
 | :--- | :--- |
 | **Operating System** | macOS or Linux. Native Windows is not supported. |
 | **Pi Coding Agent** | `@earendil-works/pi-coding-agent`. |
-| **Antigravity ACP Driver (Default)** | The bridge automatically installs the ACP server (pinned to `1.5.0`). |
+| **Antigravity ACP Driver (Default)** | The bridge automatically installs the ACP server (pinned to `1.5.2`). |
 | **Antigravity CLI Driver (Optional)** | Install `agy` at `~/.local/bin/agy` or add it to your `PATH`. Tested with `agy 1.5.2`. |
 
 ---
@@ -164,7 +164,7 @@ export AGY_ACP_DIR="$HOME/path/to/agy-acp-server"
 
 ### Managed ACP Server Details
 
-- **Version:** Antigravity ACP Server **1.5.0** (macOS and Linux, x64 and ARM64).
+- **Version:** Antigravity ACP Server **1.5.2** (macOS and Linux, x64 and ARM64).
 - **Registry:** [`src/extension/drivers/acp/registry.json`](src/extension/drivers/acp/registry.json).
 - **Storage:** `<Pi Agent Home>/pi-agy-bridge/acp/<archive-name>/` (typically `~/.pi/agent/pi-agy-bridge/acp/`).
 - **Verification:** SHA-256 checksums are verified before extraction.
