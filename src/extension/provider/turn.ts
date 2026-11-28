@@ -2,11 +2,12 @@ import type { Api, Context, Model, Usage } from "@earendil-works/pi-ai";
 import type { BridgeIPC } from "../bridge/ipc.ts";
 import type { PiToolCallBatch } from "../bridge/capabilities.ts";
 import type { PiRuntimeOutput } from "./output.ts";
-import type { DriverSession, DriverSubmission, RuntimeEvent, ToolWarningReason, ToolWarningStatus } from "../drivers/types.ts";
+import type { DriverSession, DriverSubmission, RuntimeEvent } from "../drivers/types.ts";
 import { formatFailureMessage } from "../drivers/failure.ts";
 import type { LiveSession } from "../session/session.ts";
 import type { RuntimeSessionStore, RuntimeSessionSync } from "../session/state.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
+import { formatToolWarning } from "./tool-warning.ts";
 import { estimateUsageCost, splitPromptUsage } from "./usage-accounting.ts";
 
 interface TurnOptions {
@@ -19,7 +20,7 @@ interface TurnOptions {
   preparationId: symbol;
   signal: AbortSignal | undefined;
   sessionVersion: string;
-  onWarning?: (name: string, args: unknown, status: ToolWarningStatus, reason?: ToolWarningReason) => void;
+  onWarning?: (message: string) => void;
   onAccounting?: (usage: Usage) => void;
 }
 
@@ -28,6 +29,7 @@ export class Turn {
   private completed = false;
   private inputStarted = false;
   private hasToolActivity = false;
+  private readonly toolWarnings = new Map<string, number>();
   private readonly options: TurnOptions;
 
   constructor(options: TurnOptions) {
@@ -91,6 +93,7 @@ export class Turn {
     if (cancelled) {
       this.cancel(rawMessage);
     } else {
+      this.flushToolWarnings();
       const mcpServer = this.runtime?.mcpServer ?? session.activeMcpServer;
       const hasPendingToolCalls = Boolean(mcpServer?.hasPendingCalls);
       const phase = hasPendingToolCalls
@@ -129,13 +132,32 @@ export class Turn {
     return this.runtime ? this.ownsRuntime() : this.options.session.ownsPreparation(this.options.preparationId);
   }
 
+  private displayToolWarning(message: string): void {
+    try {
+      this.options.onWarning?.(message);
+    } catch (error) {
+      debugLog("warning", "Could not display tool warning:", error);
+    }
+  }
+
+  private flushToolWarnings(): void {
+    for (const [message, count] of this.toolWarnings) {
+      this.displayToolWarning(count > 1 ? `${message} (${count})` : message);
+    }
+    this.toolWarnings.clear();
+  }
+
   private handleEvent(event: RuntimeEvent): void {
     if (!this.ownsRuntime()) return;
     if (event.type === "tool-warning") {
-      try {
-        this.options.onWarning?.(event.name, event.args, event.status, event.reason);
-      } catch (error) {
-        debugLog("warning", "Could not display ACP tool warning:", error);
+      if (!this.options.onWarning) return;
+
+      const message = formatToolWarning(this.runtime!.proc.driver, event.name, event.args, event.status, event.reason);
+      // The tracking limit and warnings during Pi tool execution cannot wait for this stream to end.
+      if (event.reason === "notification-limit" || this.options.adapter.isCompleted()) {
+        this.displayToolWarning(message);
+      } else {
+        this.toolWarnings.set(message, (this.toolWarnings.get(message) ?? 0) + 1);
       }
       return;
     }
@@ -224,6 +246,8 @@ export class Turn {
     if (!adapter.isCompleted() || this.completed || !this.ownsRuntime()) return;
 
     this.completed = true;
+    this.flushToolWarnings();
+
     const message = adapter.message;
     const hasPendingCalls = this.runtime!.mcpServer.hasPendingCalls;
     debugArtifact("assistant-message", { sessionId: session.piSessionId, message });
@@ -263,6 +287,7 @@ export class Turn {
   private failRuntime(error: Error): void {
     if (!this.ownsRuntime()) return;
 
+    this.flushToolWarnings();
     const message = formatFailureMessage(error, {
       phase: "tool-handoff",
       hasPendingToolCalls: true,
@@ -274,6 +299,7 @@ export class Turn {
 
   private cancel(message: string): void {
     const { session, adapter } = this.options;
+    this.flushToolWarnings();
     adapter.handleTermination("aborted", message);
     if (!this.ownsSession()) return;
     const mcpServer = this.runtime?.mcpServer ?? session.activeMcpServer;
