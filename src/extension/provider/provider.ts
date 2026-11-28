@@ -23,12 +23,11 @@ import type { AgyUsage } from "../runtime/usage.ts";
 import { createBridgeDriver } from "../drivers/driver.ts";
 import { Driver as CliDriver } from "../drivers/cli/driver.ts";
 import { DEFAULT_AGY_PLUGIN_DIR } from "../discovery/plugin-install.ts";
-import type { BridgeDriver, DriverFailure, DriverId, ToolWarningReason, ToolWarningStatus } from "../drivers/types.ts";
+import type { BridgeDriver, DriverFailure, DriverId } from "../drivers/types.ts";
 import { debugArtifact, debugLog } from "../shared/debug.ts";
 import { AgyAuthentication, getAgyBridgeAuthEnvironment, isAgyBridgeEnabled } from "./auth.ts";
 import { synchronizeAgyAuthentication } from "./auth-sync.ts";
 import { collectDoctorReport, type DoctorOptions } from "./doctor.ts";
-import { formatToolWarning } from "./tool-warning.ts";
 import { AcpInstallationProgress } from "./installation-progress.ts";
 import { ProgressStatus } from "./progress.ts";
 import { prepareBridgeMessages, prepareSystemMessages } from "./context-prompt.ts";
@@ -93,7 +92,7 @@ export function streamProvider(
     preparationId,
     signal: options?.signal,
     sessionVersion: bridge.driver.sessionVersion,
-    onWarning: (name, args, status, reason) => bridge.warnTool(name, args, status, reason),
+    onWarning: (message) => bridge.warnTool(message),
     ...(!standalone ? { onAccounting: (usage: Usage) => {
       const manager = bridge.piContextAdapter.getSessionManager(piSessionId);
       if (!manager) throw new Error("Pi session is unavailable for usage accounting");
@@ -281,8 +280,7 @@ export class Bridge {
     return { signal };
   }
 
-  public warnTool(name: string, args: unknown, status: ToolWarningStatus, reason?: ToolWarningReason): void {
-    const message = formatToolWarning(this.driver.id, name, args, status, reason);
+  public warnTool(message: string): void {
     if (this.ui) {
       try {
         this.ui.notify(message, "warning");

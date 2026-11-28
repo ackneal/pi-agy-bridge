@@ -20,14 +20,16 @@ for (const row of [
   { name: "between Pi tool turns", handoff: true, throws: false },
   { name: "failed warning display", handoff: false, throws: true },
   { name: "tracking overflow", handoff: false, throws: false },
+  { name: "repeated CLI warnings", handoff: false, throws: false, repeated: true },
 ]) {
-  test(`ACP warning does not invalidate runtime: ${row.name}`, async (t) => {
+  test(`Tool warning does not invalidate runtime: ${row.name}`, async (t) => {
+    const driver = row.repeated ? "cli" : "acp";
     const session = new LiveSession("warning-session");
     t.after(() => session.dispose());
     let dispatch!: (event: RuntimeEvent) => void;
     const abort = t.mock.fn(async () => {});
     const proc: DriverSession = {
-      driver: "acp", isRunning: true,
+      driver, isRunning: true,
       onRuntimeEvent(handler) { dispatch = handler; return () => {}; },
       serializeContextUpdate: () => "", submit: async () => {}, abort,
     };
@@ -36,32 +38,50 @@ for (const row of [
     const preparationId = session.beginPreparation();
     assert.equal(session.setSession(proc, "sync", mcpServer, "native-session", preparationId), true);
     const adapter = new PiRuntimeOutput({ model: "synthetic", provider: "agy" });
-    const onWarning = t.mock.fn((_name: string, _args: unknown, _status: ToolWarningStatus) => {
+    const onWarning = t.mock.fn((_message: string) => {
       if (row.throws) throw new Error("synthetic UI failure");
     });
     const turn = new Turn({
       session, adapter, model, context: { messages: [] }, sync: new RuntimeSessionSync(),
       store: new RuntimeSessionStore(new PiContextAdapter()), preparationId,
-      signal: undefined, sessionVersion: "acp:v1", onWarning,
+      signal: undefined, sessionVersion: `${driver}:v1`, onWarning,
     });
     turn.attach({ proc, mcpServer });
     if (row.handoff) adapter.handleBridgeToolCalls([{ type: "toolCall", id: "read", name: "read", arguments: {} }]);
 
     const args = { absolute_path: "/synthetic/output.txt" };
     const reason = row.name === "tracking overflow" ? "notification-limit" as const : undefined;
-    dispatch({ type: "tool-warning", name: "view_file", args, status: "failed", ...(reason ? { reason } : {}) });
+    const expected = row.repeated ? [
+      "Antigravity CLI: Unverified tool activity — read_file (status: failed). (3)",
+      "Antigravity CLI: Unverified tool activity — read_file (status: pending).",
+      "Antigravity CLI: Unverified tool activity — write_file (status: failed).",
+    ] : [reason
+      ? "Antigravity ACP: Tool activity tracking limit reached; additional tool calls cannot be verified."
+      : "Antigravity ACP: Unverified tool activity — view_file (status: failed)."];
+    if (row.repeated) {
+      dispatch({ type: "tool-warning", name: "read_file", args, status: "failed" });
+      dispatch({ type: "tool-warning", name: "read_file", args, status: "pending" });
+      dispatch({ type: "tool-warning", name: "read_file", args: {}, status: "failed" });
+      dispatch({ type: "tool-warning", name: "write_file", args, status: "failed" });
+      dispatch({ type: "tool-warning", name: "read_file", args: undefined, status: "failed" });
+    } else {
+      dispatch({ type: "tool-warning", name: "view_file", args, status: "failed", ...(reason ? { reason } : {}) });
+    }
 
-    assert.equal(onWarning.mock.callCount(), 1);
-    assert.deepEqual(onWarning.mock.calls[0]!.arguments, ["view_file", args, "failed", reason]);
+    assert.equal(adapter.isCompleted(), row.handoff);
+    assert.equal(onWarning.mock.callCount(), row.handoff || reason ? 1 : 0);
+    if (!row.handoff) {
+      dispatch({ type: "text-delta", delta: "still working" });
+      assert.ok(adapter.message.content.some((part) => part.type === "text" && part.text === "still working"));
+      dispatch({ type: "complete", reason: "stop", resumable: true });
+    }
+
+    assert.deepEqual(onWarning.mock.calls.map(({ arguments: [message] }) => message), expected);
     assert.equal(session.activeProcess, proc);
     assert.equal(session.activeMcpServer, mcpServer);
     assert.equal(abort.mock.callCount(), 0);
     assert.equal(close.mock.callCount(), 0);
-    assert.equal(adapter.isCompleted(), row.handoff);
-    if (!row.handoff) {
-      dispatch({ type: "text-delta", delta: "still working" });
-      assert.ok(adapter.message.content.some((part) => part.type === "text" && part.text === "still working"));
-    }
+    assert.equal(adapter.isCompleted(), true);
   });
 }
 
